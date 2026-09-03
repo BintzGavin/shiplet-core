@@ -1,0 +1,22 @@
+{
+  "schemaVersion": "shiplet.mcp/v1",
+  "runtimeCompatibility": "shiplet.runtime/v1",
+  "tools": [
+    {
+      "name": "summarize-review",
+      "description": "Summarize review feedback for this Shiplet revision.",
+      "handler": "mcp/handlers/summarize-review.js",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "threadId": { "type": "string", "maxLength": 128 }
+        },
+        "required": ["threadId"]
+      },
+      "requestedCapabilities": ["review.feedback.read"],
+      "effect": "read",
+      "approval": "none"
+    }
+  ]
+}

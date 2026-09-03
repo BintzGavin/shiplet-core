@@ -1,0 +1,113 @@
+{
+  "mediaType": "application/vnd.shiplet.package+json;version=1",
+  "manifest": {
+    "schemaVersion": "shiplet.package/v1",
+    "runtimeCompatibility": "shiplet.runtime/v1",
+    "entrypoints": {
+      "artifact": "artifact/index.html",
+      "widget": "widget/index.html",
+      "workflow": "workflow/schema.json",
+      "mcp": "mcp/manifest.json",
+      "agentInstructions": "AGENTS.md",
+      "validation": "validation/manifest.json",
+      "provenance": "provenance.json"
+    },
+    "requestedCapabilities": ["state.read:review", "workflow.event:create"],
+    "limits": {
+      "fileCount": 32,
+      "fileBytes": 16384,
+      "packageBytes": 65536
+    },
+    "staticFirst": true
+  },
+  "files": [
+    {
+      "path": "AGENTS.md",
+      "mediaType": "text/markdown; charset=utf-8",
+      "encoding": "utf8",
+      "content": "# Reviewer agent\n\nSummarize feedback without changing reviewer attribution.\n",
+      "sha256": "1f3868771628458b62f5b056e3ab6bc61680bffda5f73d18a7ac59f88b15ef56",
+      "size": 76
+    },
+    {
+      "path": "artifact/app.js",
+      "mediaType": "text/javascript; charset=utf-8",
+      "encoding": "utf8",
+      "content": "document.querySelector('main').dataset.ready = 'true';\n",
+      "sha256": "9e2fde333adc91f9a8fb0d2a24570b163488fea3a86c0af76cb8d344916dbe7f",
+      "size": 55
+    },
+    {
+      "path": "artifact/icon.bin",
+      "mediaType": "application/octet-stream",
+      "encoding": "base64",
+      "content": "AAEC",
+      "sha256": "ae4b3280e56e2faf83f414a6e3dabe9d5fbe18976544c05fed121accb85b53fc",
+      "size": 3
+    },
+    {
+      "path": "artifact/index.html",
+      "mediaType": "text/html; charset=utf-8",
+      "encoding": "utf8",
+      "content": "<!doctype html><main>Portable Shiplet</main><script src=\"./app.js\"></script>\n",
+      "sha256": "74f97b969bf472984421a7f830b85179f7789f936f2a0f0777653bdd4250681d",
+      "size": 77
+    },
+    {
+      "path": "mcp/handlers/summarize.js",
+      "mediaType": "text/javascript; charset=utf-8",
+      "encoding": "utf8",
+      "content": "export default async ({ state }) => ({ count: await state.count('review') });\n",
+      "sha256": "24f89f716b9847ec7d1462ad12d59986156f42d9ad05a001fe50fb96b9695644",
+      "size": 78
+    },
+    {
+      "path": "mcp/manifest.json",
+      "mediaType": "application/json",
+      "encoding": "utf8",
+      "content": "{\"schemaVersion\":\"shiplet.mcp/v1\",\"tools\":[{\"name\":\"summarize\",\"description\":\"Summarize review state\",\"handler\":\"mcp/handlers/summarize.js\",\"inputSchema\":{\"type\":\"object\",\"additionalProperties\":false},\"requestedCapabilities\":[\"state.read:review\"],\"approval\":\"none\"}]}\n",
+      "sha256": "f9d44c3517cee0606f8763177ee85083e49e747674eb621ea470394b121891ef",
+      "size": 268
+    },
+    {
+      "path": "provenance.json",
+      "mediaType": "application/json",
+      "encoding": "utf8",
+      "content": "{\"schemaVersion\":\"shiplet.provenance/v1\",\"source\":{\"kind\":\"local\"},\"lineage\":{\"parentRevisionId\":null}}\n",
+      "sha256": "8388be97dc4226778ec3755cee8e8e3bb946c089471360da2a459897957845fd",
+      "size": 104
+    },
+    {
+      "path": "validation/manifest.json",
+      "mediaType": "application/json",
+      "encoding": "utf8",
+      "content": "{\"schemaVersion\":\"shiplet.validation/v1\",\"checks\":[{\"kind\":\"file-exists\",\"path\":\"artifact/index.html\"}]}\n",
+      "sha256": "9a6ee98d593bd8ddafa75396744203499233b64e2ed34538c5890ba0dcc8b119",
+      "size": 105
+    },
+    {
+      "path": "widget/index.html",
+      "mediaType": "text/html; charset=utf-8",
+      "encoding": "utf8",
+      "content": "<!doctype html><button id=\"request-review\">Request review</button><script src=\"./widget.js\"></script>\n",
+      "sha256": "6c35f6583431bc713248d33e1cfed0638ddd944e6d9f2dcdd87db10f96b37a0f",
+      "size": 102
+    },
+    {
+      "path": "widget/widget.js",
+      "mediaType": "text/javascript; charset=utf-8",
+      "encoding": "utf8",
+      "content": "document.querySelector('button').addEventListener('click', () => parent.postMessage({ type: 'request-review' }, '*'));\n",
+      "sha256": "1a4264fc2490a4891dcdb6f31bd11daf83f1a5f026804a1b09817187f28c6593",
+      "size": 119
+    },
+    {
+      "path": "workflow/schema.json",
+      "mediaType": "application/json",
+      "encoding": "utf8",
+      "content": "{\"schemaVersion\":\"shiplet.workflow/v1\",\"statuses\":[{\"name\":\"Needs review\",\"category\":\"open\"},{\"name\":\"Approved\",\"category\":\"resolved\"}],\"fields\":[{\"name\":\"risk\",\"type\":\"string\"}]}\n",
+      "sha256": "3f1c63761c71d2f6e9c69d975e20d904ba239d05624237ce11763dc15e441ca1",
+      "size": 180
+    }
+  ]
+}

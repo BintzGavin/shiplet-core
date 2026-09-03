@@ -1,0 +1,910 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "Shiplet API",
+    "version": "1.0.0",
+    "description": "Prepare an artifact, share it, and collect feedback. Shiplet's review layer can be customized independently without exposing or changing the artifact. Code Mode always exposes exactly search and execute; operations marked x-shiplet-code-mode: true can be called through codemode.request while authentication remains in the trusted host."
+  },
+  "security": [{ "bearerAuth": [] }, { "browserSession": [] }],
+  "components": {
+    "securitySchemes": {
+      "bearerAuth": {
+        "type": "http",
+        "scheme": "bearer",
+        "description": "Organization API credential. Project rules and each operation's x-shiplet-scopes requirement are enforced by the trusted Shiplet host."
+      },
+      "browserSession": {
+        "type": "apiKey",
+        "in": "cookie",
+        "name": "__Host-shiplet_session",
+        "description": "Host-only browser session used by Shiplet's trusted control plane."
+      },
+      "oauthAccessToken": {
+        "type": "http",
+        "scheme": "bearer",
+        "description": "OAuth access token accepted only by the MCP endpoint."
+      }
+    },
+    "parameters": {
+      "ProjectId": {
+        "name": "projectId",
+        "in": "path",
+        "required": true,
+        "schema": { "type": "string", "minLength": 1, "maxLength": 256 }
+      },
+      "OrganizationId": {
+        "name": "organizationId",
+        "in": "path",
+        "required": true,
+        "schema": { "type": "string", "minLength": 1, "maxLength": 256 }
+      },
+      "TokenId": {
+        "name": "tokenId",
+        "in": "path",
+        "required": true,
+        "schema": { "type": "string", "minLength": 1, "maxLength": 256 }
+      },
+      "FeedbackId": {
+        "name": "feedbackId",
+        "in": "path",
+        "required": true,
+        "schema": { "type": "string", "minLength": 1, "maxLength": 256 }
+      },
+      "ReviewLayerPreviewId": {
+        "name": "previewId",
+        "in": "path",
+        "required": true,
+        "schema": { "type": "string", "minLength": 1, "maxLength": 256 }
+      }
+    },
+    "schemas": {
+      "Error": {
+        "type": "object",
+        "required": ["ok", "code"],
+        "properties": {
+          "ok": { "const": false },
+          "code": { "type": "string" },
+          "retryable": { "type": "boolean" },
+          "diagnostics": {
+            "type": "array",
+            "items": { "$ref": "#/components/schemas/ReviewLayerDiagnostic" }
+          }
+        },
+        "additionalProperties": true
+      },
+      "AssetFile": {
+        "type": "object",
+        "required": ["path", "content"],
+        "description": "Browser-safe static artifact file.",
+        "properties": {
+          "path": { "type": "string", "maxLength": 512 },
+          "content": {
+            "type": "string",
+            "description": "Base64-encoded content."
+          },
+          "size": { "type": "integer", "minimum": 0, "maximum": 10485760 }
+        },
+        "additionalProperties": false
+      },
+      "Project": {
+        "type": "object",
+        "required": ["id", "name", "subdomain"],
+        "properties": {
+          "id": { "type": "string" },
+          "name": { "type": "string" },
+          "subdomain": { "type": "string" },
+          "visibility": {
+            "type": "string",
+            "enum": ["private", "organization", "unlisted", "public"]
+          },
+          "archived_on": { "type": ["string", "null"] }
+        },
+        "additionalProperties": true
+      },
+      "ShipletListResponse": {
+        "type": "object",
+        "required": ["projects"],
+        "properties": {
+          "projects": {
+            "type": "array",
+            "items": { "$ref": "#/components/schemas/Project" }
+          }
+        },
+        "additionalProperties": false
+      },
+      "PublishResponse": {
+        "type": "object",
+        "required": ["ok", "project", "url"],
+        "properties": {
+          "ok": { "const": true },
+          "project": { "$ref": "#/components/schemas/Project" },
+          "url": { "type": "string", "format": "uri" }
+        },
+        "additionalProperties": true
+      },
+      "ReviewLayerFile": {
+        "type": "object",
+        "required": ["path", "mediaType", "encoding", "content"],
+        "properties": {
+          "path": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 512,
+            "description": "Path relative to the review widget root. Artifact paths are never accepted."
+          },
+          "mediaType": { "type": "string", "minLength": 1, "maxLength": 256 },
+          "encoding": { "type": "string", "enum": ["utf8", "base64"] },
+          "content": { "type": "string" }
+        },
+        "additionalProperties": false
+      },
+      "ReviewLayerResponse": {
+        "type": "object",
+        "required": ["version", "files"],
+        "properties": {
+          "version": { "type": "string", "minLength": 1 },
+          "files": {
+            "type": "array",
+            "maxItems": 128,
+            "items": { "$ref": "#/components/schemas/ReviewLayerFile" }
+          }
+        },
+        "additionalProperties": false
+      },
+      "ReviewLayerChange": {
+        "oneOf": [
+          {
+            "type": "object",
+            "required": ["op", "path", "mediaType", "encoding", "content"],
+            "properties": {
+              "op": { "const": "put" },
+              "path": { "type": "string", "minLength": 1, "maxLength": 512 },
+              "mediaType": { "type": "string", "minLength": 1, "maxLength": 256 },
+              "encoding": { "type": "string", "enum": ["utf8", "base64"] },
+              "content": { "type": "string" }
+            },
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "required": ["op", "path"],
+            "properties": {
+              "op": { "const": "delete" },
+              "path": { "type": "string", "minLength": 1, "maxLength": 512 }
+            },
+            "additionalProperties": false
+          }
+        ]
+      },
+      "ReviewLayerPreviewRequest": {
+        "type": "object",
+        "required": ["baseVersion", "changes"],
+        "properties": {
+          "baseVersion": { "type": "string", "minLength": 1 },
+          "changes": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 64,
+            "items": { "$ref": "#/components/schemas/ReviewLayerChange" }
+          }
+        },
+        "additionalProperties": false
+      },
+      "ReviewLayerDiagnostic": {
+        "type": "object",
+        "required": ["code"],
+        "properties": {
+          "code": { "type": "string" },
+          "path": { "type": "string" }
+        },
+        "additionalProperties": false
+      },
+      "ReviewLayerPreviewResponse": {
+        "type": "object",
+        "required": ["previewId", "previewUrl", "baseVersion", "diagnostics"],
+        "properties": {
+          "previewId": { "type": "string" },
+          "previewUrl": { "type": "string", "format": "uri" },
+          "baseVersion": { "type": "string" },
+          "diagnostics": {
+            "type": "array",
+            "items": { "$ref": "#/components/schemas/ReviewLayerDiagnostic" }
+          }
+        },
+        "additionalProperties": false
+      },
+      "ReviewLayerApplyRequest": {
+        "type": "object",
+        "required": ["expectedVersion", "approval"],
+        "properties": {
+          "expectedVersion": { "type": "string", "minLength": 1 },
+          "approval": { "const": true }
+        },
+        "additionalProperties": false
+      },
+      "ReviewLayerApplyResponse": {
+        "type": "object",
+        "required": ["reviewLayer"],
+        "properties": {
+          "reviewLayer": { "$ref": "#/components/schemas/ReviewLayerResponse" }
+        },
+        "additionalProperties": false
+      },
+      "ApiTokenCreateRequest": {
+        "type": "object",
+        "required": ["name", "scopes", "projectRules"],
+        "properties": {
+          "name": { "type": "string", "minLength": 1, "maxLength": 120 },
+          "scopes": {
+            "type": "array",
+            "uniqueItems": true,
+            "items": {
+              "type": "string",
+              "enum": [
+                "mcp",
+                "shiplets:read",
+                "shiplets:write",
+                "shiplets:archive",
+                "feedback:read",
+                "feedback:write"
+              ]
+            }
+          },
+          "projectRules": {
+            "oneOf": [
+              {
+                "type": "object",
+                "required": ["mode"],
+                "properties": { "mode": { "const": "all" } },
+                "additionalProperties": false
+              },
+              {
+                "type": "object",
+                "required": ["mode", "projectIds"],
+                "properties": {
+                  "mode": { "const": "selected" },
+                  "projectIds": {
+                    "type": "array",
+                    "minItems": 1,
+                    "uniqueItems": true,
+                    "items": { "type": "string" }
+                  }
+                },
+                "additionalProperties": false
+              }
+            ]
+          },
+          "expiresAt": { "type": ["string", "null"], "format": "date-time" }
+        },
+        "additionalProperties": false
+      },
+      "FeedbackCreateRequest": {
+        "type": "object",
+        "required": ["comment", "pageUrl", "clientFeedbackId"],
+        "properties": {
+          "name": { "type": ["string", "null"] },
+          "comment": { "type": "string", "minLength": 1 },
+          "pageUrl": { "type": "string" },
+          "clientFeedbackId": { "type": "string", "minLength": 1 },
+          "screenshotDataUrl": { "type": ["string", "null"] },
+          "screenshotMode": { "type": "string", "enum": ["page", "element"] },
+          "viewport": { "type": ["object", "null"] },
+          "coordinates": { "type": ["object", "null"] },
+          "selectedElement": { "type": ["object", "null"] },
+          "captureContext": { "type": ["object", "null"] },
+          "mentions": {
+            "type": "array",
+            "items": { "type": "string" },
+            "uniqueItems": true
+          }
+        },
+        "additionalProperties": false
+      },
+      "FeedbackReplyRequest": {
+        "type": "object",
+        "required": ["comment"],
+        "properties": {
+          "comment": { "type": "string", "minLength": 1 },
+          "mentions": {
+            "type": "array",
+            "items": { "type": "string" },
+            "uniqueItems": true
+          }
+        },
+        "additionalProperties": false
+      },
+      "FeedbackStatusRequest": {
+        "type": "object",
+        "required": ["status"],
+        "properties": {
+          "status": {
+            "type": "string",
+            "enum": ["New", "In Progress", "Blocked", "Done", "Dropped"]
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    "responses": {
+      "BadRequest": {
+        "description": "Malformed or policy-invalid input.",
+        "content": {
+          "application/json": {
+            "schema": { "$ref": "#/components/schemas/Error" }
+          }
+        }
+      },
+      "Unauthorized": {
+        "description": "Authentication is missing, expired, or revoked.",
+        "content": {
+          "text/plain": { "schema": { "type": "string" } },
+          "application/json": {
+            "schema": { "$ref": "#/components/schemas/Error" }
+          }
+        }
+      },
+      "Forbidden": {
+        "description": "The actor lacks access to this Shiplet or operation.",
+        "content": {
+          "text/plain": { "schema": { "type": "string" } },
+          "application/json": {
+            "schema": { "$ref": "#/components/schemas/Error" }
+          }
+        }
+      },
+      "Conflict": {
+        "description": "The optimistic version or current state changed."
+      },
+      "Prerequisite": {
+        "description": "Explicit approval is required."
+      }
+    }
+  },
+  "paths": {
+    "/api/shiplets": {
+      "get": {
+        "operationId": "listShiplets",
+        "x-shiplet-code-mode": true,
+        "x-shiplet-scopes": ["shiplets:read"],
+        "tags": ["Shiplets"],
+        "summary": "List Shiplets visible to the authenticated actor",
+        "parameters": [
+          {
+            "name": "status",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "enum": ["active", "archived", "all"]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Visible Shiplets.",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ShipletListResponse" }
+              }
+            }
+          },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "403": { "$ref": "#/components/responses/Forbidden" }
+        }
+      },
+      "post": {
+        "operationId": "publishShiplet",
+        "x-shiplet-code-mode": true,
+        "x-shiplet-scopes": ["shiplets:write"],
+        "tags": ["Shiplets"],
+        "summary": "Prepare a static artifact for review",
+        "description": "Creates a Shiplet from browser-safe static assets or a public HTTP(S) URL. Optionally snapshots the active review layer from another Shiplet in the same organization.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "description": "Provide either browser-safe static assets or external_url for an existing public site.",
+                "required": ["name", "subdomain"],
+                "properties": {
+                  "name": { "type": "string" },
+                  "organization_id": { "type": "string" },
+                  "review_layer_source_shiplet_id": {
+                    "type": "string",
+                    "description": "An accessible Shiplet in the same organization whose active review layer is copied as this Shiplet's independent starting point."
+                  },
+                  "subdomain": {
+                    "type": "string",
+                    "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$",
+                    "maxLength": 63
+                  },
+                  "visibility": {
+                    "type": "string",
+                    "enum": ["private", "organization", "unlisted", "public"]
+                  },
+                  "assets": {
+                    "type": "array",
+                    "maxItems": 200,
+                    "items": { "$ref": "#/components/schemas/AssetFile" }
+                  },
+                  "external_url": { "type": "string", "format": "uri" }
+                },
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Artifact prepared for review.",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/PublishResponse" }
+              }
+            }
+          },
+          "400": { "$ref": "#/components/responses/BadRequest" },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "403": { "$ref": "#/components/responses/Forbidden" }
+        }
+      }
+    },
+    "/api/shiplets/{projectId}/review-layer": {
+      "get": {
+        "operationId": "getReviewLayer",
+        "x-shiplet-code-mode": true,
+        "x-shiplet-scopes": ["shiplets:read"],
+        "tags": ["Review layer"],
+        "summary": "Read the customizable review widget",
+        "description": "Returns only widget-relative files and an optimistic version. Artifact files, package metadata, credentials, and deployment state are never included.",
+        "parameters": [{ "$ref": "#/components/parameters/ProjectId" }],
+        "responses": {
+          "200": {
+            "description": "Current review layer.",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ReviewLayerResponse" }
+              }
+            }
+          },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "403": { "$ref": "#/components/responses/Forbidden" },
+          "404": { "description": "Shiplet not found." }
+        }
+      }
+    },
+    "/api/shiplets/{projectId}/review-layer/previews": {
+      "post": {
+        "operationId": "previewReviewLayerChanges",
+        "x-shiplet-code-mode": true,
+        "x-shiplet-scopes": ["shiplets:write"],
+        "tags": ["Review layer"],
+        "summary": "Validate and preview review-widget changes",
+        "description": "Accepts bounded widget-relative edits, validates the isolated widget runtime, and creates an expiring preview. The active review layer and artifact remain unchanged.",
+        "parameters": [{ "$ref": "#/components/parameters/ProjectId" }],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/ReviewLayerPreviewRequest" }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Validated review-layer preview.",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ReviewLayerPreviewResponse" }
+              }
+            }
+          },
+          "409": { "$ref": "#/components/responses/Conflict" },
+          "422": {
+            "description": "The proposed review widget is invalid.",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/Error" }
+              }
+            }
+          },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "403": { "$ref": "#/components/responses/Forbidden" },
+          "404": { "description": "Shiplet not found." }
+        }
+      }
+    },
+    "/api/shiplets/{projectId}/review-layer/previews/{previewId}/apply": {
+      "post": {
+        "operationId": "applyReviewLayerPreview",
+        "x-shiplet-code-mode": true,
+        "x-shiplet-scopes": ["shiplets:write"],
+        "tags": ["Review layer"],
+        "summary": "Apply an approved review-layer preview",
+        "description": "Atomically replaces only the review widget when its base version is still current. The reviewed artifact and its deployment state are not changed.",
+        "parameters": [
+          { "$ref": "#/components/parameters/ProjectId" },
+          { "$ref": "#/components/parameters/ReviewLayerPreviewId" }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/ReviewLayerApplyRequest" }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Review layer applied without changing the artifact.",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ReviewLayerApplyResponse" }
+              }
+            }
+          },
+          "409": { "$ref": "#/components/responses/Conflict" },
+          "428": { "$ref": "#/components/responses/Prerequisite" },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "403": { "$ref": "#/components/responses/Forbidden" },
+          "404": { "description": "Shiplet or preview not found." }
+        }
+      }
+    },
+    "/api/organizations/{organizationId}/api-tokens": {
+      "get": {
+        "operationId": "listOrganizationApiTokens",
+        "x-shiplet-code-mode": false,
+        "security": [{ "browserSession": [] }],
+        "tags": ["API keys"],
+        "summary": "List organization API keys without secret values",
+        "parameters": [{ "$ref": "#/components/parameters/OrganizationId" }],
+        "responses": {
+          "200": {
+            "description": "API-key metadata.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": ["tokens"],
+                  "properties": {
+                    "tokens": { "type": "array", "items": { "type": "object" } }
+                  }
+                }
+              }
+            }
+          },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "403": { "$ref": "#/components/responses/Forbidden" }
+        }
+      },
+      "post": {
+        "operationId": "createOrganizationApiToken",
+        "x-shiplet-code-mode": false,
+        "security": [{ "browserSession": [] }],
+        "tags": ["API keys"],
+        "summary": "Create an organization API key",
+        "parameters": [{ "$ref": "#/components/parameters/OrganizationId" }],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/ApiTokenCreateRequest" }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "The secret is returned once.",
+            "content": {
+              "application/json": { "schema": { "type": "object" } }
+            }
+          },
+          "400": { "$ref": "#/components/responses/BadRequest" },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "403": { "$ref": "#/components/responses/Forbidden" }
+        }
+      }
+    },
+    "/api/organizations/{organizationId}/api-tokens/{tokenId}": {
+      "delete": {
+        "operationId": "revokeOrganizationApiToken",
+        "x-shiplet-code-mode": false,
+        "security": [{ "browserSession": [] }],
+        "tags": ["API keys"],
+        "summary": "Revoke one organization API key",
+        "parameters": [
+          { "$ref": "#/components/parameters/OrganizationId" },
+          { "$ref": "#/components/parameters/TokenId" }
+        ],
+        "responses": {
+          "200": {
+            "description": "Token revoked.",
+            "content": {
+              "application/json": { "schema": { "type": "object" } }
+            }
+          },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "403": { "$ref": "#/components/responses/Forbidden" },
+          "404": { "description": "Token not found." }
+        }
+      }
+    },
+    "/api/mcp": {
+      "post": {
+        "operationId": "invokeCodeModeMcp",
+        "x-shiplet-code-mode": false,
+        "x-shiplet-scopes": ["mcp"],
+        "security": [{ "bearerAuth": [] }, { "oauthAccessToken": [] }],
+        "tags": ["Code Mode MCP"],
+        "summary": "Call the strict two-tool Code Mode server",
+        "description": "The MCP catalog always contains exactly search and execute. User-authored JavaScript runs in an isolated dynamic Worker with no network access or credentials; API requests return to the authenticated trusted host.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "type": "object", "additionalProperties": true }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "MCP JSON-RPC response.",
+            "content": {
+              "application/json": { "schema": { "type": "object" } }
+            }
+          },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "403": { "$ref": "#/components/responses/Forbidden" }
+        }
+      }
+    },
+    "/api/projects/{projectId}/archive": {
+      "post": {
+        "operationId": "archiveShiplet",
+        "x-shiplet-code-mode": true,
+        "x-shiplet-scopes": ["shiplets:archive"],
+        "tags": ["Shiplets"],
+        "summary": "Archive a Shiplet",
+        "parameters": [{ "$ref": "#/components/parameters/ProjectId" }],
+        "responses": {
+          "200": {
+            "description": "Shiplet archived.",
+            "content": {
+              "application/json": { "schema": { "type": "object" } }
+            }
+          },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "403": { "$ref": "#/components/responses/Forbidden" },
+          "404": { "description": "Shiplet not found." }
+        }
+      }
+    },
+    "/api/projects/{projectId}/restore": {
+      "post": {
+        "operationId": "restoreShiplet",
+        "x-shiplet-code-mode": true,
+        "x-shiplet-scopes": ["shiplets:archive"],
+        "tags": ["Shiplets"],
+        "summary": "Restore an archived Shiplet",
+        "parameters": [{ "$ref": "#/components/parameters/ProjectId" }],
+        "responses": {
+          "200": {
+            "description": "Shiplet restored.",
+            "content": {
+              "application/json": { "schema": { "type": "object" } }
+            }
+          },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "403": { "$ref": "#/components/responses/Forbidden" },
+          "404": { "description": "Shiplet not found." }
+        }
+      }
+    },
+    "/api/projects/archive": {
+      "post": {
+        "operationId": "bulkArchiveShiplets",
+        "x-shiplet-code-mode": true,
+        "x-shiplet-scopes": ["shiplets:archive"],
+        "tags": ["Shiplets"],
+        "summary": "Archive selected Shiplets",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["projectIds"],
+                "properties": {
+                  "projectIds": {
+                    "type": "array",
+                    "minItems": 1,
+                    "maxItems": 100,
+                    "uniqueItems": true,
+                    "items": { "type": "string" }
+                  }
+                },
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Archive result.",
+            "content": {
+              "application/json": { "schema": { "type": "object" } }
+            }
+          },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "403": { "$ref": "#/components/responses/Forbidden" }
+        }
+      }
+    },
+    "/api/projects/{projectId}/review-feedback": {
+      "get": {
+        "operationId": "listReviewFeedback",
+        "x-shiplet-code-mode": true,
+        "x-shiplet-scopes": ["feedback:read"],
+        "tags": ["Feedback"],
+        "summary": "List review feedback",
+        "parameters": [
+          { "$ref": "#/components/parameters/ProjectId" },
+          { "name": "pageUrl", "in": "query", "schema": { "type": "string" } },
+          { "name": "status", "in": "query", "schema": { "type": "string" } },
+          { "name": "includeClosed", "in": "query", "schema": { "type": "boolean" } },
+          { "name": "limit", "in": "query", "schema": { "type": "integer", "minimum": 1, "maximum": 100 } }
+        ],
+        "responses": {
+          "200": {
+            "description": "Feedback list.",
+            "content": {
+              "application/json": { "schema": { "type": "object" } }
+            }
+          },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "403": { "$ref": "#/components/responses/Forbidden" }
+        }
+      },
+      "post": {
+        "operationId": "createReviewFeedback",
+        "x-shiplet-code-mode": true,
+        "x-shiplet-scopes": ["feedback:write"],
+        "tags": ["Feedback"],
+        "summary": "Create review feedback",
+        "parameters": [{ "$ref": "#/components/parameters/ProjectId" }],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/FeedbackCreateRequest" }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Feedback created.",
+            "content": {
+              "application/json": { "schema": { "type": "object" } }
+            }
+          },
+          "400": { "$ref": "#/components/responses/BadRequest" },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "403": { "$ref": "#/components/responses/Forbidden" }
+        }
+      }
+    },
+    "/api/projects/{projectId}/review-feedback/{feedbackId}": {
+      "get": {
+        "operationId": "getReviewFeedback",
+        "x-shiplet-code-mode": true,
+        "x-shiplet-scopes": ["feedback:read"],
+        "tags": ["Feedback"],
+        "summary": "Read one feedback thread",
+        "parameters": [
+          { "$ref": "#/components/parameters/ProjectId" },
+          { "$ref": "#/components/parameters/FeedbackId" }
+        ],
+        "responses": {
+          "200": {
+            "description": "Feedback thread.",
+            "content": {
+              "application/json": { "schema": { "type": "object" } }
+            }
+          },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "403": { "$ref": "#/components/responses/Forbidden" },
+          "404": { "description": "Feedback not found." }
+        }
+      }
+    },
+    "/api/projects/{projectId}/review-feedback/{feedbackId}/screenshot": {
+      "get": {
+        "operationId": "getReviewFeedbackScreenshot",
+        "x-shiplet-code-mode": false,
+        "x-shiplet-scopes": ["feedback:read"],
+        "tags": ["Feedback"],
+        "summary": "Read an authorized feedback screenshot",
+        "parameters": [
+          { "$ref": "#/components/parameters/ProjectId" },
+          { "$ref": "#/components/parameters/FeedbackId" }
+        ],
+        "responses": {
+          "200": {
+            "description": "Screenshot bytes.",
+            "content": {
+              "image/png": { "schema": { "type": "string", "format": "binary" } }
+            }
+          },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "403": { "$ref": "#/components/responses/Forbidden" },
+          "404": { "description": "Screenshot not found." }
+        }
+      }
+    },
+    "/api/projects/{projectId}/review-feedback/{feedbackId}/replies": {
+      "post": {
+        "operationId": "replyToReviewFeedback",
+        "x-shiplet-code-mode": true,
+        "x-shiplet-scopes": ["feedback:write"],
+        "tags": ["Feedback"],
+        "summary": "Reply to feedback",
+        "parameters": [
+          { "$ref": "#/components/parameters/ProjectId" },
+          { "$ref": "#/components/parameters/FeedbackId" }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/FeedbackReplyRequest" }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Reply created.",
+            "content": {
+              "application/json": { "schema": { "type": "object" } }
+            }
+          },
+          "400": { "$ref": "#/components/responses/BadRequest" },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "403": { "$ref": "#/components/responses/Forbidden" }
+        }
+      }
+    },
+    "/api/projects/{projectId}/review-feedback/{feedbackId}/status": {
+      "post": {
+        "operationId": "updateReviewFeedbackStatus",
+        "x-shiplet-code-mode": true,
+        "x-shiplet-scopes": ["feedback:write"],
+        "tags": ["Feedback"],
+        "summary": "Update feedback status",
+        "parameters": [
+          { "$ref": "#/components/parameters/ProjectId" },
+          { "$ref": "#/components/parameters/FeedbackId" }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/FeedbackStatusRequest" }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Feedback status updated.",
+            "content": {
+              "application/json": { "schema": { "type": "object" } }
+            }
+          },
+          "400": { "$ref": "#/components/responses/BadRequest" },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "403": { "$ref": "#/components/responses/Forbidden" }
+        }
+      }
+    }
+  }
+}

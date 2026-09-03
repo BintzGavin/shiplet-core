@@ -1,0 +1,83 @@
+---
+title: "API keys"
+description: "Create least-privilege organization credentials for REST and MCP automation."
+---
+
+API keys are organization-level credentials for CI, CLIs, and non-interactive
+service accounts. For interactive MCP use, connect through browser-based AuthKit
+OAuth instead.
+
+Treat every key as a secret. Store it in the automation platform's established
+secret store. Keep it out of artifacts, custom widgets, browser scripts, source
+files, build logs, and screenshots. Shiplet displays new key material only at
+creation time.
+
+## Start with least privilege
+
+Open [Agents and API keys](/agents) and choose the organization. The form starts
+with no authority selected: **Only selected** and no scopes. Choose the exact
+Shiplets and choose every scope the job needs before selecting **Create key**.
+Missing, empty, or invalid authority input is rejected rather than expanded.
+
+Choose only the scopes required for one automation job:
+
+| Scope              | Allows                                         | Include when                              |
+| ------------------ | ---------------------------------------------- | ----------------------------------------- |
+| `shiplets:read`    | List and read Shiplets visible to the key      | The job reads review artifacts or settings |
+| `shiplets:write`   | Prepare artifacts and perform permitted writes | The job publishes or updates work         |
+| `shiplets:archive` | Archive and restore authorized Shiplets        | The job owns lifecycle cleanup            |
+| `feedback:read`    | Read review feedback                           | The job consumes review tickets           |
+| `feedback:write`   | Create replies and update feedback             | The job acts on review tickets            |
+| `mcp`              | Use `/api/mcp`                                 | The credential connects through MCP       |
+
+The retired organization-key alias `feedback:manage` is not accepted for new
+keys. Existing stored keys that still contain it are projected as the current
+`feedback:read` plus `feedback:write` pair until they are rotated; the retired
+name is never returned as public authority.
+
+REST calls do not require `mcp`. A feedback reader does not need
+`feedback:write`; a publisher does not need `shiplets:archive` unless it also
+owns cleanup.
+
+## Restrict projects
+
+Project rules refine authority after the scope check.
+
+- `projectAccessMode: "selected"` allows only projects with an allow rule.
+- `projectAccessMode: "all"` allows every project unless a deny rule matches.
+- Deny rules win over allow rules.
+
+A selected-project key cannot create a new Shiplet because no pre-existing
+project rule can authorize that new identity. New Shiplet creation requires
+`shiplets:write` together with **All projects** organization authority. Keep a
+creator credential separate from keys limited to existing Shiplets.
+
+Use **Only selected** for a narrow automation job. If broader access is
+necessary, document why and use deny rules for sensitive projects. Rotate or
+revoke a key when its job or operator changes.
+
+## Call the API
+
+The machine-readable public route contract is in the [OpenAPI
+document](https://shiplet.cc/openapi.json). Its operation metadata identifies
+supported authentication and Code Mode coverage. Send the key as a bearer
+credential from server-side automation only. For interactive examples that do
+not expose an API key to page code, use the browser-OAuth flow in [Code Mode
+MCP](/docs/code-mode-mcp). The [API surface and route ledger](/docs/api-surface)
+classifies browser-only and operator-internal routes that are deliberately not
+public automation contracts.
+
+## Failure and recovery
+
+- A missing scope or excluded project fails closed with no side effect. Grant
+  only the missing authority after reviewing the job.
+- A revoked key stops future requests. Create a replacement only for a still
+  authorized workload.
+- Keep keys out of artifact and custom widget files. Shiplet applies their
+  authority at the API boundary.
+
+## Next action
+
+[Review the access matrix](/docs/access-control), then create the narrowest key
+for one job in [Agents and API keys](/agents). For agent-first
+interactive work, [connect MCP with browser OAuth](/docs/code-mode-mcp).

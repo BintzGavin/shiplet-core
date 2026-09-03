@@ -1,0 +1,110 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="720" height="540" viewBox="0 0 720 540">
+<g transform="translate(0 0)" data-signal-code="A" data-signal-label="Alfa">
+	<circle cx="90" cy="90" r="76" fill="#ffffff" stroke="#20293a" stroke-width="5"/>
+	<circle cx="90" cy="90" r="68" fill="none" stroke="#003a78" stroke-width="1.5" opacity=".18"/>
+
+		<defs>
+			<clipPath id="signal-a-flag-shape">
+				<path d="M38 52H142L119.12 90L142 128H38Z"/>
+			</clipPath>
+		</defs>
+		<g clip-path="url(#signal-a-flag-shape)">
+			<rect x="38" y="52" width="104" height="76" fill="#003a78"/>
+			<rect x="38" y="52" width="47.84" height="76" fill="#ffffff"/>
+		</g>
+		<path d="M38 52H142L119.12 90L142 128H38Z" fill="none" stroke="#20293a" stroke-width="2"/>
+
+</g>
+<g transform="translate(180 0)" data-signal-code="B" data-signal-label="Bravo">
+	<circle cx="90" cy="90" r="76" fill="#ffffff" stroke="#20293a" stroke-width="5"/>
+	<circle cx="90" cy="90" r="68" fill="none" stroke="#003a78" stroke-width="1.5" opacity=".18"/>
+
+		<path d="M38 52H142L119.12 90L142 128H38Z" fill="#c8102e" stroke="#20293a" stroke-width="2"/>
+
+</g>
+<g transform="translate(360 0)" data-signal-code="C" data-signal-label="Charlie">
+	<circle cx="90" cy="90" r="76" fill="#ffffff" stroke="#20293a" stroke-width="5"/>
+	<circle cx="90" cy="90" r="68" fill="none" stroke="#003a78" stroke-width="1.5" opacity=".18"/>
+
+		<rect x="38" y="52" width="104" height="15.2" fill="#003a78"/><rect x="38" y="67.2" width="104" height="15.2" fill="#ffffff"/><rect x="38" y="82.4" width="104" height="15.2" fill="#c8102e"/><rect x="38" y="97.6" width="104" height="15.2" fill="#ffffff"/><rect x="38" y="112.8" width="104" height="15.2" fill="#003a78"/>
+		<rect x="38" y="52" width="104" height="76" fill="none" stroke="#20293a" stroke-width="2"/>
+
+</g>
+<g transform="translate(540 0)" data-signal-code="D" data-signal-label="Delta">
+	<circle cx="90" cy="90" r="76" fill="#ffffff" stroke="#20293a" stroke-width="5"/>
+	<circle cx="90" cy="90" r="68" fill="none" stroke="#003a78" stroke-width="1.5" opacity=".18"/>
+
+		<rect x="38" y="52" width="104" height="25.333333333333332" fill="#f6c343"/><rect x="38" y="77.33333333333333" width="104" height="25.333333333333332" fill="#003a78"/><rect x="38" y="102.66666666666666" width="104" height="25.333333333333332" fill="#f6c343"/>
+		<rect x="38" y="52" width="104" height="76" fill="none" stroke="#20293a" stroke-width="2"/>
+
+</g>
+<g transform="translate(0 180)" data-signal-code="E" data-signal-label="Echo">
+	<circle cx="90" cy="90" r="76" fill="#ffffff" stroke="#20293a" stroke-width="5"/>
+	<circle cx="90" cy="90" r="68" fill="none" stroke="#003a78" stroke-width="1.5" opacity=".18"/>
+
+		<rect x="38" y="52" width="104" height="38" fill="#003a78"/><rect x="38" y="90" width="104" height="38" fill="#c8102e"/>
+		<rect x="38" y="52" width="104" height="76" fill="none" stroke="#20293a" stroke-width="2"/>
+
+</g>
+<g transform="translate(180 180)" data-signal-code="F" data-signal-label="Foxtrot">
+	<circle cx="90" cy="90" r="76" fill="#ffffff" stroke="#20293a" stroke-width="5"/>
+	<circle cx="90" cy="90" r="68" fill="none" stroke="#003a78" stroke-width="1.5" opacity=".18"/>
+
+		<rect x="52" y="52" width="76" height="76" fill="#ffffff"/>
+		<path d="M90 52L128 90L90 128L52 90Z" fill="#c8102e"/>
+		<rect x="52" y="52" width="76" height="76" fill="none" stroke="#20293a" stroke-width="2"/>
+
+</g>
+<g transform="translate(360 180)" data-signal-code="G" data-signal-label="Golf">
+	<circle cx="90" cy="90" r="76" fill="#ffffff" stroke="#20293a" stroke-width="5"/>
+	<circle cx="90" cy="90" r="68" fill="none" stroke="#003a78" stroke-width="1.5" opacity=".18"/>
+
+		<rect x="38" y="52" width="17.333333333333332" height="76" fill="#f6c343"/><rect x="55.33333333333333" y="52" width="17.333333333333332" height="76" fill="#003a78"/><rect x="72.66666666666666" y="52" width="17.333333333333332" height="76" fill="#f6c343"/><rect x="90" y="52" width="17.333333333333332" height="76" fill="#003a78"/><rect x="107.33333333333333" y="52" width="17.333333333333332" height="76" fill="#f6c343"/><rect x="124.66666666666666" y="52" width="17.333333333333332" height="76" fill="#003a78"/>
+		<rect x="38" y="52" width="104" height="76" fill="none" stroke="#20293a" stroke-width="2"/>
+
+</g>
+<g transform="translate(540 180)" data-signal-code="H" data-signal-label="Hotel">
+	<circle cx="90" cy="90" r="76" fill="#ffffff" stroke="#20293a" stroke-width="5"/>
+	<circle cx="90" cy="90" r="68" fill="none" stroke="#003a78" stroke-width="1.5" opacity=".18"/>
+
+		<rect x="38" y="52" width="52" height="76" fill="#ffffff"/><rect x="90" y="52" width="52" height="76" fill="#c8102e"/>
+		<rect x="38" y="52" width="104" height="76" fill="none" stroke="#20293a" stroke-width="2"/>
+
+</g>
+<g transform="translate(0 360)" data-signal-code="I" data-signal-label="India">
+	<circle cx="90" cy="90" r="76" fill="#ffffff" stroke="#20293a" stroke-width="5"/>
+	<circle cx="90" cy="90" r="68" fill="none" stroke="#003a78" stroke-width="1.5" opacity=".18"/>
+
+		<rect x="52" y="52" width="76" height="76" fill="#f6c343"/>
+		<circle cx="90" cy="90" r="21.28" fill="#231f20"/>
+		<rect x="52" y="52" width="76" height="76" fill="none" stroke="#20293a" stroke-width="2"/>
+
+</g>
+<g transform="translate(180 360)" data-signal-code="J" data-signal-label="Juliet">
+	<circle cx="90" cy="90" r="76" fill="#ffffff" stroke="#20293a" stroke-width="5"/>
+	<circle cx="90" cy="90" r="68" fill="none" stroke="#003a78" stroke-width="1.5" opacity=".18"/>
+
+		<rect x="38" y="52" width="104" height="25.333333333333332" fill="#003a78"/><rect x="38" y="77.33333333333333" width="104" height="25.333333333333332" fill="#ffffff"/><rect x="38" y="102.66666666666666" width="104" height="25.333333333333332" fill="#003a78"/>
+		<rect x="38" y="52" width="104" height="76" fill="none" stroke="#20293a" stroke-width="2"/>
+
+</g>
+<g transform="translate(360 360)" data-signal-code="K" data-signal-label="Kilo">
+	<circle cx="90" cy="90" r="76" fill="#ffffff" stroke="#20293a" stroke-width="5"/>
+	<circle cx="90" cy="90" r="68" fill="none" stroke="#003a78" stroke-width="1.5" opacity=".18"/>
+
+		<rect x="38" y="52" width="52" height="76" fill="#f6c343"/><rect x="90" y="52" width="52" height="76" fill="#003a78"/>
+		<rect x="38" y="52" width="104" height="76" fill="none" stroke="#20293a" stroke-width="2"/>
+
+</g>
+<g transform="translate(540 360)" data-signal-code="L" data-signal-label="Lima">
+	<circle cx="90" cy="90" r="76" fill="#ffffff" stroke="#20293a" stroke-width="5"/>
+	<circle cx="90" cy="90" r="68" fill="none" stroke="#003a78" stroke-width="1.5" opacity=".18"/>
+
+		<rect x="52" y="52" width="38" height="38" fill="#f6c343"/>
+		<rect x="90" y="52" width="38" height="38" fill="#231f20"/>
+		<rect x="52" y="90" width="38" height="38" fill="#231f20"/>
+		<rect x="90" y="90" width="38" height="38" fill="#f6c343"/>
+		<rect x="52" y="52" width="76" height="76" fill="none" stroke="#20293a" stroke-width="2"/>
+
+</g>
+</svg>

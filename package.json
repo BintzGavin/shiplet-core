@@ -1,0 +1,68 @@
+{
+	"name": "shiplet-core",
+	"description": "Source-preview release of Shiplet's Cloudflare-native artifact review platform.",
+	"private": true,
+	"version": "0.1.0",
+	"license": "Apache-2.0",
+	"bin": {
+		"shiplet": "./src/cli/shiplet.cjs"
+	},
+	"scripts": {
+		"audit:licenses": "node scripts/platform-client-license-audit.mjs",
+		"audit:security": "npm audit --audit-level=high",
+		"build": "npm run generate:public && wrangler deploy --dry-run && npm run build:support-workers",
+		"build:platform-client": "node scripts/build-platform-client.mjs",
+		"build:support-workers": "wrangler deploy --dry-run --config workers/cloudflare-control-plane/wrangler.jsonc && wrangler deploy --dry-run --config workers/managed-runtime-gateway/wrangler.jsonc && wrangler deploy --dry-run --config workers/deny-egress/wrangler.jsonc",
+		"build:wordpress": "node scripts/package-wordpress-plugin.mjs",
+		"cf-typegen": "wrangler types",
+		"deploy": "node scripts/self-host-deploy.mjs",
+		"dev": "wrangler dev",
+		"generate:public": "node scripts/generate-brand-assets.mjs && node scripts/generate-avatar-presets.mjs && node scripts/generate-why-shiplet-assets.mjs && node scripts/build-platform-client.mjs && wrangler types",
+		"shiplet": "node src/cli/shiplet.cjs",
+		"test": "vitest run && node --test scripts/browser-session.test.mjs scripts/cli-subprocess.test.mjs scripts/support-service-migrations.test.mjs scripts/wordpress-plugin.test.mjs scripts/public-source-preview.test.mjs",
+		"test:e2e": "npm run build:platform-client && playwright test",
+		"test:mutation:embed": "node scripts/embed-mutation-test.mjs",
+		"test:mutation:security": "node scripts/security-mutation-test.mjs",
+		"typecheck": "wrangler types --check && tsc --noEmit",
+		"verify": "npm run typecheck && npm test && npm run build && npm run audit:licenses && npm run audit:security"
+	},
+	"dependencies": {
+		"@cfworker/json-schema": "^4.1.1",
+		"@cloudflare/codemode": "^0.5.1",
+		"@modelcontextprotocol/sdk": "^1.25.3",
+		"@tanstack/react-query": "^5.101.0",
+		"@tanstack/react-router": "^1.170.15",
+		"@tanstack/react-start": "^1.168.25",
+		"@tanstack/react-table": "^8.21.3",
+		"@workos-inc/node": "^10.2.0",
+		"acorn": "^8.17.0",
+		"hono": "^4.13.0",
+		"jose": "^6.2.3",
+		"react": "^19.2.7",
+		"react-dom": "^19.2.7",
+		"workers-qb": "0.1.1",
+		"zod": "^4.4.3",
+		"zustand": "^5.0.14"
+	},
+	"devDependencies": {
+		"@cloudflare/vitest-pool-workers": "^0.20.3",
+		"@playwright/test": "^1.61.0",
+		"@resvg/resvg-js": "^2.6.2",
+		"@types/node": "^25.9.3",
+		"@types/react": "^19.2.17",
+		"@types/react-dom": "^19.2.3",
+		"@vitejs/plugin-react": "^6.0.5",
+		"@vitest/runner": "^4.1.10",
+		"@vitest/snapshot": "^4.1.10",
+		"typescript": "5.9.3",
+		"vite": "^8.2.1",
+		"vitest": "^4.1.10",
+		"wrangler": "^4.120.0"
+	},
+	"overrides": {
+		"undici": "7.29.0"
+	},
+	"engines": {
+		"node": ">=22.12.0"
+	}
+}

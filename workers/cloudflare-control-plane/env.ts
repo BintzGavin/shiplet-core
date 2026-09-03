@@ -1,0 +1,14 @@
+export interface ControlPlaneEnv {
+	CONTROL_DB: D1Database;
+	CREDENTIAL_ENCRYPTION_KEY: string;
+	OAUTH_STATE_SIGNING_KEY: string;
+	CLOUDFLARE_OAUTH_CLIENT_ID: string;
+	CONTROL_PLANE_ORIGIN: string;
+	SHIPLET_APP_ORIGIN: string;
+	OAUTH_CALLBACK_PATH: string;
+	OAUTH_STATE_TTL_SECONDS: string;
+	OAUTH_CLIENT_SCOPES_VERIFIED_AT: string;
+	WFP_PLATFORM_CONNECTION_ID?: string;
+	WFP_PLATFORM_ACCOUNT_ID?: string;
+	CF_VERSION_METADATA: { id: string; tag?: string };
+}

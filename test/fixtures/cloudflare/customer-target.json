@@ -1,0 +1,30 @@
+{
+	"id": "target_customer_a",
+	"shipletId": "shiplet_a",
+	"kind": "customer_cloudflare",
+	"ownerUserId": "user_owner_a",
+	"connectionId": "connection_a",
+	"providerAccountId": "account_a",
+	"providerScriptName": "shiplet-a-target-a",
+	"status": "connected",
+	"resourceBindingRefs": [
+		"resource_customer_a_state",
+		"resource_customer_a_public_configuration"
+	],
+	"resourceBindings": [
+		{
+			"name": "APP_STATE",
+			"kind": "d1",
+			"providerResourceId": "customer_a_state",
+			"ownerShipletId": "shiplet_a",
+			"ownerTargetId": "target_customer_a"
+		},
+		{
+			"name": "PUBLIC_CONFIGURATION",
+			"kind": "plain_text",
+			"value": "review-enabled",
+			"ownerShipletId": "shiplet_a",
+			"ownerTargetId": "target_customer_a"
+		}
+	]
+}

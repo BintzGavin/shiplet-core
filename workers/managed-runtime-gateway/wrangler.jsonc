@@ -1,0 +1,78 @@
+{
+  "$schema": "../../node_modules/wrangler/config-schema.json",
+  "name": "shiplet-example-runtime-gateway",
+  "main": "index.ts",
+  "compatibility_date": "2026-08-07",
+  "compatibility_flags": ["global_fetch_strictly_public"],
+  "workers_dev": true,
+  "observability": {
+    "enabled": true,
+    "logs": { "invocation_logs": false }
+  },
+  "limits": { "cpu_ms": 30000, "subrequests": 100 },
+  "version_metadata": { "binding": "CF_VERSION_METADATA" },
+  "worker_loaders": [{ "binding": "CUSTOM_MCP_LOADER" }],
+  "d1_databases": [
+    {
+      "binding": "RUNTIME_DB",
+      "database_name": "shiplet-example-runtime",
+      "database_id": "00000000-0000-0000-0000-000000000000",
+      "migrations_dir": "migrations"
+    }
+  ],
+  "services": [
+    {
+      "binding": "MANAGED_DEPLOYMENT_BROKER",
+      "service": "shiplet-example-control-plane",
+      "entrypoint": "CloudflareManagedDeploymentBrokerRpc"
+    },
+    {
+      "binding": "DENY_EGRESS_CONTRACT",
+      "service": "shiplet-example-deny-egress",
+      "entrypoint": "DenyEgressContractRpc"
+    },
+    {
+      "binding": "DENY_EGRESS",
+      "service": "shiplet-example-deny-egress",
+      "entrypoint": "DenyEgressWorker"
+    }
+  ],
+  "dispatch_namespaces": [
+    {
+      "binding": "STAGING_DISPATCH",
+      "namespace": "shiplet-example-staging",
+      "outbound": {
+        "service": "shiplet-example-runtime-gateway",
+        "parameters": [
+          "policy",
+          "shiplet",
+          "revision",
+          "generation",
+          "packageDigest",
+          "invocationId",
+          "invocationKind",
+          "stateMode",
+          "stateNamespace"
+        ]
+      }
+    },
+    {
+      "binding": "PRODUCTION_DISPATCH",
+      "namespace": "shiplet-example-production",
+      "outbound": {
+        "service": "shiplet-example-runtime-gateway",
+        "parameters": [
+          "policy",
+          "shiplet",
+          "revision",
+          "generation",
+          "packageDigest",
+          "invocationId",
+          "invocationKind",
+          "stateMode",
+          "stateNamespace"
+        ]
+      }
+    }
+  ]
+}

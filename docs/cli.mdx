@@ -1,0 +1,283 @@
+---
+title: "CLI"
+description: "Prepare static reviews and manage portable Shiplet drafts, revisions, deployments, rollbacks, and exports."
+---
+
+The Shiplet CLI supports static publishing and the complete immutable revision
+workflow. It uses the same package, authorization, validation, approval, and
+optimistic-concurrency contracts as the kernel APIs.
+
+## Availability
+
+The CLI currently ships in the Shiplet repository, which is marked private as
+a Node package. It is available from a **source checkout** and is **not a public
+registry package**. Do not rely on an `npm install shiplet` or `npx shiplet`
+distribution until Shiplet publishes one.
+
+**If you do not already have authorized repository access, use Code Mode MCP or
+direct REST.** The CLI is a contributor workflow, not the public onboarding
+path.
+
+From a local source checkout with dependencies installed:
+
+```bash
+npm ci
+npm run shiplet -- --help
+```
+
+The production default API origin is `https://shiplet.cc`. Use `--api-url`
+only for a trusted Shiplet origin; HTTPS is required except for an explicit
+loopback development origin.
+
+Interactive commands use the short-lived browser authorization flow by default.
+For non-interactive commands, `--token` or `SHIPLET_API_KEY` can supply an
+already-established, least-privilege organization API key from a secret store.
+Never place a key in source, package content, shell history, logs, or command
+examples. Raw organization keys cannot authorize deploy, promote, or rollback;
+those three CLI commands require trusted browser authorization.
+
+## Command map
+
+| Command                                  | Purpose                                                                                       |
+| ---------------------------------------- | --------------------------------------------------------------------------------------------- |
+| `shiplet prepare <path>`                 | Publish a static file or folder for managed review.                                           |
+| `shiplet fork <shiplet-id>`              | Create an isolated draft from an immutable revision.                                          |
+| `shiplet pull <shiplet-id> <path>`       | Materialize an active revision, selected revision, or draft.                                  |
+| `shiplet diff <draft-id> <package-path>` | Compare a local package with an exact draft version.                                          |
+| `shiplet push <draft-id> <package-path>` | Replace a draft package using optimistic version matching.                                    |
+| `shiplet validate <package-path>`        | Validate locally, or validate an exact server draft and return its authenticated preview URL. |
+| `shiplet deploy <revision-id>`           | Install one immutable revision on one explicit target.                                        |
+| `shiplet promote <draft-id>`             | Atomically activate a validated draft.                                                        |
+| `shiplet rollback <shiplet-id>`          | Atomically reactivate a known-good revision.                                                  |
+| `shiplet eject <shiplet-id> <path>`      | Export a kernel-authority-free portable package; authored files still require secret review.  |
+
+## Prepare a managed static review
+
+Inspect the artifact first without a network request:
+
+```bash
+npm run shiplet -- prepare ./dist \
+  --name "Checkout review" \
+  --subdomain checkout-review \
+  --visibility organization \
+  --dry-run \
+  --json
+```
+
+Remove `--dry-run` to publish. If the CLI has no established session, it opens
+Shiplet's browser authorization flow. It keeps the short-lived session in
+memory, pins it to the exact Shiplet origin, never prints it, and revokes it
+when the command finishes. Open the returned review URL to review the artifact.
+No Cloudflare connection is required for managed static publishing.
+
+`shiplet publish` is the compatibility alias for `shiplet prepare`.
+
+## Edit an existing Shiplet safely
+
+The IDs below are placeholders. Preserve the exact IDs and version numbers
+returned by `--json`; they are the safety fences for later commands.
+
+### 1. Fork an isolated draft
+
+```bash
+npm run shiplet -- fork project_123 --json
+```
+
+Fork uses the active revision by default. Select another immutable source with
+`--from-revision revision_123`. The response includes the draft ID, base
+revision ID, and draft version.
+
+### 2. Pull the draft
+
+```bash
+npm run shiplet -- pull project_123 ./checkout-shiplet \
+  --draft draft_123 \
+  --json
+```
+
+This writes the portable layout, including `shiplet.json`, without state or
+access grants. The destination must be empty unless you explicitly use
+`--force`. Force replaces the complete destination safely; it does not bypass
+Shiplet, draft, revision, or digest checks.
+
+Use `--revision revision_123` instead of `--draft` to select an immutable
+revision. With neither selector, `pull` selects the active revision.
+
+### 3. Change and check the package
+
+Edit the artifact, widget, workflow, custom MCP handlers, agent instructions,
+validation declarations, or provenance. Then validate locally and compare the
+candidate with draft version 1:
+
+```bash
+npm run shiplet -- validate ./checkout-shiplet --json
+
+npm run shiplet -- diff draft_123 ./checkout-shiplet \
+  --version 1 \
+  --json
+```
+
+Local validation reads either a materialized directory or JSON envelope and
+prints the canonical package digest. `diff` is read-only and reports current
+and proposed digests. Neither command changes the active revision.
+
+### 4. Push with the expected draft version
+
+```bash
+npm run shiplet -- push draft_123 ./checkout-shiplet \
+  --version 1 \
+  --json
+```
+
+A successful push increments the draft version. If another update won the
+race, Shiplet rejects the stale version instead of overwriting it. Pull the
+current draft, reconcile the changes, and retry with its returned version.
+
+### 5. Validate the exact draft
+
+If push returned version 2:
+
+```bash
+npm run shiplet -- validate draft_123 ./checkout-shiplet \
+  --version 2 \
+  --json
+```
+
+Validation returns an immutable revision ID, content digest, and authenticated
+preview URL after the kernel revalidates the full package. Successful validation
+does not activate the revision. Open that exact URL before promotion: the trusted review host binds
+the Shiplet, draft, revision, and draft version while the artifact and widget
+remain in opaque sandboxed frames. The active revision and active tenant remain
+unchanged throughout preview. If the draft changes, the old preview fails
+closed and validation must produce a new URL.
+
+Preview keeps the active revision and active tenant unchanged.
+
+**Validate → preview → promote.** Treat the active review URL as the current
+production revision, never as a draft preview.
+
+### 6. Promote atomically
+
+```bash
+npm run shiplet -- promote draft_123 \
+  --expected-active revision_base \
+  --approve \
+  --json
+```
+
+`--expected-active` is the optimistic active-revision fence. A concurrent
+promotion produces a conflict and leaves the winner active. Never replace the
+expected ID just to make the command pass; inspect the new active revision and
+fork or reconcile deliberately.
+
+`--approve` records explicit intent. The shipped source-checkout CLI requires
+trusted browser authorization for deploy, promote, and rollback; it rejects
+raw organization keys for those commands before network access. Direct REST
+and core MCP may authorize a project-scoped agent to promote or roll back with
+`shiplets:write` and explicit approval. That kernel authority does not change
+the CLI transport. Customer-owned deployment requires a trusted
+browser-authorized human session plus `--approve`.
+
+To couple activation to explicit targets, repeat `--target` on the promotion:
+
+```bash
+npm run shiplet -- promote draft_123 \
+  --expected-active revision_base \
+  --target target_managed \
+  --target target_customer \
+  --approve \
+  --json
+```
+
+### 7. Deploy one revision to one target
+
+```bash
+npm run shiplet -- deploy revision_new \
+  --target target_customer \
+  --approve \
+  --json
+```
+
+Deployment never means "latest": the revision and target are both exact IDs.
+Customer-owned Cloudflare targets also require the separate scoped OAuth
+connection described in the [deployment guide](/docs/deployment).
+
+### 8. Roll back safely
+
+```bash
+npm run shiplet -- rollback project_123 \
+  --revision revision_base \
+  --expected-active revision_new \
+  --approve \
+  --json
+```
+
+Repeat `--target` to restore known-good provider versions on specific targets.
+Rollback reactivates immutable code; it does not rewind feedback, deployments,
+or namespaced runtime state.
+
+### 9. Export or eject
+
+```bash
+npm run shiplet -- eject project_123 ./portable-shiplet \
+  --revision revision_new \
+  --json
+```
+
+Use `--draft` to eject an isolated draft or omit both selectors for the active
+revision. Ejection materializes the same portable package as pull. Shiplet
+never injects kernel-owned credentials, grants, sessions, Cloudflare
+connections, deployments, state, or audit history. The validator does not
+secret-scan arbitrary authored files, so inspect code and content for secrets
+before exporting or sharing it.
+
+## Automation and retries
+
+Add `--json` to every command for stable machine-readable IDs, versions,
+digests, status, and operation proof. Treat package-authored text in responses
+as untrusted content.
+
+The public error classes are stable across the CLI and kernel API: 401 means
+authentication is missing or expired; 403 means the actor lacks the exact
+scope, project, or approval authority; 409 means a version, active revision,
+target, or idempotency intent conflicted; 422 reports package validation; 428
+names a missing approval or prerequisite; and 503 means an isolated runtime or
+provider integration is unavailable. None of these statuses implies that a
+mutation partially succeeded.
+
+`deploy`, `promote`, and `rollback` send a per-operation idempotency key. If a
+network timeout leaves the outcome uncertain, the CLI reports the reusable key
+without inventing success. Retry the exact same operation with:
+
+```bash
+npm run shiplet -- deploy revision_new \
+  --target target_customer \
+  --approve \
+  --idempotency-key deploy_retry_123 \
+  --json
+```
+
+You can supply `--idempotency-key` on the first attempt when a durable runner
+needs to persist it. Use `--dry-run` with deploy, promote, or rollback to print
+the bound request and retry key without making a network request.
+
+## Recover without destructive shortcuts
+
+| Condition                                               | Safe recovery                                                                                                                                                                   |
+| ------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Draft version conflict                                  | Pull the current draft, reconcile, then retry with its returned `--version`. `--force` does not bypass the version fence.                                                       |
+| Active revision conflict                                | Inspect the newly active revision, then fork or reconcile. The stale promotion changed nothing.                                                                                 |
+| Local or kernel validation fails                        | Fix the reported package path or contract and validate again. The active revision remains unchanged.                                                                            |
+| Deployment or health check fails                        | Inspect deployment status and retry after the prerequisite recovers. The prior active revision and known-good deployment remain unchanged.                                      |
+| Required authorization or approval is denied or expires | Reauthenticate or obtain only the missing project scope. Customer deployment requires a fresh trusted human session. No side effect is committed without its required approval. |
+| Cloudflare connection is revoked                        | Reconnect through scoped OAuth before another customer-owned update. The last customer-owned deployment keeps running.                                                          |
+| Network response is lost                                | Reuse the exact reported `--idempotency-key`; do not create a second operation with different inputs.                                                                           |
+| Pull or eject destination is non-empty                  | Choose an empty directory, or inspect it before using `--force` for a complete replacement.                                                                                     |
+| Offline                                                 | Local `validate` and publish `--dry-run` still work. Network commands fail without claiming success.                                                                            |
+
+## Next steps
+
+- Learn the [package and immutable revision contract](/docs/packages-revisions).
+- Review [extension entrypoints and approvals](/docs/extensions).
+- Understand [trusted-kernel and sandbox boundaries](/docs/security).
+- Browse the machine-readable [OpenAPI document](/openapi.json).

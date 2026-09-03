@@ -1,0 +1,61 @@
+---
+title: "Introduction"
+description: "Prepare an artifact, share a review link, and collect contextual feedback."
+---
+
+Shiplet is the review layer for agent-first teams. The artifact remains the work
+your team reviews, whether it is a build output, static export, standalone file,
+or public preview URL. Shiplet places that work inside a trusted review
+experience where people can comment and agents can pick up the resulting
+tickets.
+
+[Open the Shiplet app](https://shiplet.cc/) to prepare a review. Shiplet hosts
+uploaded files and can attach its review layer to an existing public URL.
+
+## Choose your task
+
+- **[Publish my first review](/docs/quickstart):** prepare an artifact and open
+  its review link.
+- **[Collect feedback](/docs/review-feedback):** leave contextual comments,
+  reply to reviewers, and move tickets through review.
+- **[Automate with an agent](/docs/code-mode-mcp):** connect through Code Mode
+  MCP or call the documented REST operations.
+- **[Manage access](/docs/access-control):** choose who can view or edit each
+  Shiplet.
+- **[Review a WordPress site](/docs/wordpress):** attach the Shiplet review
+  layer to an existing site.
+
+Read [Why Shiplet](/docs/why-shiplet) for the product idea behind a customizable
+review room rooted in durable state.
+
+## How Shiplet fits around your work
+
+The artifact and the review layer have different jobs:
+
+- The **artifact** is the page, file, build, or URL under review.
+- The **Shiplet** owns the stable review link, access policy, and feedback.
+- The **review layer** provides the toolbar and trusted controls around the
+  artifact.
+
+Artifact code does not receive reviewer credentials or direct access to
+Shiplet's APIs. The trusted host keeps identity and review actions outside the
+artifact frame.
+
+## Customize the review experience
+
+The built-in review toolbar works for ordinary reviews. Shiplet can also attach
+a custom widget and workflow to the review layer when a team needs different
+controls or statuses. Those customizations belong to Shiplet's review
+experience, so they do not become part of the work being reviewed. Read
+[The review layer](/docs/extensions) for the boundary.
+
+## Automation
+
+The public automation paths are Code Mode MCP and direct REST. Interactive MCP
+uses browser OAuth, and CI can use a narrowly scoped organization API key. The
+[OpenAPI document](https://shiplet.cc/openapi.json) is the machine-readable
+contract for documented public REST operations.
+
+## Next action
+
+[Prepare your first review artifact](/docs/quickstart).

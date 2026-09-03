@@ -1,0 +1,57 @@
+---
+title: "API surface and route ledger"
+description: "Know which Shiplet routes are public automation contracts and why browser or operator routes stay outside OpenAPI."
+---
+
+Shiplet's [OpenAPI document](/openapi.json) is the **public automation
+contract**. If an operation appears there, its method, path, authentication,
+scopes, request and response schemas, and Code Mode marker are supported as one
+machine-readable contract.
+
+The application also has browser-only pages and protocols. A browser route is
+not an undocumented public API simply because its path begins with `/api`.
+Shiplet classifies every statically registered Worker route in the executable
+`api-route-ledger.json`, including paths supplied through local or imported
+string constants. Every route must either appear in OpenAPI or match
+**exactly one** narrow exclusion family. A dynamic or unresolvable registration
+fails closed, as does a missing, duplicate, or stale classification.
+
+## What stays outside OpenAPI
+
+| Class | Examples | Why it is separate |
+| --- | --- | --- |
+| Browser-only identity ceremony | WorkOS login/callback, account switching, Cloudflare OAuth return | Depends on trusted cookies, redirects, and user confirmation rather than bearer automation. |
+| First-party browser model | Dashboard, inbox, account, presence, watches | Aggregates state for Shiplet's own UI and may evolve with that UI. |
+| Trusted review or embed protocol | Sandboxed artifact and custom-widget frames, review-host assets, WordPress session exchange | Origin-bound protocol surface with a dedicated security contract; frame URLs are children of the authenticated review host, not independent automation. |
+| Human approval | Protected review-layer changes and quarantine release | Side effects require a trusted top-level human operation. |
+| Operator-internal recovery | Production bootstrap and reconciliation | Narrow operational compatibility surface, not a customer integration promise. |
+| Public representation | Docs, discovery files, icons, OpenAPI JSON | Files and representations rather than REST operations. |
+
+These exclusions are not authorization shortcuts. Browser-only and
+operator-internal routes still authenticate, authorize, scope, rate-limit, and
+audit according to their behavior contract. Classification only says which
+compatibility promise governs the route.
+
+## How to choose a surface
+
+- For REST or Code Mode automation, use only operations discovered in
+  [OpenAPI](/openapi.json).
+- For interactive MCP, connect through browser OAuth and use `search` before
+  `execute`.
+- For review, embeds, settings, or account administration, use the first-party
+  browser flow so the trusted host can perform the required user ceremony.
+- If an operation you need is not in OpenAPI, treat it as unsupported for
+  automation; do not reverse-engineer a browser-only request.
+
+## Verification
+
+The route-ledger test parses the real Hono registration calls in `src/index.ts`,
+statically resolves local and relative-imported string constants such as asset
+paths, compares them with the complete candidate OpenAPI document, and loads
+`docs/public-documentation/api-route-ledger.json`. It rejects dynamic or
+unresolvable registration, an OpenAPI operation with no runtime route, a runtime
+operation with no classification, an operation matching two exclusions, or an
+exclusion that no longer matches anything.
+
+Next, read [API keys](/docs/api-keys) for server-side credentials or [Code Mode
+MCP](/docs/code-mode-mcp) for interactive browser OAuth.

@@ -1,0 +1,38 @@
+{
+	"resources": [
+		{
+			"id": "resource_customer_a_state",
+			"shipletId": "shiplet_a",
+			"targetId": "target_customer_a",
+			"name": "APP_STATE",
+			"kind": "d1",
+			"providerResourceId": "customer_a_state"
+		},
+		{
+			"id": "resource_customer_a_public_configuration",
+			"shipletId": "shiplet_a",
+			"targetId": "target_customer_a",
+			"name": "PUBLIC_CONFIGURATION",
+			"kind": "plain_text",
+			"visibility": "public",
+			"value": "review-enabled"
+		},
+		{
+			"id": "resource_customer_b_state",
+			"shipletId": "shiplet_b",
+			"targetId": "target_customer_b",
+			"name": "APP_STATE",
+			"kind": "d1",
+			"providerResourceId": "customer_b_state"
+		},
+		{
+			"id": "resource_customer_a_private_configuration",
+			"shipletId": "shiplet_a",
+			"targetId": "target_customer_a",
+			"name": "PRIVATE_CONFIGURATION",
+			"kind": "plain_text",
+			"visibility": "private",
+			"value": "kernel-only"
+		}
+	]
+}

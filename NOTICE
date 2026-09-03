@@ -1,0 +1,9 @@
+Shiplet Core
+Copyright 2026 Shiplet contributors
+
+This product includes software developed from Cloudflare's Workers for
+Platforms template and is distributed under the Apache License, Version 2.0.
+
+Third-party JavaScript dependencies are identified by package-lock.json and
+retain their respective licenses. The WordPress integration in wordpress/ is
+distributed under the same Apache-2.0 license as this repository.

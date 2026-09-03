@@ -1,0 +1,19 @@
+{
+	"shipletId": "shiplet_a",
+	"revisionId": "revision_a2",
+	"packageDigest": "sha256-revision-a2",
+	"modules": [
+		{
+			"name": "index.mjs",
+			"mediaType": "application/javascript+module",
+			"content": "export default { fetch() { return new Response('revision a2'); } };"
+		}
+	],
+	"staticAssets": [
+		{
+			"path": "index.html",
+			"mediaType": "text/html",
+			"content": "<!doctype html><title>Revision A2</title>"
+		}
+	]
+}

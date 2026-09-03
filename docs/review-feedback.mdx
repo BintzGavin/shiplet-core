@@ -1,0 +1,87 @@
+---
+title: "Review feedback"
+description: "Collect trusted, contextual review events and hand them to people or agents."
+---
+
+Every review URL is a trusted Shiplet host. The artifact and any custom review widget
+run in sandboxed frames; the host owns reviewer identity and capability checks.
+This replaces the legacy model that injected a credentialed review client into
+artifact JavaScript.
+
+## What feedback captures
+
+- Comment, canonical status, replies, and mentions.
+- Page URL and pathname.
+- Ticket number and label.
+- Screenshot metadata when the reviewer explicitly captures it.
+- Viewport, coordinates, selected element, and capture context.
+- Trusted actor kind and identity.
+
+Ticket labels use the `PF-1`, `PF-2`, `PF-3` sequence inside each Shiplet.
+The global Feedback and Inbox views use the same ticket categories as the
+review toolbar, so comments and replies stay consistent across surfaces.
+
+Human-attributed writes require a trusted, user-mediated operation. Artifact or
+widget code cannot silently claim a human identity. Permission denial, expired
+capabilities, malformed frame messages, and review-session mismatches fail closed.
+
+## Review in the browser
+
+1. Open a returned review URL.
+2. Use the trusted review control to add a contextual or general comment.
+3. Reply, update status, mention a collaborator, or watch the Shiplet from its
+   detail page.
+4. Use [Feedback](https://shiplet.cc/feedback) for the global review queue and
+   [Inbox](https://shiplet.cc/inbox) for canonical notifications.
+
+Presence and live updates show current collaborators when the browser and
+runtime support them. If the live channel is interrupted, reload the trusted
+review host; persisted feedback remains canonical.
+
+Mentions notify only collaborators who can already access the Shiplet. Watching
+a Shiplet subscribes the current account to its future review activity; use the
+Shiplet detail view to stop watching. Inbox items can be marked read without
+changing the underlying feedback status. A denied mention, watch, notification,
+or presence request does not widen access and does not discard persisted events.
+
+## Read feedback through MCP
+
+```js
+async () =>
+  await codemode.request({
+    method: "GET",
+    path: "/api/projects/project_123/review-feedback",
+    query: { status: "New" },
+  });
+```
+
+## Reply through MCP
+
+```js
+async () =>
+  await codemode.request({
+    method: "POST",
+    path: "/api/projects/project_123/review-feedback/review_123/replies",
+    body: { comment: "Added a loading skeleton in the next build." },
+  });
+```
+
+## Update status through MCP
+
+```js
+async () =>
+  await codemode.request({
+    method: "POST",
+    path: "/api/projects/project_123/review-feedback/review_123/status",
+    body: { status: "In Progress" },
+  });
+```
+
+The caller still needs the appropriate feedback scope and project access. See
+[Code Mode MCP](/docs/code-mode-mcp), [Access control](/docs/access-control), and
+the [OpenAPI document](https://shiplet.cc/openapi.json).
+
+## Next action
+
+[Open the Shiplet app](https://shiplet.cc/) and leave one harmless review event
+on a managed artifact, then confirm it appears in the global Feedback view.

@@ -1,0 +1,90 @@
+---
+title: "Review artifacts"
+description: "Prepare uploaded files or attach an existing public URL for review."
+---
+
+Shiplet prepares work after a build and before review. The artifact is the work
+being reviewed. Shiplet supplies the review link and trusted controls around
+it.
+
+## Uploaded files
+
+Agents, CI jobs, and local scripts send files as base64-encoded `assets`. The
+browser Prepare page accepts supported files directly.
+
+The `subdomain` becomes the review URL. For example,
+`campaign-prototype` resolves to `https://campaign-prototype.shiplet.cc`.
+
+Rules:
+
+- At least one non-empty file is required.
+- Shiplet serves `index.html` as the artifact entry point when it is present.
+- Shiplet creates a file review page when `index.html` is absent.
+- Paths are relative to the artifact root.
+- Upload limits apply to the number of files, each file, and the complete
+  artifact.
+
+```json
+{
+  "name": "Campaign prototype",
+  "subdomain": "campaign-prototype",
+  "visibility": "organization",
+  "assets": [
+    {
+      "path": "index.html",
+      "content": "PCFkb2N0eXBlIGh0bWw+PGgxPkNhbXBhaWduPC9oMT4="
+    }
+  ]
+}
+```
+
+Standalone files work too. Shiplet generates the surrounding review page so
+the same toolbar and feedback flow remain available.
+
+## Existing public URLs
+
+Send `external_url` when the artifact already has a staging page, hosted
+report, or public preview URL. Shiplet loads the public origin inside its review
+experience without injecting reviewer credentials into the origin page.
+
+The proxy is read-only. Only `GET` and `HEAD` reach the origin. Shiplet rejects
+localhost, private-network destinations, unsafe redirects, and nonstandard
+ports. HTML and CSS responses use an 8 MiB in-memory fast path and a private
+streaming path for larger documents; the actual text-response safety ceiling is
+64 MiB. Large inlined CSS data, quoted custom-property values, and simple
+unquoted custom-property identifiers stream through that path. HTML `style`,
+`srcdoc`, and `srcset` attribute values that themselves
+exceed 8 MiB fail closed instead of being returned raw. The same per-attribute
+bound protects the HTML parser; unrelated large attributes within that bound
+are preserved. Larger binary assets continue to stream without text rewriting.
+The origin remains responsible for its own availability.
+
+```json
+{
+  "name": "PR preview review",
+  "subdomain": "pr-preview-review",
+  "visibility": "organization",
+  "external_url": "https://preview.example.com"
+}
+```
+
+## The trusted review boundary
+
+The public review URL belongs to Shiplet. The artifact runs in a sandboxed
+frame, and Shiplet renders the review layer outside that frame. Browser
+sessions and reviewer authority remain in the trusted host.
+
+Read [The review layer](/docs/extensions) to understand the toolbar boundary and
+[Security and isolation](/docs/security) for browser protections.
+
+## Archive and delete
+
+Archiving removes a Shiplet from the active list without deleting its feedback
+or access policy. Owners and organization administrators can restore it later.
+
+Permanent delete is a separate irreversible action for an archived Shiplet. It
+requires trusted owner or administrator authority and explicit confirmation.
+
+## Next action
+
+[Prepare a review artifact](/docs/quickstart).

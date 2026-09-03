@@ -1,0 +1,75 @@
+---
+title: "Security and isolation"
+description: "Understand how Shiplet separates the artifact, review layer, reviewer identity, and agent access."
+---
+
+Shiplet owns the trusted review host. It authenticates reviewers, checks access,
+and records feedback outside the artifact being reviewed.
+
+## Browser separation
+
+The trusted host places artifact code in a sandboxed frame. A custom review
+widget, when present, runs in its own sandboxed frame. Neither frame receives
+Shiplet cookies, browser storage, OAuth credentials, or organization API keys.
+
+The review host accepts bounded messages from the expected frame and page
+session. It rejects malformed requests, replayed request IDs, mismatched
+Shiplets, and messages from another source window before a review action can
+run.
+
+## Authority matrix
+
+| Boundary | What it receives | What Shiplet keeps out |
+| --- | --- | --- |
+| Trusted review host | Signed-in identity, access policy, and review controls | Artifact-defined authority over Shiplet |
+| Artifact frame | Artifact files and a bounded capture channel | Reviewer credentials, direct review APIs, and data from another Shiplet |
+| Custom widget frame | Widget files and a typed request channel | Human identity, self-approval, and platform credentials |
+| Agent connection | Operations allowed by its user session, claimed registration token, or API key | Broader organization authority and credentials from other integrations |
+| WordPress integration | One exact-origin installation and a short-lived review session | Organization keys in page source and access to another installation |
+
+## Reviewer actions
+
+Shiplet derives the actor from the signed-in session or authenticated agent
+credential. Artifact and widget code cannot claim a reviewer identity. A
+protected write requires the corresponding edit scope and, where specified, a
+trusted confirmation in Shiplet's UI.
+
+## Agent access
+
+Interactive MCP uses browser OAuth. Claimed external agents use short-lived
+WorkOS access tokens that preserve a stable registration actor, a distinct
+delegated user, an exact organization, and recognized operation scopes.
+Shiplet verifies the token locally, rechecks the delegated user's current local
+membership, and stores no bearer or refresh material. An agent-shaped token
+cannot fall back to human authority.
+
+Shiplet supports only the `service_auth` claim ceremony in this release.
+Anonymous registrations and durable WorkOS agent API keys are rejected.
+Automated jobs continue to use organization API keys whose authority is limited
+by scopes and selected Shiplets. Shiplet rejects a request when any required
+scope, membership, organization, or project rule is missing.
+
+Keep credentials in the agent or automation provider's secret store. Artifact
+files, widget code, browser scripts, source control, logs, and screenshots are
+not credential stores.
+
+## Network and browser resources
+
+Artifact frames use a restrictive browser policy. Custom widgets receive a
+typed channel to the trusted host, not a general network or platform binding.
+
+The widget sandbox does not impose a separate heap, CPU, or lifetime quota in
+the browser process. If custom widget code makes a review tab unresponsive,
+reload or close the review and continue through the built-in controls until an
+owner repairs the customization.
+
+## External URLs
+
+Shiplet's external URL proxy sends read-only `GET` or `HEAD` requests. It
+rejects private-network destinations, unsafe redirects, and nonstandard ports.
+The public origin receives no reviewer credential from Shiplet.
+
+## Next action
+
+Review [Access control](/docs/access-control) before sharing a Shiplet, or
+connect an agent through [Code Mode MCP](/docs/code-mode-mcp).

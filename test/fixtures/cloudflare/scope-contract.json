@@ -1,0 +1,5 @@
+{
+	"workerScriptRead": "workers.scripts.read",
+	"workerScriptWrite": "workers.scripts.write",
+	"offlineAccess": "offline_access"
+}

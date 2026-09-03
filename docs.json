@@ -1,0 +1,56 @@
+{
+  "$schema": "https://mintlify.com/docs.json",
+  "name": "Shiplet",
+  "theme": "mint",
+  "colors": {
+    "primary": "#3157ff",
+    "light": "#3157ff",
+    "dark": "#8ca6ff"
+  },
+  "favicon": "/favicon.svg",
+  "navbar": {
+    "links": [
+      {
+        "label": "App",
+        "href": "https://shiplet.cc"
+      }
+    ]
+  },
+  "navigation": {
+    "groups": [
+      {
+        "group": "Start",
+        "pages": [
+          "docs/introduction",
+          "docs/why-shiplet",
+          "docs/quickstart"
+        ]
+      },
+      {
+        "group": "Review",
+        "pages": [
+          "docs/access-control",
+          "docs/publishing",
+          "docs/extensions",
+          "docs/review-feedback"
+        ]
+      },
+      {
+        "group": "Automation",
+        "pages": [
+          "docs/code-mode-mcp",
+          "docs/api-keys",
+          "docs/api-surface"
+        ]
+      },
+      {
+        "group": "Integrations and safety",
+        "pages": ["docs/wordpress", "docs/security"]
+      },
+      {
+        "group": "API reference",
+        "openapi": "openapi.json"
+      }
+    ]
+  }
+}

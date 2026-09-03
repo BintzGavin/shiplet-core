@@ -1,0 +1,98 @@
+---
+title: "Access control"
+description: "How organizations, grants, visibility, and editing authority fit together."
+---
+
+Shiplet uses organization-first access, with viewing and editing evaluated
+separately by the trusted kernel.
+
+## Human access
+
+People sign in through WorkOS-backed AuthKit. Organizations contain members and
+teams; a Shiplet can also grant access to an individual exact email address.
+An email invitation becomes effective only for the matching signed-in identity.
+
+### Select an organization or switch identity
+
+Open **Account** from the header (`/account`) to inspect the signed-in identity.
+When account switching is enabled, use **Switch accounts** there to start a
+different WorkOS identity; otherwise sign out and sign back in. Identity
+switching does not select an active organization. Open **Workspace**
+(`/workspace`) to choose the active organization. Neither action merges
+Shiplets, teams, grants, or inbox state between identities or organizations.
+
+To create an organization and team, an owner chooses **Create organization**,
+gives it a name, and then creates teams from that organization's people
+settings. Team membership does not itself grant edit access to every Shiplet:
+grant that team the narrow
+viewer, editor, or owner role on the intended Shiplet.
+
+Invitation consent is exact-email. Open the invitation while signed in with the
+exact invited email, review the organization and team or Shiplet access being
+offered, and accept it deliberately. If the signed-in email does not match,
+switch accounts or sign out and return with the invited identity; do not widen
+visibility or forward the invitation to bypass the mismatch.
+
+### Who can view
+
+| Visibility     | Anonymous visitor | Organization member | Organization admin or owner | Explicit user or team grant |
+| -------------- | ----------------- | ------------------- | --------------------------- | --------------------------- |
+| `private`      | No                | No, unless granted  | Yes                         | Yes                         |
+| `organization` | No                | Yes                 | Yes                         | Yes                         |
+| `unlisted`     | Yes, with the URL | Yes                 | Yes                         | Yes                         |
+| `public`       | Yes               | Yes                 | Yes                         | Yes                         |
+
+`unlisted` and `public` are both anonymously viewable today. Anyone with the
+link can open an unlisted Shiplet; use `public` when broad discovery is
+intended. Neither setting grants anonymous editing authority.
+
+### Who can edit
+
+View access never grants edit access. The Shiplet owner and organization admins
+can edit. Other people can edit only through an accepted user, team, or
+organization grant with the `owner` or `editor` role; viewer grants remain
+read-only.
+
+Project-level authorization also governs archive, restore, permanent delete,
+and changes to the review layer. A viewable URL alone is not authority for
+those actions.
+
+## Agent access
+
+Agents have three connection paths:
+
+- Interactive MCP clients use browser OAuth.
+- Compatible external agents may use a claimed WorkOS `service_auth`
+  registration when it is enabled for the Shiplet environment.
+- CI and unattended jobs use organization API keys.
+
+A claimed registration retains the stable agent identity separately from the
+person who completed the claim. It is restricted to the exact organization in
+the access token, its recognized scopes, and the delegated person's current
+Shiplet membership and grants. Removing that membership immediately blocks new
+writes. Anonymous registrations and durable WorkOS agent API keys are not
+accepted in this release.
+
+An organization key's effective authority is the intersection of:
+
+1. Its organization.
+2. Its explicit scopes.
+3. Its project access mode and allow or deny rules.
+4. The authorization required by the requested operation.
+
+Prefer **Only selected** for a single-project job. Use **All except selected**
+when broad automation genuinely needs most projects, and **All projects** only
+for deliberately organization-wide automation. Deny rules win over allow
+rules.
+
+Artifact and custom widget code never receive WorkOS sessions, agent
+registration credentials, organization API keys, or ambient browser
+credentials.
+See [API keys](/docs/api-keys), [Code Mode MCP](/docs/code-mode-mcp), and the
+[security model](/docs/security).
+
+## Next action
+
+[Prepare an organization-visible artifact](/docs/quickstart), then grant only
+the reviewers who need access. Open the [Shiplet app](https://shiplet.cc/) to
+manage the active workspace.

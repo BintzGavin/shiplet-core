@@ -1,0 +1,179 @@
+---
+title: "Packages and revisions"
+description: "Understand Shiplet's portable package, immutable revision, deployment, and state model."
+---
+
+A Shiplet is a portable application with a stable collaborative identity. Its
+code and configuration travel in a kernel-authority-free package; Shiplet's
+trusted kernel keeps its credentials, grants, audit history, deployment
+authority, and runtime state outside it. Authored files are not automatically
+secret-scanned.
+
+## Safe change lifecycle
+
+**Fork → edit → validate → preview → promote → deploy.**
+
+Validation never changes the active revision. Rollback activates an earlier
+known-good package through a new audited operation; it does not rewind runtime
+state. Export copies code and schema, never Shiplet credentials, grants, state,
+feedback, or audit history.
+
+Use this lifecycle whether the final target stays on Shiplet-managed hosting or
+moves to customer-owned infrastructure.
+
+## The domain model
+
+- **Shiplet** — the logical collaborative object. It owns the stable ID, URL,
+  visibility, reviewers, feedback, and revision history.
+- **Package** — the portable application definition: artifact files, widget,
+  workflow, custom MCP surface, agent instructions, validation declarations,
+  and provenance.
+- **Draft** — a mutable working copy forked from one revision. A draft has an
+  optimistic version number, is isolated from the active revision, and is not
+  active application code.
+- **Revision** — an immutable, validated package snapshot with a digest and
+  parent lineage. A revision can be deployed to multiple targets.
+- **Deployment target** — a destination and ownership boundary, such as
+  Shiplet-managed hosting, customer-owned Cloudflare, temporary claim, or a
+  detached target.
+- **Deployment** — one revision installed on one deployment target. Its health
+  or provider drift does not change the revision.
+- **State namespace** — runtime data scoped to one Shiplet and deployment or to
+  one Shiplet and active MCP revision. State is not package content and is not
+  copied by a fork.
+
+Keeping these objects separate is what makes a revision portable without
+mistaking code for authority or state.
+
+## Package v1 layout
+
+`shiplet pull` and `shiplet eject` materialize this canonical layout:
+
+```text
+shiplet.json
+artifact/**
+widget/**
+workflow/schema.json
+mcp/manifest.json
+mcp/handlers/**
+AGENTS.md
+validation/manifest.json
+provenance.json
+```
+
+Every entrypoint is required in v1. A package may contain more files under the
+allowed `artifact/`, `widget/`, and `mcp/handlers/` roots, but may not add
+credential, state, grant, deployment, audit, session, OAuth, or claim roots.
+
+### A valid `shiplet.json`
+
+The manifest below uses deliberately small, valid positive limits. Increase
+them only when the package needs more room; Shiplet's platform ceilings still
+apply.
+
+```json
+{
+  "schemaVersion": "shiplet.package/v1",
+  "runtimeCompatibility": "shiplet.runtime/v1",
+  "entrypoints": {
+    "artifact": "artifact/index.html",
+    "widget": "widget/index.html",
+    "workflow": "workflow/schema.json",
+    "mcp": "mcp/manifest.json",
+    "agentInstructions": "AGENTS.md",
+    "validation": "validation/manifest.json",
+    "provenance": "provenance.json"
+  },
+  "requestedCapabilities": ["state.read:review", "workflow.event:create"],
+  "limits": {
+    "fileCount": 32,
+    "fileBytes": 16384,
+    "packageBytes": 65536
+  },
+  "staticFirst": true
+}
+```
+
+`fileCount`, `fileBytes`, and `packageBytes` are required positive integers.
+`packageBytes` must be at least `fileBytes`. The source-checkout CLI accepts at
+most 1,024 package files, 4 MiB per package file, and a 32 MiB package envelope;
+declaring a larger value does not raise those ceilings.
+
+## Transport and digests
+
+The transport media type is
+`application/vnd.shiplet.package+json;version=1`. Its deterministic JSON
+envelope has exactly three top-level fields:
+
+```json
+{
+  "mediaType": "application/vnd.shiplet.package+json;version=1",
+  "manifest": {},
+  "files": [
+    {
+      "path": "artifact/index.html",
+      "mediaType": "text/html; charset=utf-8",
+      "encoding": "utf8",
+      "content": "<!doctype html><h1>Review me</h1>",
+      "sha256": "2be462ce4d159821d394bdecb96704c25bbe506ea7a37f072adf926ea62a2d53",
+      "size": 33
+    }
+  ]
+}
+```
+
+The envelope above illustrates the transport fields, not a complete package;
+use the CLI to produce the complete file list. `encoding` is `utf8` or
+`base64`. Each file
+digest covers its decoded bytes. The package digest covers the canonicalized
+manifest and sorted file records, so changing the artifact, widget, workflow,
+MCP handlers, instructions, validation, or provenance changes the digest.
+
+Paths are portable POSIX-relative paths. Absolute paths, dot segments,
+backslashes, control characters, platform-reserved names, and paths that
+collide after Unicode normalization or case folding are rejected.
+
+## Authority is not portable content
+
+Requested capabilities are declarations, never grants. Importing, pulling,
+forking, or validating a package gives its code no authority. The kernel must
+separately authorize each capability for the actor, Shiplet, revision, action,
+resource, expiry, and limits that apply.
+
+Shiplet never adds kernel-owned credentials, access grants, reviewer sessions,
+Cloudflare OAuth connections, claim material, deployments, customer state,
+private runtime state, or audit history to a portable package. The validator
+rejects forbidden authority fields and roots, but it does not secret-scan
+arbitrary package file contents. Package authors must remove secrets they put
+inside code or content before sharing it. `fork` copies package code and schema
+only. `pull` and `eject` fail closed if the response is bound to another
+Shiplet, draft, revision, or digest.
+
+## Draft to active revision
+
+```text
+active revision
+  -> fork isolated draft
+  -> pull and change package
+  -> diff and push with expected draft version
+  -> validate exact draft version
+  -> preview the sealed revision while the active tenant stays unchanged
+  -> promote with expected active revision
+  -> optionally deploy to explicit targets
+```
+
+Validation does not activate a revision. Promotion changes the active pointer
+only when the expected active revision still matches. A failed validation,
+deployment, or stale promotion leaves the previous active revision intact.
+
+Rollback is another audited activation of a previously known-good immutable
+revision. It does not edit either revision and does not rewind state. Review
+history, deployment state, and namespaced runtime values keep their own
+lifecycle.
+
+## Next steps
+
+- Follow the complete [CLI revision workflow](/docs/cli).
+- Add a [custom widget, workflow, or MCP tool](/docs/extensions).
+- Review the [security and isolation model](/docs/security).
+- Compare [managed and customer-owned deployment targets](/docs/deployment).

@@ -1,0 +1,67 @@
+---
+title: "The review layer"
+description: "Understand the toolbar around an artifact and how Shiplet keeps its controls separate."
+---
+
+The artifact is the work your team reviews. Shiplet provides the review layer
+around it. That layer owns the toolbar, reviewer actions, and the feedback
+workflow attached to the Shiplet.
+
+The review layer stays separate from the artifact. Updating its controls does
+not rewrite the page, file, build, or public URL under review.
+
+## Built-in toolbar
+
+The default toolbar lets a reviewer:
+
+- Select the page or a visible element and leave a comment.
+- Capture context about the selected location.
+- Open existing tickets and reply to the conversation.
+- Change a ticket's review status when their access allows it.
+
+Shiplet performs those actions through the trusted host. The artifact frame
+does not receive the reviewer session or direct API authority.
+
+## Custom review widgets
+
+A team can attach a custom widget when the built-in controls do not match its
+review process. The widget can render team-specific controls and request
+supported review actions. Shiplet runs it in a sandboxed frame beside the
+artifact, then presents privileged changes through trusted confirmation.
+
+Custom widget code cannot identify the reviewer or approve its own request. Its
+files stay inside that Shiplet's review layer.
+
+An agent customizes the widget through Code Mode:
+
+1. Read `GET /api/shiplets/{projectId}/review-layer` to get the current files
+   and version.
+2. Send widget-relative changes to the preview endpoint. Shiplet validates the
+   result and returns an expiring preview link without changing the live review.
+3. Apply that preview with the version from step 1 and explicit approval.
+
+The API accepts widget files and paths. It does not expose the artifact's files
+through this workflow, and applying the preview leaves the artifact unchanged.
+Run `search` in [Code Mode MCP](/docs/code-mode-mcp) for the current request
+schemas.
+
+## Review workflow
+
+Shiplet has a standard ticket lifecycle for the global Feedback view. A custom
+review widget can request team-specific statuses and fields, and Shiplet maps
+accepted events into the common review categories used by the inbox.
+
+The trusted host derives the actor from the signed-in session. Widget code can
+propose values, and the user confirms any protected write in Shiplet's own UI.
+
+## Browser resource boundary
+
+The widget sandbox limits origin and authority. It does not impose a separate
+heap, CPU, or lifetime quota inside the browser process. Reload or close a
+review if custom widget code makes the tab unresponsive, then use the built-in
+review controls until an owner repairs the customization.
+
+## Next action
+
+[Prepare an artifact](/docs/quickstart) or review the complete
+[security boundary](/docs/security).

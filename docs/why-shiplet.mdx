@@ -1,0 +1,245 @@
+---
+title: "Why Shiplet"
+description: "Why each review link gets its own interface and durable root."
+---
+
+## Every Shiplet gets a root
+
+Shiplet turns anything you can open in a browser into a review link.
+
+The artifact is the thing under review: a website, prototype, document, or
+report. Shiplet gives that artifact one link where reviewers can click directly
+on the work and leave comments in context. When they return, the conversation
+is waiting in the same place.
+
+The review widget is the toolbar and panel around the artifact. A team can
+customize it for the work in front of them, and the artifact itself stays
+unchanged. I want that widget to make every Shiplet feel like its own little
+product.
+
+![An illustrated ShipletRoot station giving one Shiplet its own review interface](/brand/why-shiplet/shiplet-root-hero.webp)
+
+*A Shiplet wraps the thing under review in a widget that the team can customize.*
+
+On a working build, a PM cares about whether each acceptance criterion survives
+the awkward states. A researcher's prototype carries a different question,
+because every product claim needs a path back to the observations behind it.
+The review layer holds that context because it belongs to the work.
+
+Each link is its own review room, so every Shiplet gets a root.
+
+The root remembers which widget the Shiplet uses and keeps its feedback
+together. It also coordinates who is in the live room.
+
+[Cloudflare Durable Objects](https://developers.cloudflare.com/durable-objects/concepts/what-are-durable-objects/)
+give that root a permanent address and storage of its own. One Durable Object
+belongs to one Shiplet, so every request for that review returns to the same
+place.
+
+![Shiplet architecture showing the trusted browser host and Platform Worker reaching one ShipletRoot, plus Code Mode running in a disposable Dynamic Worker](/brand/why-shiplet/shiplet-root-runtime.webp)
+
+*Reviewing and changing a review use the same ShipletRoot. The Dynamic Worker
+runs Code Mode; the approved widget runs in the browser sandbox.*
+
+## The review belongs to the Shiplet
+
+A Shiplet is the review room around one artifact. Its widget belongs to that
+room.
+
+The default experience stays small. A trusted host renders the artifact inside
+an isolated frame, adds the review toolbar, and keeps the reviewer's session
+outside the artifact. Pins stay attached to the context people were looking at,
+and comments return to the same review link.
+
+![The default Shiplet review flow on a static artifact, with the compact Annotate control and one contextual comment pin](/brand/why-shiplet/default-review-flow.webp)
+
+*The default review surface stays out of the way until somebody adds an
+annotation or opens a thread.*
+
+The ShipletRoot owns the layer around that artifact. It knows which widget is
+active, which changes are waiting in preview, where the current layer came from,
+and who is in the live room. That gives us room to make a review feel
+purpose-built without changing the files underneath it.
+
+The widget itself is browser code. Shiplet runs the approved widget in its own
+sandboxed frame, where it can render controls and react to the reviewer. It
+never receives the user's session or direct bindings to D1 and R2. The Durable
+Object stays outside that frame too. When the widget needs to create feedback
+or record a workflow event, it asks the trusted host through a small, typed
+operation.
+
+That boundary lets deep customization become a normal product feature with
+explicit authority.
+
+## The interface can speak the language of the work
+
+The review toolbar should care about the job in front of it.
+
+A widget can turn a ticket's acceptance criteria into the controls that prove
+them. When an engineer shares a build for invite recovery, each criterion can
+open the exact state it names. The PM can pass or block that criterion, and the
+designer can inspect the mobile state without reconstructing the ticket from
+memory.
+
+![An engineer-authored invite recovery build wrapped in a custom release-proof widget that turns acceptance criteria into test controls](/brand/why-shiplet/ticket-acceptance-runner.webp)
+
+*An engineer-authored build carries its own release proof. Reviewers can open
+the expired-link state and replay a consumed invitation. The mobile criterion
+opens the flow at 390 pixels before a reviewer attaches evidence.*
+
+A research readout needs a different shape. The researcher places the current
+product claim beside the observations behind it. The evidence board lets a PM
+mark an observation as support for the claim, and contradictory evidence stays
+visible beside that support. A designer can flag the assumption that still
+needs testing without losing the prototype underneath.
+
+![A researcher-authored invite recovery study wrapped in an evidence board that connects product claims to observations and open questions](/brand/why-shiplet/research-evidence-board.webp)
+
+*The researcher-authored evidence board keeps each claim attached to the
+observations that shaped it. Reviewers can challenge the synthesis and attach
+another observation inside the same Shiplet.*
+
+These widgets were applied through the review-layer contract used by the
+product. Shiplet prepared each change as a preview, compiled the layer inside
+its sandbox constraints, and applied it only after the root confirmed that the
+base version still matched.
+
+## Code Mode keeps the power behind a narrow door
+
+An agent can customize the review layer through Shiplet's MCP. It sees two
+tools: `search` and `execute`.
+
+`search` lets the agent find the relevant contract without dumping the whole
+platform into context. `execute` accepts a small program, and Shiplet runs that
+program in a disposable Dynamic Worker. The Worker gets no direct D1, R2, or
+Durable Object bindings. It can reach only the operations exposed by the
+trusted host.
+
+The program can read the current review layer and prepare a bounded set of file
+changes. The result is a preview attached to the root's current version. A
+person can open that preview, use the proposed widget, and approve it. The root
+applies the change with a version check, so a stale agent turn cannot overwrite
+something newer.
+
+The approved widget then runs where the reviewer uses it: inside the browser
+sandbox. The Dynamic Worker has finished its short job by that point.
+
+Code Mode handles programmable authoring before the browser runs the interface.
+ShipletRoot remains the authority that makes a change real.
+
+## Durable Objects make the product easier to engineer
+
+I care about the engineering shape because it lets product benefits keep
+accumulating inside one clear coordination boundary.
+
+![ShipletRoot in the center of four Durable Object benefits: ordered changes, local SQLite, hibernation, and natural sharding](/brand/why-shiplet/durable-object-benefits.webp)
+
+*The Shiplet is already the product boundary, so the Durable Object can use the
+same boundary for correctness, state, operations, and isolation.*
+
+### One name gives us one authority
+
+The Platform Worker resolves the root with `getByName(shiplet.id)`. Requests for
+the same Shiplet reach the same logical object, which already has the current
+review-layer version beside the code that changes it.
+
+Applying a preview is a guarded update inside that object. If the root has moved
+past the preview's base version, the update fails closed. The guarded update
+replaces a separate lock service for deciding which review layer won.
+
+### SQLite has the right scope
+
+Each root gets its own SQLite-backed storage. The active layer, pending
+previews, provenance, and audit events live with the Shiplet they describe.
+
+That local scope makes the data model easier to reason about. A migration
+belongs to one product object, and an incident has a local timeline. The root
+reads the current layer directly from its own durable state, with no global
+projection in the request path.
+
+### Quiet review rooms can sleep
+
+ShipletRoot also owns presence for its review link. Cloudflare's
+[WebSocket Hibernation API](https://developers.cloudflare.com/durable-objects/best-practices/websockets/)
+can keep reviewers connected at the network while an idle object leaves memory,
+then wake the root when a new message arrives.
+
+The live-room abstraction survives that sleep cycle because durable state was
+already written beside the root. Cloudflare keeps idle connections at the
+network, which cuts the application time spent keeping quiet review rooms awake.
+
+### Shiplets shard themselves
+
+More Shiplets create more roots. Traffic for one review stays with that review,
+and a broken customization stays inside its browser frame and Shiplet boundary.
+Other Shiplets keep moving through their own roots.
+
+One unusually hot Shiplet still has the throughput ceiling of one root. That is
+an honest limit and a useful one for the product we have. If a future Shiplet
+turns into a stadium, we can add fan-out behind its stable root identity.
+
+## Inheritance copies the useful part
+
+Once a team has a review setup that works, the next Shiplet can inherit it.
+
+Inheritance takes a snapshot of the source review layer and records its
+provenance. The child receives its own root and its own version, so changes stay
+local. A later update to the source can arrive as another preview, where
+somebody can inspect it before the child changes.
+
+An organization can maintain a house review layer. A team can adapt that layer
+for its workflow, and a specific Shiplet can take the interface somewhere more
+specialized. Each step remains a usable review experience with a visible
+origin.
+
+The snapshot matters because review interfaces can encode real process. A
+distant template edit has to pass review before it can add a required approval
+or rename a status in the middle of somebody's work.
+
+## Software should be allowed to wander
+
+I keep thinking about what it means for software to belong to the people using
+it. An organization should be able to choose where Shiplet lives: on Shiplet
+Cloud or in its own Cloudflare account. Moving between those homes should feel
+ordinary.
+
+Once it is there, local coding agents should be able to reshape it until it fits
+the organization, while a path back to upstream improvements remains open. I
+care about that shape before I care about the neat open-source category for it.
+
+Git can move source between developers. Software with live state and local
+mutations carries a different kind of history. There is something else hiding
+in that gap. I do not have the name for it yet.
+
+## The rest of the stack can stay boring
+
+The Platform Worker handles identity, policy, routing, and file delivery. R2
+holds immutable artifact bytes. D1 powers the organization directory and views
+that cross many Shiplets. The root keeps the state that needs agreement inside
+one Shiplet.
+
+Most artifacts remain static, which keeps publishing fast and gives the thing
+being reviewed a tiny runtime. A custom review layer leaves the artifact on that
+path. When an artifact needs its own backend behavior,
+[Workers for Platforms](https://developers.cloudflare.com/cloudflare-for-platforms/workers-for-platforms/how-workers-for-platforms-works/)
+gives Shiplet an advanced path with a separate security burden.
+
+Those boundaries also give the product somewhere clean to grow:
+
+- Approval stages can live beside the review-layer version they control.
+- Subscriptions can listen to the root's ordered events.
+- An automation can wake for one Shiplet and produce another reviewable preview.
+
+If we add an agent that stays with a Shiplet, the root already gives it a bounded
+checkpoint connected to an ordered event stream. A capability boundary controls
+what the agent can do when it wakes for an approved event. The agent works in a
+sandbox and writes its result back as another preview, keeping the existing
+identity system and global coordination boundary.
+
+Each Shiplet can grow into exactly the review room its artifact needs, while the
+platform stays legible.
+
+## Try the review layer
+
+[Prepare your first review artifact](/docs/quickstart), then open the review
+link and leave a comment on the work itself.

@@ -1,0 +1,55 @@
+{
+	"$schema": "node_modules/wrangler/config-schema.json",
+	"name": "shiplet-example-test",
+	"main": "src/index.ts",
+	"compatibility_date": "2026-08-07",
+	"compatibility_flags": ["nodejs_compat", "global_fetch_strictly_public"],
+	"rules": [
+		{
+			"type": "Text",
+			"globs": ["**/*.svg"],
+			"fallthrough": true
+		}
+	],
+	"workers_dev": true,
+	"worker_loaders": [{ "binding": "CODE_MODE_LOADER" }],
+	"d1_databases": [
+		{
+			"binding": "DB",
+			"database_name": "shiplet-example-test",
+			"database_id": "00000000-0000-0000-0000-000000000000"
+		}
+	],
+	"r2_buckets": [
+		{ "binding": "SHIPLET_ASSETS", "bucket_name": "shiplet-example-test-assets" },
+		{ "binding": "REVIEW_ASSETS", "bucket_name": "shiplet-example-test-review-assets" }
+	],
+	"durable_objects": {
+		"bindings": [
+			{ "name": "SANDBOX_SESSION", "class_name": "SandboxSession" },
+			{ "name": "SHIPLET_ROOT", "class_name": "ShipletRoot" }
+		]
+	},
+	"migrations": [
+		{ "tag": "v1_sandbox_session", "new_sqlite_classes": ["SandboxSession"] },
+		{ "tag": "v2_review_presence", "new_sqlite_classes": ["ReviewPresenceRoom"] },
+		{ "tag": "v3_shiplet_root", "new_sqlite_classes": ["ShipletRoot"] },
+		{ "tag": "v4_delete_review_presence", "deleted_classes": ["ReviewPresenceRoom"] }
+	],
+	"vars": {
+		"SHIPLET_AUTH_MODE": "test",
+		"SHIPLET_APP_URL": "https://shiplet.test",
+		"WORKOS_AUTHKIT_ISSUER": "",
+		"WORKOS_REDIRECT_URI": "https://shiplet.test/auth/callback",
+		"CLOUDFLARE_OAUTH_READINESS": "disabled",
+		"CLOUDFLARE_OAUTH_SMOKE_USER_ID": "",
+		"CLOUDFLARE_CONTROL_PLANE_VERSION_ID": "",
+		"CLOUDFLARE_RUNTIME_GATEWAY_VERSION_ID": "",
+		"CLOUDFLARE_DENY_EGRESS_VERSION_ID": "",
+		"CLOUDFLARE_SUPPORT_RELEASE_TAG": "",
+		"CLOUDFLARE_TEMPORARY_ACCOUNTS_READINESS": "disabled",
+		"CLOUDFLARE_TEMPORARY_ACCOUNTS_SMOKE_USER_ID": "",
+		"DISPATCH_NAMESPACE_NAME": "test-namespace",
+		"CUSTOM_DOMAIN": ""
+	}
+}

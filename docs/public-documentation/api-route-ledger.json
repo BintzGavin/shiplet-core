@@ -1,0 +1,154 @@
+{
+  "version": 1,
+  "publicContract": "openapi.json",
+  "policy": "Every statically registered Hono operation, including local and imported string constants, is either a supported public automation operation in OpenAPI or matches exactly one narrow exclusion family below; dynamic or unresolvable route registration fails closed.",
+  "exclusions": [
+    {
+      "id": "sandbox_browser_session",
+      "methods": ["GET", "POST"],
+      "pathPattern": "^/(?:play(?:/preview/:projectId(?:/artifact-frame)?)?|api/play/(?:session|reset|mcp))$",
+      "category": "ephemeral_browser_session",
+      "rationale": "The playground uses an ephemeral cookie-bound browser session and is not a stable third-party automation contract."
+    },
+    {
+      "id": "public_documents_and_assets",
+      "methods": ["GET"],
+      "pathPattern": "^/(?:favicon\\.(?:ico|svg)|brand/(?:logo\\.png|decor/(?:rope-h|rope-v|rope-knot|anchor|compass)\\.png|avatars/shiplet-avatar-presets(?:-v[1-9][0-9]*)?\\.png|why-shiplet/(?:default-review-flow|durable-object-benefits|research-evidence-board|shiplet-root-hero|shiplet-root-runtime|ticket-acceptance-runner)\\.webp)|assets/platform/:assetName|apple-touch-icon\\.png|og-image\\.png|site\\.webmanifest|robots\\.txt|sitemap\\.xml|llms\\.txt|auth\\.md|openapi\\.json|docs(?:/:slug)?|\\.well-known/oauth-(?:protected-resource(?:/api/mcp)?|authorization-server))$",
+      "category": "public_representation",
+      "rationale": "These are static assets, human or agent-readable documentation, discovery metadata, or the OpenAPI representation itself rather than callable REST operations."
+    },
+    {
+      "id": "cli_authorization_ceremony",
+      "methods": ["GET", "POST"],
+      "pathPattern": "^/(?:cli/authorize(?:/complete)?|api/cli/session/(?:exchange|revoke))$",
+      "category": "oauth_browser_ceremony",
+      "rationale": "These endpoints implement the value-free interactive CLI authorization ceremony and are intentionally driven by the first-party CLI and browser."
+    },
+    {
+      "id": "workos_browser_session",
+      "methods": ["GET", "POST"],
+      "pathPattern": "^/auth/(?:login|callback|switch-account|logout)$",
+      "category": "identity_browser_ceremony",
+      "rationale": "WorkOS login, callback, account switching, and logout are cookie-bound browser identity ceremonies rather than public REST automation."
+    },
+    {
+      "id": "embed_review_bridge",
+      "methods": ["GET", "POST", "DELETE"],
+      "pathPattern": "^/(?:embed/(?:connect|review/(?:start|confirm(?:/complete)?|host|context|widget|feedback))|review/confirm(?:/complete)?|api/embed/(?:auth-bootstrap\\.js|client\\.js|installations/(?:exchange|:installationId)|session/exchange))$",
+      "category": "trusted_embed_protocol",
+      "rationale": "The WordPress and external-review bridge is a first-party origin-bound protocol with installation and browser-session checks, not a general REST surface."
+    },
+    {
+      "id": "browser_account_models",
+      "methods": ["GET", "POST"],
+      "pathPattern": "^/api/(?:me(?:/avatar)?|dashboard|platform/support-contract)$",
+      "category": "first_party_browser_model",
+      "rationale": "These aggregate authenticated dashboard, account, and support-readiness models specifically for the first-party application shell."
+    },
+    {
+      "id": "external_url_metadata_browser_helper",
+      "methods": ["POST"],
+      "pathPattern": "^/api/external-url/metadata$",
+      "category": "first_party_browser_model",
+      "rationale": "This authenticated, credential-stripped metadata lookup only assists the first-party URL publishing form and is not a supported public automation contract."
+    },
+    {
+      "id": "cloudflare_oauth_browser_return",
+      "methods": ["GET", "POST"],
+      "pathPattern": "^/api/cloudflare/oauth/return$",
+      "category": "oauth_browser_ceremony",
+      "rationale": "The return endpoint consumes a flow-bound trusted-host cookie and is not an independently callable OAuth or deployment API."
+    },
+    {
+      "id": "repository_internal_advanced_lifecycle",
+      "methods": ["GET", "POST", "PUT", "DELETE"],
+      "pathPattern": "^/(?:api/(?:shiplets/:projectId/(?:package|revisions/:revisionId/package|drafts|rollback|workflow-events|deployment-status|drafts/:draftId/revisions/:revisionId/versions/:draftVersion/preview-receipt)|drafts/:draftId/(?:package|diff|validate|promote)|revisions/:revisionId/(?:deployments|temporary-claims)|temporary-claims/:targetId/claim|cloudflare/(?:oauth/(?:start|finalize)|connections/:connectionId))|shiplets/:projectId/drafts/:draftId/revisions/:revisionId/versions/:draftVersion/preview)$",
+      "category": "repository_internal_compatibility",
+      "rationale": "Legacy package, revision, deployment, and provider-control routes remain only as repository-internal compatibility contracts and are deliberately absent from public documentation and Code Mode discovery."
+    },
+    {
+      "id": "browser_permanent_delete",
+      "methods": ["DELETE"],
+      "pathPattern": "^/api/projects/:projectId$",
+      "category": "first_party_high_risk_action",
+      "rationale": "Permanent deletion remains an owner-only first-party lifecycle action with a separate recovery-window contract, not a published automation promise."
+    },
+    {
+      "id": "browser_inbox_models",
+      "methods": ["GET", "POST"],
+      "pathPattern": "^/api/(?:notifications(?:/:notificationId/read)?|feedback)$",
+      "category": "first_party_browser_model",
+      "rationale": "Notification and flat feedback feeds are cookie-bound aggregate models for the global inbox and feedback pages."
+    },
+    {
+      "id": "human_mcp_approval_views",
+      "methods": ["GET", "POST"],
+      "pathPattern": "^/(?:shiplets/:projectId/custom-mcp/quarantine(?:/:referenceId/release)?|api/mcp/(?:approvals/:approvalRequestId/(?:confirm|deny)|kernel-approvals/:approvalRequestId(?:/(?:confirm|deny))?))$",
+      "category": "trusted_human_approval",
+      "rationale": "Quarantine release and custom-MCP approval routes require an explicit trusted human ceremony and cannot be delegated as ordinary API operations."
+    },
+    {
+      "id": "review_host_assets",
+      "methods": ["GET"],
+      "pathPattern": "^/api/review/(?:client\\.js|host\\.js|artifact-bridge\\.js|host\\.css)$",
+      "category": "trusted_host_asset",
+      "rationale": "These immutable JavaScript and CSS responses implement the trusted review host and artifact broker boundary rather than REST operations."
+    },
+    {
+      "id": "validated_revision_preview_frames",
+      "methods": ["GET"],
+      "pathPattern": "^/shiplets/:projectId/drafts/:draftId/revisions/:revisionId/versions/:draftVersion/preview/(?:artifact-frame|widget-frame)(?:/|/\\*)?$",
+      "category": "trusted_preview_protocol",
+      "rationale": "These authenticated exact-revision frame responses are opaque sandbox children of the documented trusted preview host, not independently supported automation operations."
+    },
+    {
+      "id": "production_bootstrap_internal",
+      "methods": ["POST"],
+      "pathPattern": "^/api/bootstrap/(?:production-test|reconcile-invitation)$",
+      "category": "operator_internal",
+      "rationale": "Bootstrap endpoints are narrowly authenticated operational compatibility tools and are intentionally excluded from supported public automation."
+    },
+    {
+      "id": "first_party_pages_and_frames",
+      "methods": ["GET", "POST"],
+      "pathPattern": "^/(?:|settings|workspace|account|access|agents|shiplets|inbox|feedback|admin|init|shiplets/:projectId(?:/(?:restore|ownership|access|access-requests|widget-frame/:revisionId(?:/|/\\*)?|review-layer/preview/:previewId|review-host|artifact-frame(?:/\\*)?|preview(?:/\\*)?))?)$",
+      "category": "first_party_document",
+      "rationale": "These operations render application pages, sandboxed frames, trusted review hosts, or form actions and are governed by browser behavior specifications."
+    },
+    {
+      "id": "organization_browser_admin",
+      "methods": ["POST"],
+      "pathPattern": "^/api/organizations(?:/:organizationId/(?:teams(?:/:teamId/invitations)?|invitations))?$",
+      "category": "first_party_browser_admin",
+      "rationale": "Organization, team, and invitation creation is a first-party WorkOS-backed administrative flow with human consent and role checks."
+    },
+    {
+      "id": "legacy_publish_and_hostname_status",
+      "methods": ["GET", "POST"],
+      "pathPattern": "^/(?:projects|projects/:subdomain/custom-domain-status)$",
+      "category": "legacy_compatibility",
+      "rationale": "The legacy publish form and hostname status route remain supported for compatibility while new automation uses the revisioned public API."
+    },
+    {
+      "id": "review_collaboration_browser_state",
+      "methods": ["GET", "POST", "DELETE"],
+      "pathPattern": "^/api/projects/:projectId/(?:invitations|review-mention-users|review-watch|review-presence/ws)$",
+      "category": "first_party_review_state",
+      "rationale": "Mentions, watches, invitations, and presence are interactive review state bound to a browser reviewer and canonical project authorization."
+    },
+    {
+      "id": "ownership_human_action",
+      "methods": ["POST"],
+      "pathPattern": "^/api/shiplets/:projectId/ownership/actions$",
+      "category": "trusted_human_approval",
+      "rationale": "Ownership transition requests require a signed-in human confirmation ceremony and are intentionally not exposed as ordinary automation."
+    },
+    {
+      "id": "managed_platform_operator_ceremony",
+      "methods": ["GET", "POST"],
+      "pathPattern": "^/(?:settings/managed-runtime/reservation|api/platform/managed-runtime/reservation(?:/retire)?)$",
+      "category": "trusted_human_approval",
+      "rationale": "Managed platform reservation and retirement are release-fenced lifecycle-operator ceremonies with explicit human confirmation, not general automation operations."
+    }
+  ]
+}

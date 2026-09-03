@@ -1,0 +1,247 @@
+---
+title: "Code Mode MCP"
+description: "Connect an interactive or registered agent, then prepare artifacts and work with feedback."
+---
+
+Shiplet MCP lets an agent discover the supported API and call it through code.
+Interactive clients authenticate in the browser. A registered external agent
+can request access to one Shiplet organization when the environment enables
+agent registration. CI and other service accounts can use a narrowly scoped
+organization API key.
+
+## Connect
+
+```txt
+https://shiplet.cc/api/mcp
+```
+
+OAuth discovery is available at:
+
+```txt
+https://shiplet.cc/.well-known/oauth-protected-resource
+```
+
+For VS Code, create `.vscode/mcp.json`:
+
+```json
+{
+  "servers": {
+    "shiplet": {
+      "type": "http",
+      "url": "https://shiplet.cc/api/mcp"
+    }
+  }
+}
+```
+
+This follows VS Code's
+[remote HTTP MCP configuration](https://code.visualstudio.com/docs/agent-customization/mcp-servers).
+Keep credentials out of the file because Shiplet hands sign-in to the trusted
+browser.
+
+First connection:
+
+1. Add the endpoint as a remote HTTP MCP server.
+2. Start the connection. The first protected request returns an OAuth challenge,
+   which opens Shiplet sign-in in the browser.
+3. Call `tools/list` and confirm the server exposes `search` and `execute`.
+4. Run `search` before `execute` so the agent uses the current operation,
+   authentication requirement, and request schema.
+
+## Connect an agent to Shiplet
+
+Give the agent this machine-readable setup guide:
+
+```txt
+https://shiplet.cc/auth.md
+```
+
+Shiplet supports registered agents through the Code Mode MCP endpoint. The
+agent follows the guide, asks you to approve access in the browser, and connects
+to the Shiplet organization you choose.
+
+![An agent reads Shiplet auth.md and asks for access. You approve one Shiplet organization, then the agent works with Shiplets and feedback through Code Mode MCP.](/brand/docs/agent-registration-flow.svg?v=2)
+
+### What the agent can do
+
+The registered agent uses the same `search` and `execute` tools as any Code Mode
+client. It can discover Shiplet operations, publish or update Shiplets, and work
+with review feedback when its permissions allow those actions.
+
+Shiplet recognizes these agent permissions: `mcp`, `shiplets:read`,
+`shiplets:write`, `feedback:read`, and `feedback:write`. Current organization
+membership and Shiplet grants still apply to every request.
+
+### Approve access
+
+1. Give the agent `https://shiplet.cc/auth.md`.
+2. Open the browser approval link it returns, sign in, and choose the Shiplet
+   organization the agent can use.
+3. Return to the agent after the approval page confirms access. The agent
+   connects to `https://shiplet.cc/api/mcp`.
+
+The registration remains a distinct agent actor in Shiplet's audit history.
+Your user identity records who approved it, and the selected organization sets
+the boundary for its work.
+
+### Check the connection
+
+1. Ask the agent to call `tools/list`. Shiplet returns exactly `search` and
+   `execute`.
+2. Run a harmless authorized read, such as `GET /api/shiplets` through
+   `execute`.
+3. A `401` means the agent needs to reconnect. A `403` means its selected
+   organization, current membership, Shiplet grant, or required permission does
+   not authorize the operation.
+
+The agent client owns its connection credentials. Keep those credentials out of
+Shiplet uploads, review feedback, and custom widgets.
+
+## Core tools
+
+- `search` discovers the Shiplet OpenAPI contract.
+- `execute` calls supported operations through `codemode.request(...)`.
+
+Those are the complete top-level tool catalog. Shiplet never adds a third tool
+from an artifact or custom widget. The JavaScript passed to either tool runs in
+an isolated Worker without network access or credentials, and API calls return
+to Shiplet's authenticated host.
+
+`search` builds an authorization-specific OpenAPI view. Alongside the stable
+Shiplet API, it can include operations declared by an accessible Shiplet's
+current configuration. Each one appears at a concrete Shiplet path and can run
+only through `execute`. It is omitted when its isolated runtime is unavailable
+and disappears immediately when that configuration changes.
+
+Custom-operation discovery is deliberately narrowed to one Shiplet per call.
+A broad path search can find `/api/shiplets/custom-mcp-catalog`; call that
+trusted, paginated operation through `execute`, choose an accessible active
+Shiplet, then include its returned literal
+`/api/shiplets/{id}/custom-mcp/` prefix in the JavaScript passed to `search`.
+The focused search loads only an immutable, digest-bound MCP projection for
+that activation. Unrelated platform operations load no custom package, and
+unrelated files in a large selected package are not read.
+
+Shiplet supplies the operation description shown to the model and validates the
+declared input schema. Configuration-authored prose and handler output stay in
+quarantine; `execute` returns only a platform-owned completion notice unless a
+trusted person explicitly reviews the quarantined content.
+
+Each OpenAPI operation has an `x-shiplet-code-mode` marker. Use the browser or
+direct REST when an operation is outside the Code Mode surface.
+
+### Search
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": 1,
+  "method": "tools/call",
+  "params": {
+    "name": "search",
+    "arguments": {
+      "code": "async () => await codemode.spec()"
+    }
+  }
+}
+```
+
+### Execute
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": 2,
+  "method": "tools/call",
+  "params": {
+    "name": "execute",
+    "arguments": {
+      "code": "async () => await codemode.request({ method: \"GET\", path: \"/api/shiplets\" })"
+    }
+  }
+}
+```
+
+## Prepare an artifact
+
+```js
+async () =>
+  await codemode.request({
+    method: "POST",
+    path: "/api/shiplets",
+    body: {
+      name: "Prototype dashboard",
+      subdomain: "prototype-dashboard",
+      visibility: "organization",
+      assets: [
+        {
+          path: "index.html",
+          content: "PCFkb2N0eXBlIGh0bWw+PGgxPlByb3RvdHlwZTwvaDE+",
+        },
+      ],
+    },
+  });
+```
+
+Open the returned review link. The [Quickstart](/docs/quickstart) shows the same
+workflow in the browser.
+
+## Customize the review widget
+
+Read the current review layer, prepare a preview from widget-relative changes,
+and apply the preview after a person approves it. The version returned by the
+first request prevents a stale preview from replacing newer work.
+
+```js
+async () => {
+  const layer = await codemode.request({
+    method: "GET",
+    path: "/api/shiplets/project_123/review-layer",
+  });
+  return {
+    version: layer.version,
+    paths: layer.files.map((file) => file.path),
+  };
+};
+```
+
+Run `search` for the preview and apply request schemas before writing. These
+operations only accept review-widget files, so the artifact stays unchanged.
+
+## Read feedback
+
+```js
+async () =>
+  await codemode.request({
+    method: "GET",
+    path: "/api/projects/project_123/review-feedback",
+    query: { status: "New" },
+  });
+```
+
+An agent can also reply to tickets or update their status when its credential
+has the required Shiplet and feedback scopes. Run `search` for the current
+operation before writing review state.
+
+## Authentication and authority
+
+Browser OAuth identifies an interactive user. A registered agent remains a
+separate actor in Shiplet's audit history, tied to the user who approved it and
+the selected organization. Its effective authority combines recognized agent
+permissions, current Shiplet membership and grants, the selected organization,
+and the requested operation. Unknown permissions grant nothing.
+
+Organization API keys identify automated jobs and remain limited by their
+scopes and selected Shiplets. Shiplet records the authenticated agent actor for
+review changes and keeps connection credentials away from artifacts and custom
+widgets.
+
+Use [API keys](/docs/api-keys) for CI and read
+[Security and isolation](/docs/security) before connecting an integration. The
+[OpenAPI document](https://shiplet.cc/openapi.json) is the machine-readable
+contract for documented public REST operations.
+
+## Next action
+
+Connect through browser OAuth, or ask a compatible agent to follow
+`https://shiplet.cc/auth.md`, then run `search`.

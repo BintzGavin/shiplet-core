@@ -1,0 +1,19 @@
+<!doctype html>
+<html lang="en">
+	<head>
+		<meta charset="utf-8" />
+		<meta name="viewport" content="width=device-width, initial-scale=1" />
+		<title>Hostile widget isolation fixture</title>
+	</head>
+	<body>
+		<main>
+			<h1>Hostile widget isolation fixture</h1>
+			<p id="status" role="status" aria-live="polite">Waiting for the trusted host.</p>
+			<button id="probe" type="button">Probe isolation</button>
+			<button id="forge-human" type="button">Attempt human attribution</button>
+			<button id="guess-sibling" type="button">Attempt sibling access</button>
+			<pre id="result" aria-label="Probe result"></pre>
+		</main>
+		<script type="module" src="./widget.js"></script>
+	</body>
+</html>

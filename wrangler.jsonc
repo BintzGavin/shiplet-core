@@ -1,0 +1,129 @@
+{
+	"$schema": "node_modules/wrangler/config-schema.json",
+	"name": "shiplet-example",
+	"main": "src/index.ts",
+	"compatibility_date": "2026-08-07",
+	"compatibility_flags": ["nodejs_compat", "global_fetch_strictly_public"],
+	"rules": [
+		{
+			"type": "Text",
+			"globs": ["**/*.svg"],
+			"fallthrough": true
+		}
+	],
+	"workers_dev": true,
+	"observability": {
+		"enabled": true
+	},
+	"triggers": {
+		"crons": ["*/5 * * * *"]
+	},
+	"version_metadata": {
+		"binding": "CF_VERSION_METADATA"
+	},
+	"worker_loaders": [
+		{
+			"binding": "CODE_MODE_LOADER"
+		}
+	],
+	"services": [
+		{
+			"binding": "CLOUDFLARE_OAUTH_CONTROL_PLANE",
+			"service": "shiplet-example-control-plane",
+			"entrypoint": "CloudflareOAuthControlPlane"
+		},
+		{
+			"binding": "CLOUDFLARE_GRANT_VAULT_RPC",
+			"service": "shiplet-example-control-plane",
+			"entrypoint": "CloudflareGrantVaultRpc"
+		},
+		{
+			"binding": "CLOUDFLARE_TEMPORARY_ACCOUNT_RPC",
+			"service": "shiplet-example-control-plane",
+			"entrypoint": "CloudflareTemporaryAccountRpc"
+		},
+		{
+			"binding": "CLOUDFLARE_VERSION_HEALTH_RPC",
+			"service": "shiplet-example-runtime-gateway",
+			"entrypoint": "CloudflareVersionHealthRpc"
+		},
+		{
+			"binding": "CLOUDFLARE_CUSTOM_MCP_RUNTIME_RPC",
+			"service": "shiplet-example-runtime-gateway",
+			"entrypoint": "CustomMcpRuntimeRpc"
+		},
+		{
+			"binding": "CLOUDFLARE_MANAGED_RUNTIME_RPC",
+			"service": "shiplet-example-runtime-gateway",
+			"entrypoint": "ManagedRuntimeGateway"
+		}
+	],
+	"d1_databases": [
+		{
+			"binding": "DB",
+			"database_name": "shiplet-example",
+			"database_id": "00000000-0000-0000-0000-000000000000"
+		}
+	],
+	"r2_buckets": [
+		{
+			"binding": "SHIPLET_ASSETS",
+			"bucket_name": "shiplet-example-assets"
+		},
+		{
+			"binding": "REVIEW_ASSETS",
+			"bucket_name": "shiplet-example-review-assets"
+		}
+	],
+	"durable_objects": {
+		"bindings": [
+			{
+				"name": "SANDBOX_SESSION",
+				"class_name": "SandboxSession"
+			},
+			{
+				"name": "SHIPLET_ROOT",
+				"class_name": "ShipletRoot"
+			}
+		]
+	},
+	"migrations": [
+		{
+			"tag": "v1_sandbox_session",
+			"new_sqlite_classes": ["SandboxSession"]
+		},
+		{
+			"tag": "v2_review_presence",
+			"new_sqlite_classes": ["ReviewPresenceRoom"]
+		},
+		{
+			"tag": "v3_shiplet_root",
+			"new_sqlite_classes": ["ShipletRoot"]
+		},
+		{
+			"tag": "v4_delete_review_presence",
+			"deleted_classes": ["ReviewPresenceRoom"]
+		}
+	],
+	"vars": {
+		"SHIPLET_AUTH_MODE": "test",
+		"DISPATCH_NAMESPACE_NAME": "shiplet-example",
+		"SHIPLET_APP_URL": "http://localhost:8787",
+		"WORKOS_AUTHKIT_ISSUER": "https://example.authkit.app",
+		"WORKOS_REDIRECT_URI": "http://localhost:8787/auth/callback",
+		"SHIPLET_ENABLED_FEATURE_FLAGS": "example-feature",
+		"CLOUDFLARE_OAUTH_READINESS": "disabled",
+		"CLOUDFLARE_OAUTH_SMOKE_USER_ID": "",
+		"CLOUDFLARE_CONTROL_PLANE_VERSION_ID": "",
+		"CLOUDFLARE_RUNTIME_GATEWAY_VERSION_ID": "",
+		"CLOUDFLARE_DENY_EGRESS_VERSION_ID": "",
+		"CLOUDFLARE_SUPPORT_RELEASE_TAG": "",
+		"CLOUDFLARE_MANAGED_RUNTIME_READINESS": "disabled",
+		"CLOUDFLARE_MANAGED_RUNTIME_SMOKE_USER_ID": "",
+		"CLOUDFLARE_MANAGED_RUNTIME_OPERATOR_USER_ID": "",
+		"CLOUDFLARE_TEMPORARY_ACCOUNTS_READINESS": "disabled",
+		"CLOUDFLARE_TEMPORARY_ACCOUNTS_SMOKE_USER_ID": "",
+		"CUSTOM_DOMAIN": "example.test"
+	},
+	"upload_source_maps": false
+}

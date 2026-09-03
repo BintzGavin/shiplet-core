@@ -1,0 +1,81 @@
+---
+title: "WordPress"
+description: "Embed Shiplet review mode on a WordPress site's original URLs."
+---
+
+Shiplet for WordPress connects one site to one Shiplet project. Authorized
+Shiplet reviewers can leave contextual feedback directly on the site's original
+URLs; the site does not need to be opened through a Shiplet proxy.
+
+This is the compatibility path for reviewing an existing WordPress site. For
+uploaded folders and standalone files, start with the managed
+[browser quickstart](/docs/quickstart).
+
+## Install and connect
+
+The plugin is currently **source-checkout-only**. There is no official public
+download, registry listing, versioned zip, or checksum yet. From an authorized
+Shiplet source checkout, use `wordpress/shiplet`; otherwise wait for an
+official distribution rather than installing an unverified archive.
+
+1. Upload the source checkout's `wordpress/shiplet` directory to
+   `/wp-content/plugins/shiplet`.
+2. Activate **Shiplet** in WordPress.
+3. Open **Settings → Shiplet**.
+4. Choose **Connect to Shiplet**.
+5. Sign in, then select an editable project or create a project for the site.
+
+The connection is scoped to the site's exact origin. Connect staging and
+production separately when they use different origins.
+
+The administrator connection uses short-lived, single-use codes. WordPress
+stores a revocable installation secret on the server; the plugin does not place
+that secret or an organization API key in public page source.
+
+## Start review mode
+
+Add `?shiplet-review=1` to the page you want to review:
+
+```text
+https://example.com/pricing/?shiplet-review=1
+```
+
+Shiplet asks the reviewer to sign in if needed, verifies access to the connected
+project, and returns to the same WordPress page. The existing Shiplet review
+widget then mounts under that reviewer's identity.
+
+Review mode persists only in the current browser tab. Ordinary visitors who do
+not open a review-mode URL do not see Shiplet controls and do not download
+Shiplet's remote review client.
+
+## Disconnect
+
+Open **Settings → Shiplet** and choose **Disconnect Shiplet**. Disconnecting
+revokes the site installation and removes the local credential.
+
+Previously issued browser capabilities are short-lived. The disconnected origin
+immediately loses browser CORS access and cannot start or exchange another
+review session.
+
+If review mode is denied after reconnecting, confirm that the signed-in reviewer
+can view the selected Shiplet and that the browser returned to the exact
+connected origin. See [Access control](/docs/access-control).
+
+## Requirements and limits
+
+- Production sites must use HTTPS.
+- Each WordPress site maps to one Shiplet project.
+- WordPress multisite installations connect each site independently.
+- A restrictive Content Security Policy must allow scripts and API connections
+  to the configured Shiplet origin.
+
+The WordPress page does not receive an organization API key, WorkOS credential,
+or Cloudflare connection. Read [Security and isolation](/docs/security) for the
+trusted-host and secret boundaries, and use the
+[OpenAPI document](https://shiplet.cc/openapi.json) for server-side automation.
+
+## Next action
+
+[Open the Shiplet app](https://shiplet.cc/) and create or choose the Shiplet for
+this site before connecting the plugin. Then test review mode on a staging URL
+with a harmless comment.

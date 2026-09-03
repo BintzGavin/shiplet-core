@@ -1,0 +1,13 @@
+node_modules
+dist/**/*
+src/start/routeTree.gen.ts
+.dev.vars
+.wrangler/
+.DS_Store
+*.log
+.env
+.env.*
+!.env.example
+.env.external-setup
+test-results/
+playwright-report/

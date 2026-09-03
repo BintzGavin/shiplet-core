@@ -1,0 +1,72 @@
+---
+title: "Quickstart"
+description: "Upload an artifact and open its review link in a few minutes."
+---
+
+The fastest path starts in the browser.
+
+## 1. Open the Prepare page
+
+[Open the Shiplet app](https://shiplet.cc/). Sign in when asked. Shiplet creates
+a default workspace for a first-time user and returns to the Prepare page.
+
+## 2. Choose the work to review
+
+Keep **Upload files** selected, then choose one or more supported files: static
+HTML, CSS, JavaScript, images, video, audio, PDFs, source code, structured data,
+documents, archives, or GIS data. Use [Code Mode MCP](/docs/code-mode-mcp) or
+direct REST when an automated build needs to preserve folder paths. Choose
+**URL** when the artifact already has a public preview origin.
+
+Shiplet renders common browser media directly. It shows readable text for UTF-8
+code, JSON, configuration, and text GIS formats. Binary formats receive file
+details and a user-initiated download. Executables and installers are rejected.
+
+Name the artifact and choose its review subdomain. Before publishing, choose who
+can see the review:
+
+- **Organization** is the safe default for an internal review.
+- **Private** limits access to administrators, owners, and people with an
+  explicit grant.
+- **Unlisted** allows anyone with the link to open the review.
+- **Public** allows anonymous access and discovery.
+
+View access does not grant edit access. Confirm the visibility, then select
+**Prepare for review**.
+
+## 3. Open the review link
+
+Shiplet places the artifact inside a sandboxed frame and shows trusted review
+controls around it. Leave a harmless comment, then open the Shiplet detail page
+or global Feedback view to find the ticket.
+
+Read [Review feedback](/docs/review-feedback) for replies and ticket status.
+Read [Access control](/docs/access-control) before sharing the link.
+
+## Optional: automate with MCP
+
+Connect an MCP client to:
+
+```txt
+https://shiplet.cc/api/mcp
+```
+
+The first protected action opens AuthKit in the browser. After approval, the
+agent can discover the supported API and prepare artifacts through Shiplet's
+two core tools. [Code Mode MCP](/docs/code-mode-mcp) includes a complete setup
+example.
+
+## Troubleshooting
+
+| Problem | Safe recovery |
+| --- | --- |
+| A file is rejected | Remove the unsupported or oversized file and prepare again. |
+| The subdomain is unavailable | Choose another lowercase, hyphenated review name. |
+| Publishing fails | Keep the local artifact and retry after the reported problem clears. |
+| Sign-in or access is denied | Sign in with the invited email or ask an owner for the required viewing grant. |
+| An external URL cannot load | Confirm it is public HTTPS on a standard port and does not redirect to a private address. |
+| Review controls are unavailable | Reload the review link and sign in if asked. |
+
+## Next action
+
+[Leave and manage review feedback](/docs/review-feedback).

@@ -1,0 +1,23 @@
+# Shiplet - Secrets
+# Copy to .dev.vars for local development
+
+SHIPLET_AUTH_MODE="workos"
+SHIPLET_APP_URL="http://localhost:8787"
+WORKOS_REDIRECT_URI="http://localhost:8787/auth/callback"
+
+# WorkOS AuthKit
+WORKOS_CLIENT_ID="client_..."
+WORKOS_API_KEY="sk_..."
+
+# Review capability signing. Use a long random value that is separate from WorkOS.
+SHIPLET_REVIEW_TOKEN_SECRET="generate-a-long-random-secret"
+
+# PostHog browser analytics
+# Leave POSTHOG_KEY blank to keep analytics disabled.
+POSTHOG_KEY=""
+POSTHOG_HOST="https://us.i.posthog.com"
+
+# Optional custom domain support
+CUSTOM_DOMAIN=""
+CLOUDFLARE_ZONE_ID=""
+FALLBACK_ORIGIN=""

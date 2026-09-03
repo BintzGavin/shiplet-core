@@ -1,0 +1,243 @@
+---
+title: "Deployment and ownership"
+description: "Use managed static hosting now and understand the customer-owned Cloudflare path."
+---
+
+**Shiplet-managed static hosting is the default.** Publish and review without a
+Cloudflare account, then consider customer-owned infrastructure only when you
+want direct runtime ownership.
+
+## Choose where it runs
+
+### Start here — Shiplet-managed
+
+Shiplet hosts static artifacts and review URLs. No Cloudflare account or API
+token is required. Review identity, access, feedback, and revision history stay
+attached to one stable Shiplet.
+
+### Graduate later — Your Cloudflare
+
+Connect one Cloudflare account with browser OAuth when you want a validated
+revision in infrastructure you own. Shiplet keeps review identity, permissions,
+feedback, audit history, secrets, and deployment authority inside its trusted
+kernel rather than package code.
+
+Graduation is optional. The managed review keeps working when an external
+prerequisite is unavailable, access is denied, or a connection is revoked.
+
+## What Shiplet requests—and does not
+
+**What Shiplet requests:** permission to read and write Worker scripts in the
+one selected account through `workers.scripts.read` and
+`workers.scripts.write`. `offline_access` is added only when the OAuth client
+uses refresh tokens.
+
+**What Shiplet does not request:** DNS changes, account membership, reviewer
+identity, Shiplet credentials, organization-wide grants, shared platform
+bindings, or another Shiplet's state. Shiplet never asks you to paste a
+Cloudflare API token.
+
+Revoking access blocks future updates; the last customer-owned deployment keeps
+running in your account. Reconnect only when you want Shiplet to manage another
+update.
+
+## Immutable revision flow
+
+1. Fork the active revision into an isolated draft.
+2. Change the artifact, widget, workflow, custom MCP surface, or instructions.
+3. Compare and validate the draft. Validation does not activate or deploy it.
+4. Promote the exact validated draft with the expected active revision and
+   explicit approval.
+5. Optionally deploy the active revision to a configured target.
+6. Roll back to a previous known-good revision with the same conflict fence.
+
+A failed validation, stale promotion, or failed deployment leaves the prior
+active revision unchanged. Rollback activates a previous package through a new
+operation; it does **not** rewind the current namespaced runtime state.
+
+## Availability at a glance
+
+| Path                           | Default capability posture                                      | What is required                                                                                                                                   |
+| ------------------------------ | --------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Managed static                 | **Available by default**                                        | No Cloudflare connection                                                                                                                           |
+| Managed external URL proxy     | **Available by default**                                        | A public HTTP or HTTPS origin; proxy access is read-only                                                                                           |
+| Managed arbitrary Worker       | **Advanced, deployment-specific**                               | Revision-aware Workers for Platforms gateway, a fixed managed-only provider reservation, stripped platform authority, enforced limits, and mediated egress |
+| Managed custom MCP handlers    | **Fail closed until attested**                                  | Workers Paid with Dynamic Workers through the shipped Worker Loader binding; no global outbound network and invocation-local capability RPC        |
+| Customer-owned static          | **External prerequisite**                                       | Shiplet's public OAuth client and Cloudflare control-plane bindings must be configured; the owner then grants scoped access and selects an account |
+| Customer-owned advanced Worker | **Advanced and unavailable without its security prerequisites** | Customer OAuth plus enforceable outbound mediation and a deployable runtime contract                                                               |
+| Temporary preview and claim    | **External prerequisite**                                       | Cloudflare's temporary-account broker, trusted claim vault, and required policy acknowledgement                                                    |
+
+External readiness is deployment-specific, so this static page never claims a
+mutable production capability is on or off. The authenticated **Ownership &
+deployment** view and its deployment-status API are authoritative for the
+current Shiplet and user. Unavailable, denied, and revoked states fail closed
+while managed static publishing remains available.
+
+## Understand the ownership objects
+
+- A **Shiplet** is the logical collaborative object with a stable identity.
+- A **revision** is one immutable package snapshot.
+- A **deployment target** identifies a destination and ownership boundary.
+- A **deployment** is one revision installed on one target.
+- A **state namespace** holds runtime data for one Shiplet or deployment.
+
+One revision can be installed on more than one target. A target is not itself a
+deployment. See [Packages and revisions](/docs/packages-revisions) for the full
+model.
+
+## Shiplet-managed hosting
+
+Managed hosting supports static folders, standalone files, and read-only
+external URL reviews. Static files run from Shiplet-managed infrastructure. An
+external origin remains responsible for availability and receives only safe
+`GET` or `HEAD` proxy requests.
+
+The trusted review host renders artifact and widget code in sandboxed frames.
+It owns reviewer identity and capability brokerage. Read
+[Review artifacts](/docs/publishing) and [Security and isolation](/docs/security).
+
+### Managed Workers for Platforms
+
+Managed arbitrary revisions use the revision-aware Workers for Platforms
+gateway after the deployment has passed its live readiness checks. Static
+publishing remains the default. The trusted kernel stages one immutable package
+digest, opens a sealed preview without activation, and promotes through the
+expected-active conflict fence. Production invocation follows the active
+revision and activation generation. The main kernel reaches this path only
+through `CLOUDFLARE_MANAGED_RUNTIME_RPC`.
+
+The platform operator reserves one exact-scope OAuth connection in the
+Shiplet-owned account through a fixed managed-only reservation named
+`managed_wfp_provider`. The control plane holds the encrypted credential and
+the deployment broker uses it for bounded provider operations. The gateway has
+no credential, package code receives no Cloudflare credential, and each package
+starts with ambient bindings empty plus deny-by-default egress. Readiness moves
+through `disabled`, one exact-user `operator_smoke`, and a separately confirmed
+`enabled` release.
+
+The active reservation is immutable and tied to the lifecycle operator who
+approved it. That operator can retire it through a separate trusted action that
+writes a separate immutable retirement audit record. After retirement,
+ordinary OAuth revocation is allowed. Customer-owned deployments continue
+running on their separately owned resources. Managed Worker operations fail
+closed until a new fixed reservation is configured and passes readiness again.
+
+Custom MCP uses a separate Dynamic Workers contract through the Worker Loader.
+Its per-call capability RPC and limits do not give managed application Workers
+access to MCP authority.
+
+## Connect, revoke, and recover
+
+When the control plane is configured, the owner connects through Cloudflare
+OAuth and selects the exact account. Shiplet requests only the current Worker
+script scopes required by the operation: `workers.scripts.read` and
+`workers.scripts.write`; `offline_access` is added only when the OAuth client
+uses refresh tokens. Only when an owner connects does Shiplet request
+account-level Workers Scripts Write for one selected account.
+
+The OAuth connection belongs to the connecting user and selected account. It
+does not become package authority. A customer Worker receives no WorkOS
+credential, organization-wide grant, shared platform database binding, or
+another Shiplet's state.
+
+For a deployment, Shiplet uploads the validated package to the selected target,
+checks the candidate, and changes traffic only after the operation succeeds.
+The customer owns the resulting Cloudflare resources and may change them
+outside Shiplet; Shiplet therefore treats that runtime as an untrusted remote
+application.
+
+Revoking the OAuth connection makes future management fail closed. The last
+customer-owned deployment keeps running in the customer's account, but Shiplet
+cannot update it until the owner reconnects. If provider cleanup cannot be
+confirmed, Shiplet reports compensation pending instead of reporting a clean
+conflict. The control plane retains the encrypted cleanup record and its
+scheduled reconciler retries a bounded batch; package code and the main Worker
+never receive that authority.
+
+### OAuth security ceremony
+
+The browser connection uses a public Authorization Code client with S256 PKCE,
+an exact HTTPS redirect, and a one-time signed state record bound to the trusted
+Shiplet user, browser session, Shiplet, selected account, and expiry. The
+callback consumes the state and PKCE verifier once. Wrong-session, wrong-user,
+replayed, expired, redirect-mismatched, multi-account, or extra-scope responses
+fail closed. Refresh material is rotated and remains inside the credential
+control plane; package code and the main application Worker receive only public
+connection metadata and one-operation grants.
+
+### Custom hostnames
+
+A custom hostname is an explicit deployment or review routing attachment, not
+package authority. The owner must control the hostname and complete the
+provider's verification before Shiplet routes traffic. Shiplet does not change
+DNS ownership automatically. A pending, failed, or revoked hostname remains
+detached from traffic, while the canonical Shiplet review URL and last
+known-good deployment continue to follow their existing access policy.
+
+## Advanced paths and limitations
+
+Customer-owned deployment remains static-only at the shared orchestration
+boundary. Direct API callers cannot bypass that rule with a package containing
+Worker modules; the request fails before a provider grant, journal, or remote
+effect. Advanced customer Worker deployment remains unavailable until an
+enforceable egress contract exists.
+
+Managed arbitrary Worker execution fails closed unless the revision-aware
+Workers for Platforms gateway, fixed provider reservation, stripped platform
+authority, enforced limits, and mediated egress all attest the current release.
+Managed custom MCP handlers fail closed until the required
+Workers Paid, Dynamic Workers, Worker Loader binding, invocation limits, and
+release attestation are all present. Check the authenticated **Ownership &
+deployment** view rather than inferring mutable readiness from this page.
+
+## Platform operator setup
+
+Platform operators: use [External Cloudflare setup](/docs/external-setup) for the executable support-service and production-proof journey.
+
+That guide covers the exact-scope OAuth connection reserved for the managed WFP
+broker and the separate customer-owned connection flow. Only when a customer
+owner connects does that second OAuth flow request account-level Workers Scripts
+Write for the selected customer account. Ordinary Shiplet owners do not run the
+platform setup.
+
+## Temporary preview and claim
+
+Where Cloudflare temporary accounts are configured, Shiplet can create a
+static-only temporary target and deliver a one-time claim through a trusted
+backend redirect. Claim material is not returned to package code or ordinary
+public API payloads. Expired or consumed claim attempts fail closed.
+
+Claiming transfers the temporary deployment; it does not create an ongoing
+Shiplet connection. Future updates require a separate Cloudflare OAuth
+connection and account selection.
+
+## Failure and recovery
+
+| State                       | Safe outcome                                                     | Recovery                                                                         |
+| --------------------------- | ---------------------------------------------------------------- | -------------------------------------------------------------------------------- |
+| Validation failed           | Active revision is unchanged                                     | Fix the isolated draft and validate again                                        |
+| Promotion conflict          | Prior active revision remains unchanged                          | Refresh, compare with the new active revision, then re-fork or revalidate        |
+| Deployment failed           | Prior active revision and known-good deployment remain unchanged | Correct the target prerequisite and retry                                        |
+| OAuth denied or cancelled   | No Cloudflare connection or deployment is created                | Continue on managed hosting or connect again later                               |
+| OAuth expired               | Management fails closed                                          | Refresh through the configured OAuth flow or reconnect                           |
+| OAuth revoked               | Last customer deployment keeps running; updates stop             | Reconnect only when another update is wanted                                     |
+| Claim expired or consumed   | Claim delivery fails closed                                      | Create a new isolated temporary preview when available                           |
+| Managed dynamic unavailable | Static artifacts remain available                                | Stay static-first or use a customer target after its prerequisites are installed |
+| Rollback approved           | Prior package becomes active through a new deployment            | Verify the restored revision; current state is not rewound                       |
+
+## Package export and detachment
+
+Export or eject produces a portable package without Shiplet kernel state,
+credentials, access grants, sessions, claim data, or audit history. Shiplet
+does not secret-scan arbitrary authored files, so inspect source and content
+before sharing. Detaching a target stops Shiplet from treating it as managed
+authority; it does not silently erase customer-owned resources.
+
+## Next action
+
+[Prepare a managed static review](/docs/quickstart). If you are evaluating
+customer ownership, open the Shiplet's **Ownership & deployment** view in the
+[Shiplet app](https://shiplet.cc/) and confirm the current prerequisite status
+before attempting to connect Cloudflare. Repository operators should follow
+[External Cloudflare setup](/docs/external-setup) for the named support-service
+and production-proof journey.
