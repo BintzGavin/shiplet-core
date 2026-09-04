@@ -45,6 +45,10 @@ the product register used by this visual system.
 - **Mark**: a flag pennant over a hull carrying two cargo squares (buoy orange +
   harbor teal) on a warm paper tile with an ink border. Drawn as inline SVG
   (`SHIPLET_FAVICON_SVG` in `src/seo.ts`, mirrored in `favicon.svg`).
+- **Header vessel**: the mark is the compact header's only ship. Its header-sized
+  rendering may add restrained rigging, deck, hull, water-contact, and wake
+  detail around the canonical silhouette, while the full-width waterline stays
+  boat-free.
 - **Wordmark**: "Shiplet" set in Bricolage Grotesque 700, ink, tight tracking.
 - Clear space: half the mark's width on all sides. Never stretch, recolor, or
   put the mark on a gradient.
@@ -191,8 +195,9 @@ watermark per screen; decorations never sit under dense text.
 ## 9. Layout
 
 - Content max-width 1080px, 24px gutters (16px mobile).
-- Shared shell: brand topbar (mark + wordmark + tagline, nav: Publish,
-  Settings) over the waterline rule.
+- Shared shell: compact mark-only home control plus utility navigation over the
+  waterline rule. The mark is the primary vessel; header waterline decoration is
+  limited to waves, navigation markers, and control-adjacent ripples.
 - Publish page: one column, dropzone-first.
 - Settings: sticky local nav rail + stacked sections (collapses on mobile).
 - The Bridge: preview iframe ~2fr, side stack (invites / feedback / MCP) 1fr.

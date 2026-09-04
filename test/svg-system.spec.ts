@@ -32,6 +32,21 @@ function decodeAuthStamp() {
 	return encodedSvg ? decodeURIComponent(encodedSvg) : "";
 }
 
+function extractBrandHeader(html: string) {
+	return (
+		html.match(/<header class="shiplet-brand-header"[^>]*>[\s\S]*?<\/header>/)
+			?.[0] || ""
+	);
+}
+
+function extractCssRule(selector: string) {
+	const escapedSelector = selector.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+	return (
+		CSS.match(new RegExp(`${escapedSelector}\\s*\\{[\\s\\S]*?\\}`))?.[0] ||
+		""
+	);
+}
+
 describe("Shiplet SVG system", () => {
 	it("Given the favicon and header marks, when they render at different optical sizes, then they expose the same canonical silhouette", () => {
 		const page = renderPage("<p>SVG system fixture</p>", {
@@ -48,6 +63,223 @@ describe("Shiplet SVG system", () => {
 		expect(HARBOR_SCENE_SVG).not.toContain(
 			'transform="translate(305 119) scale(.2)"',
 		);
+	});
+
+	it("Given public and authenticated shells, when the shared header renders, then the logo is the sole vessel and each variant keeps a compact waterline story", () => {
+		const nonce = "svg-system-test-nonce-12345" as KernelDocumentNonce;
+		const publicHeader = extractBrandHeader(
+			renderPage("<p>Public fixture</p>", { nonce }),
+		);
+		const authenticatedHeader = extractBrandHeader(
+			renderPage("<p>Authenticated fixture</p>", {
+				nonce,
+				user: {
+					id: "user_svg_system",
+					email: "svg-system@example.com",
+					avatar_preset: "aurora-grid",
+				},
+			}),
+		);
+
+		expect(publicHeader).toContain('data-header-variant="public"');
+		expect(authenticatedHeader).toContain(
+			'data-header-variant="authenticated"',
+		);
+		expect(publicHeader.match(/<svg class="shiplet-waterline-svg"/g)).toHaveLength(1);
+		expect(authenticatedHeader.match(/<svg class="shiplet-waterline-svg"/g)).toHaveLength(1);
+		for (const sharedDepth of [
+			"shiplet-waterline-far",
+			"shiplet-waterline-mid",
+			"shiplet-waterline-near",
+			"shiplet-waterline-foam",
+		]) {
+			expect(publicHeader).toContain(sharedDepth);
+			expect(authenticatedHeader).toContain(sharedDepth);
+		}
+		for (const header of [publicHeader, authenticatedHeader]) {
+			expect(header.match(/data-header-vessel="primary"/g)).toHaveLength(1);
+			expect(header).toContain("shiplet-mark-vessel");
+			expect(header).toContain("shiplet-mark-depth");
+			expect(header).toContain("shiplet-mark-water-contact");
+			expect(header).toContain("shiplet-mark-wake");
+			expect(header).toContain("shiplet-brand-wake-extension");
+			expect(header).not.toContain("shiplet-waterline-vessel");
+			expect(header).not.toContain("shiplet-waterline-pilot-skiff");
+			expect(header).not.toContain("shiplet-waterline-distant-vessel");
+		}
+		for (const authenticatedDetail of [
+			"shiplet-waterline-marker-buoy",
+			"shiplet-waterline-avatar-ripple",
+		]) {
+			expect(authenticatedHeader).toContain(authenticatedDetail);
+			expect(publicHeader).not.toContain(authenticatedDetail);
+		}
+	});
+
+	it("Given the primary logo vessel, when transform motion runs, then animation stays inside its positioned mark and full-width water never stretches boat geometry", () => {
+		const nonce = "svg-system-test-nonce-12345" as KernelDocumentNonce;
+		const publicHeader = extractBrandHeader(
+			renderPage("<p>Public fixture</p>", { nonce }),
+		);
+		const authenticatedHeader = extractBrandHeader(
+			renderPage("<p>Authenticated fixture</p>", {
+				nonce,
+				user: {
+					id: "user_svg_system",
+					email: "svg-system@example.com",
+				},
+			}),
+		);
+
+		for (const header of [publicHeader, authenticatedHeader]) {
+			expect(header).toContain(
+				'class="shiplet-mark-position" transform="translate(0 -8)"',
+			);
+			expect(header).toContain(
+				'class="shiplet-mark-vessel" data-header-vessel="primary"',
+			);
+			expect(header).not.toMatch(
+				/<g class="shiplet-mark-vessel"[^>]* transform=/,
+			);
+			expect(header).not.toContain("shiplet-waterline-vessel");
+		}
+		expect(authenticatedHeader).toContain(
+			'class="shiplet-waterline-position shiplet-waterline-marker-buoy-position shiplet-waterline-mobile-hide" transform="translate(300 11)"',
+		);
+		expect(authenticatedHeader).not.toMatch(
+			/<g class="shiplet-waterline-marker-buoy[^"]*" transform=/,
+		);
+	});
+
+	it("Given either compact header variant, when navigation renders, then canonical mark geometry and utility contracts stay unchanged while platform nav remains outside", () => {
+		const nonce = "svg-system-test-nonce-12345" as KernelDocumentNonce;
+		const user = {
+			id: "user_svg_system",
+			email: "svg-system@example.com",
+			created_on: "2026-08-13T00:00:00.000Z",
+			updated_on: "2026-08-13T00:00:00.000Z",
+		};
+		const page = renderPage(
+			BuildPlatformPublishPage({
+				nonce,
+				user,
+			}),
+			{ nonce, user },
+		);
+		const header = extractBrandHeader(page);
+
+		for (const fragment of CANONICAL_MARK_GEOMETRY) {
+			expect(header).toContain(fragment);
+		}
+		expect(header).toContain(CANONICAL_MARK_OPTICAL_OFFSET);
+		expect(header).toContain('aria-label="Shiplet home"');
+		expect(header).toContain('aria-label="Utility"');
+		expect(header).toContain('href="/docs"');
+		expect(header).toContain('href="/account"');
+		for (const routeLink of [
+			'href="/shiplets"',
+			'href="/feedback"',
+			'href="/inbox"',
+			'href="/workspace"',
+		]) {
+			expect(header).not.toContain(routeLink);
+		}
+		expect(page.indexOf("</header>")).toBeLessThan(
+			page.indexOf('data-platform-nav="primary"'),
+		);
+	});
+
+	it("Given reduced motion and no JS, when the compact waterline renders, then the logo vessel and every wave stay visible with transforms settled", () => {
+		const nonce = "svg-system-test-nonce-12345" as KernelDocumentNonce;
+		const header = extractBrandHeader(
+			renderPage("<p>Authenticated fixture</p>", {
+				nonce,
+				user: {
+					id: "user_svg_system",
+					email: "svg-system@example.com",
+					avatar_preset: "aurora-grid",
+				},
+			}),
+		);
+		const waterlineCss = CSS.slice(
+			CSS.indexOf(".shiplet-waterline {"),
+			CSS.indexOf(".shiplet-main {"),
+		);
+		const reducedMotionRule = CSS.slice(
+			CSS.indexOf("@media (prefers-reduced-motion: reduce)"),
+			CSS.indexOf(
+				"/* --------------------------------------------------------------------------\n   Shell",
+				CSS.indexOf("@media (prefers-reduced-motion: reduce)"),
+			),
+		);
+
+		expect(header).toContain("shiplet-waterline-svg");
+		expect(header).not.toContain(" hidden");
+		expect(waterlineCss).not.toContain("data:image/svg+xml");
+		expect(waterlineCss).toContain("color: var(--mark-harbor);");
+		expect(CSS).toContain(
+			"html:not(.js) .shiplet-waterline-svg :is(.shiplet-waterline-wave, .shiplet-waterline-avatar-ripple) { animation: none; transform: none; }",
+		);
+		expect(CSS).toContain(
+			"html:not(.js) .shiplet-brand-mark :is(.shiplet-mark-vessel, .shiplet-mark-water-motion) { animation: none; transform: none; }",
+		);
+		expect(reducedMotionRule).toContain(
+			".shiplet-waterline-svg :is(.shiplet-waterline-wave, .shiplet-waterline-avatar-ripple) { transform: none; }",
+		);
+		expect(reducedMotionRule).toContain(
+			".shiplet-brand-mark :is(.shiplet-mark-vessel, .shiplet-mark-water-motion) { transform: none; }",
+		);
+		expect(reducedMotionRule).toContain(
+			".shiplet-waterline-svg .shiplet-waterline-drawn { stroke-dashoffset: 0; }",
+		);
+	});
+
+	it("Given the compact header at mobile width, when decoration is simplified, then tertiary and control-adjacent detail is pruned without hiding controls or the logo vessel", () => {
+		const mobileRules = CSS.slice(CSS.indexOf("@media (max-width: 640px)"));
+
+		expect(mobileRules).toContain(
+			".shiplet-waterline-tertiary { display: none; }",
+		);
+		expect(mobileRules).toContain(
+			".shiplet-waterline-mobile-hide { display: none; }",
+		);
+		expect(mobileRules).toContain(
+			".shiplet-brand-wake-extension { width: 64px; }",
+		);
+		for (const mustRemainVisible of [
+			".shiplet-brand-mark { display: none;",
+			".shiplet-brand-nav { display: none;",
+			".shiplet-header-avatar { display: none;",
+			".shiplet-waterline-primary { display: none;",
+			".shiplet-mark-vessel { display: none;",
+		]) {
+			expect(mobileRules).not.toContain(mustRemainVisible);
+		}
+		expect(mobileRules).toContain(".shiplet-brand-inner { padding: 6px 16px;");
+		expect(mobileRules).toContain(
+			".shiplet-brand-nav a { min-height: 44px;",
+		);
+	});
+
+	it("Given the compact header CSS, when it is inspected for product-shell constraints, then it keeps the header under title-screen scale", () => {
+		const shellCss = CSS.slice(
+			CSS.indexOf("Shell: brand header over a living waterline"),
+			CSS.indexOf(".platform-nav"),
+		);
+
+		expect(extractCssRule(".shiplet-brand-header")).toContain(
+			"max-height: 76px;",
+		);
+		expect(extractCssRule(".shiplet-brand-inner")).toContain(
+			"min-height: 64px;",
+		);
+		expect(extractCssRule(".shiplet-brand-lockup")).toContain("width: 50px;");
+		expect(extractCssRule(".shiplet-brand-mark")).toContain("width: 40px;");
+		expect(shellCss).not.toMatch(
+			/\b(?:height|min-height):\s*(?:100vh|100dvh|100svh|[8-9]\dvh)/,
+		);
+		expect(shellCss).not.toContain("hero");
+		expect(shellCss).not.toContain("title-screen");
 	});
 
 	it("Given the wide harbor scene, when it scales to a narrow viewport, then its full original composition is contained inside an explicit viewport", () => {
@@ -82,6 +314,41 @@ describe("Shiplet SVG system", () => {
 		expect(CSS).toContain(
 			".harbor-scene-svg .scene-fine-detail { stroke-width: 1.45px; }",
 		);
+	});
+
+	it("Given the signed-out harbor settles, when its working details resolve, then sparse craft, dock, beacon, and water cues add depth without changing the scene's identity", () => {
+		for (const detailGroup of [
+			"scene-dock-mooring",
+			"scene-beacon-masonry",
+			"scene-vessel-working-details",
+			"scene-beacon-water-glints",
+		]) {
+			expect(HARBOR_SCENE_SVG).toContain(detailGroup);
+		}
+
+		expect(HARBOR_SCENE_SVG).toContain(
+			'class="scene-dock-mooring scene-tertiary-detail"',
+		);
+		expect(HARBOR_SCENE_SVG).toContain(
+			'class="scene-beacon-masonry scene-tertiary-detail"',
+		);
+		expect(HARBOR_SCENE_SVG).toContain(
+			'class="scene-vessel-working-details scene-fine-detail"',
+		);
+		expect(HARBOR_SCENE_SVG).toContain(
+			'class="scene-beacon-water-glints scene-beacon-reflection"',
+		);
+		expect(HARBOR_SCENE_SVG).toContain("scene-structural-line");
+		expect(HARBOR_SCENE_SVG).toContain('pathLength="1"');
+
+		const mobileRules = CSS.slice(CSS.indexOf("@media (max-width: 640px)"));
+		expect(mobileRules).toContain(
+			".harbor-scene-svg .scene-tertiary-detail { display: none; }",
+		);
+		expect(CSS).toContain(
+			"html:not(.js) .draw-path { stroke-dashoffset: 0; }",
+		);
+		expect(HARBOR_SCENE_SVG).not.toContain("scene-logo-insignia");
 	});
 
 	it("Given the signed-out landing page, when its hero occupies a desktop viewport, then the original scene and centered card form a compact stacked stage", () => {

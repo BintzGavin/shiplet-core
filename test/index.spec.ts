@@ -1375,12 +1375,15 @@ describe("Shiplet", () => {
       expect(html).toMatch(
         /\.docs-page \.settings-nav a\s*\{[^}]*white-space:\s*normal[^}]*\}/s,
       );
-      expect(extractCssRule(html, ".shiplet-brand-lockup")).toContain(
-        "min-height: 44px",
+      const brandLockupRule = extractCssRule(html, ".shiplet-brand-lockup");
+      const brandLockupMinHeight = Number(
+        brandLockupRule.match(/min-height:\s*(\d+)px/)?.[1],
       );
-      expect(extractCssRule(html, ".shiplet-brand-lockup")).toContain(
-        "min-width: 44px",
+      const brandLockupMinWidth = Number(
+        brandLockupRule.match(/min-width:\s*(\d+)px/)?.[1],
       );
+      expect(brandLockupMinHeight).toBeGreaterThanOrEqual(44);
+      expect(brandLockupMinWidth).toBeGreaterThanOrEqual(44);
     });
 
     it("Given a security-conscious reader, When access and publishing docs are read, Then anonymous visibility and least privilege are exact", async () => {
@@ -4375,10 +4378,44 @@ describe("Shiplet", () => {
     it("should expose the Shiplet brand system in the dashboard", async () => {
       const response = await makeRequest("/");
       const html = await response.text();
+      const header =
+        html.match(
+          /<header class="shiplet-brand-header"[^>]*>[\s\S]*?<\/header>/,
+        )?.[0] || "";
 
       expect(html).toContain("shiplet-brand-shell");
       expect(html).toContain("shiplet-brand-mark");
-      expect(html).toContain("shiplet-brand-mark scene-bob");
+      expect(header.match(/data-header-vessel="primary"/g)).toHaveLength(1);
+      for (const markDetail of [
+        "shiplet-mark-vessel",
+        "shiplet-mark-depth",
+        "shiplet-mark-water-contact",
+        "shiplet-mark-wake",
+        "shiplet-brand-wake-extension",
+      ]) {
+        expect(header).toContain(markDetail);
+      }
+      expect(header).toContain('data-header-variant="authenticated"');
+      expect(header.match(/<svg class="shiplet-waterline-svg"/g)).toHaveLength(
+        1,
+      );
+      for (const waterlineLayer of [
+        "shiplet-waterline-far",
+        "shiplet-waterline-mid",
+        "shiplet-waterline-near",
+        "shiplet-waterline-foam",
+      ]) {
+        expect(header).toContain(waterlineLayer);
+      }
+      for (const authenticatedDetail of [
+        "shiplet-waterline-marker-buoy",
+        "shiplet-waterline-avatar-ripple",
+      ]) {
+        expect(header).toContain(authenticatedDetail);
+      }
+      expect(header).not.toContain("shiplet-waterline-vessel");
+      expect(header).not.toContain("shiplet-waterline-pilot-skiff");
+      expect(header).not.toContain("shiplet-waterline-distant-vessel");
       expect(html.indexOf("shiplet-waterline")).toBeLessThan(
         html.indexOf("</header>"),
       );
@@ -4406,39 +4443,62 @@ describe("Shiplet", () => {
       const avatarCssEnd = html.indexOf("\n}", avatarCssStart);
       const avatarCss = html.slice(avatarCssStart, avatarCssEnd);
       expect(avatarCss).toContain("position: relative;");
-      expect(avatarCss).toContain("z-index: 3;");
-      expect(avatarCss).toContain("transform: translateY(10px);");
-      expect(html).toContain("@keyframes harbor-header-bob");
+      expect(avatarCss).toContain("z-index: 4;");
+      expect(avatarCss).toContain("width: 44px;");
+      expect(avatarCss).toContain("height: 44px;");
+      expect(avatarCss).toContain("background: var(--surface-sunken);");
+      const slowMotionNames = [
+        "shiplet-header-wake-shimmer",
+        "shiplet-waterline-far-drift",
+        "shiplet-waterline-mid-drift",
+        "shiplet-waterline-near-drift",
+        "shiplet-waterline-foam-drift",
+        "shiplet-waterline-buoy-drift",
+        "shiplet-waterline-avatar-ripple",
+      ];
+      for (const animationName of slowMotionNames) {
+        const keyframeStart = html.indexOf(`@keyframes ${animationName}`);
+        const nextKeyframe = html.indexOf("@keyframes", keyframeStart + 1);
+        const keyframe = html.slice(
+          keyframeStart,
+          nextKeyframe === -1 ? undefined : nextKeyframe,
+        );
+        expect(keyframe).toContain("transform:");
+        expect(keyframe).not.toContain("background-");
+        expect(keyframe).not.toContain("opacity:");
+      }
       expect(html).toContain(
-        ".shiplet-header-avatar { animation: harbor-header-bob 5.8s ease-in-out infinite; }",
+        ".shiplet-brand-header .shiplet-mark-water-motion { animation: shiplet-header-wake-shimmer 6.4s ease-in-out -1.7s infinite; }",
       );
       const waterlineCssStart = html.indexOf(".shiplet-waterline {");
-      const waterlineCssEnd = html.indexOf(
-        "background-repeat",
-        waterlineCssStart,
-      );
+      const waterlineCssEnd = html.indexOf(".shiplet-main {", waterlineCssStart);
       const waterlineCss = html.slice(waterlineCssStart, waterlineCssEnd);
-      expect(waterlineCss.match(/data:image\/svg\+xml/g)).toHaveLength(4);
-      expect(waterlineCss.match(/stroke='%232f6e88'/g)).toHaveLength(4);
-      const waveTileWidths = Array.from(
-        waterlineCss.matchAll(/%3Csvg[^%]+width='(\d+)'/g),
-        ([, width]) => Number(width),
-      );
-      expect(waveTileWidths).toEqual([56, 42, 28, 70]);
-      for (const width of waveTileWidths) {
-        expect(840 % width).toBe(0);
+      expect(waterlineCss).toContain("height: 34px;");
+      expect(waterlineCss).toContain("color: var(--mark-harbor);");
+      expect(waterlineCss).not.toContain("data:image/svg+xml");
+      for (const waterlineColorRule of [
+        ".shiplet-waterline-far { color: var(--mark-harbor);",
+        ".shiplet-waterline-mid { color: var(--mark-harbor);",
+        ".shiplet-waterline-near { color: var(--mark-harbor);",
+        ".shiplet-waterline-marker-buoy .shiplet-waterline-buoy-body { fill: var(--action); stroke: var(--action);",
+        ".shiplet-waterline-foam { color: color-mix(in oklch, var(--surface), var(--mark-harbor) 24%);",
+      ]) {
+        expect(waterlineCss).toContain(waterlineColorRule);
       }
-      expect(waterlineCss).not.toContain("%23c2502f");
-      expect(html).toContain("height: 28px;");
       expect(html).toContain(
-        "background-position: 0 0, 8px 6px, 16px 12px, 24px 18px;",
-      );
-      expect(html).toContain("@keyframes waterline-drift {");
-      expect(html).toContain(
-        "to { background-position: -840px 0, -832px 6px, -824px 12px, -816px 18px; }",
+        "html:not(.js) .shiplet-waterline-svg :is(.shiplet-waterline-wave, .shiplet-waterline-avatar-ripple) { animation: none; transform: none; }",
       );
       expect(html).toContain(
-        ".shiplet-waterline { animation: waterline-drift 210s linear infinite; }",
+        "html:not(.js) .shiplet-brand-mark :is(.shiplet-mark-vessel, .shiplet-mark-water-motion) { animation: none; transform: none; }",
+      );
+      expect(html).toContain(
+        ".shiplet-waterline-svg :is(.shiplet-waterline-wave, .shiplet-waterline-avatar-ripple) { transform: none; }",
+      );
+      expect(html).toContain(
+        ".shiplet-brand-mark :is(.shiplet-mark-vessel, .shiplet-mark-water-motion) { transform: none; }",
+      );
+      expect(html).toContain(
+        ".shiplet-waterline-svg .shiplet-waterline-drawn { stroke-dashoffset: 0; }",
       );
       expect(html).not.toContain("translate: 0 22px;");
       expect(html).not.toContain("waterline-boat");
