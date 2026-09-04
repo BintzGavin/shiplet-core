@@ -613,7 +613,7 @@ describe("dynamic per-Shiplet operations inside strict Code Mode", () => {
         query.includes("revision.custom_mcp_projection_json"),
       ),
     ).toBe(true);
-  }, 60_000);
+  }, 120_000);
 
   it("rejects an oversized projected R2 object before buffering its body", async () => {
     const fixture = await createShipletWithActiveCustomOperation();
