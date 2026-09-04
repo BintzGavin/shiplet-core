@@ -18,6 +18,14 @@ The repository contains no credential or workflow capable of deploying
 Shiplet.cc. Its checked-in Wrangler files use synthetic, user-replaceable
 resources and have no Shiplet.cc route.
 
+## Canonical source and production releases
+
+This repository owns Shiplet application changes and records maintainer
+history. Operators promote a production release only after the private
+operations repository pins its protected tag and full commit SHA. Public CI
+verifies commits and has no credentials or configuration that can deploy
+Shiplet.cc.
+
 ## Supported local verification
 
 Use Node.js 22.12.0 or newer:
