@@ -9404,6 +9404,51 @@ describe("Shiplet", () => {
   });
 
   describe("Dashboard API", () => {
+    it("Given an existing account, When AuthKit returns an organization unknown to Shiplet, Then login succeeds without granting access to that organization", async () => {
+      const email = `unknown-auth-org-${crypto.randomUUID()}@example.com`;
+      const userId = `user_existing_${crypto.randomUUID().replaceAll("-", "")}`;
+      const createResponse = await requestHelper("/api/organizations", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "x-shiplet-user-id": userId,
+          "x-shiplet-user-email": email,
+        },
+        body: JSON.stringify({ name: "Existing workspace" }),
+      });
+      expect(createResponse.status).toBe(201);
+      const { organization } = (await createResponse.json()) as {
+        organization: { id: string };
+      };
+      const unknownOrganizationId = `org_external_${crypto.randomUUID()}`;
+      const callback = await requestHelper(
+        `/auth/callback?code=${encodeURIComponent(
+          `test-code:${unknownOrganizationId}:${encodeURIComponent(email)}`,
+        )}`,
+        { redirect: "manual" },
+      );
+      expect(callback.status).toBe(302);
+      const identityResponse = await requestHelper("/api/me", {
+        headers: { cookie: cookieHeaderFromResponse(callback) },
+      });
+      expect(identityResponse.status).toBe(200);
+      const identity = (await identityResponse.json()) as {
+        user: { id: string };
+      };
+      expect(identity.user.id).toBe(userId);
+      const db = (env as unknown as TestEnv).DB;
+      const memberships = await db.prepare(
+        "SELECT organization_id, role FROM organization_memberships WHERE user_id = ?",
+      ).bind(userId).all<{ organization_id: string; role: string }>();
+      expect(memberships.results).toEqual([
+        { organization_id: organization.id, role: "admin" },
+      ]);
+      const unknownOrganization = await db.prepare(
+        "SELECT id FROM organizations WHERE id = ?",
+      ).bind(unknownOrganizationId).first();
+      expect(unknownOrganization).toBeNull();
+    });
+
     it("preserves an administrator role when WorkOS returns the active organization", async () => {
       const email = "owner-preserve@example.com";
       const userId = "user_owner-preserve-example-com";

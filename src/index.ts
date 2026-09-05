@@ -5251,16 +5251,24 @@ async function reconcilePendingInvitationsForUser(
   },
 ) {
   const email = workosUser.email.toLowerCase();
+  // AuthKit can select an organization outside this Shiplet instance. Only
+  // reconcile memberships for organizations already owned by this instance;
+  // an unrelated provider organization must not block the user's login.
+  const organizationId =
+    options.organizationId &&
+    (await getOrganizationById(env.DB, options.organizationId))
+      ? options.organizationId
+      : undefined;
   const user = await syncAuthenticatedWorkOSUser(
     env,
     workosUser,
-    options.organizationId,
+    organizationId,
   );
 
-  if (options.organizationId) {
+  if (organizationId) {
     await ensureOrganizationMembershipRecord(env.DB, {
-      id: `om_${options.organizationId}_${user.id}`,
-      organization_id: options.organizationId,
+      id: `om_${organizationId}_${user.id}`,
+      organization_id: organizationId,
       user_id: user.id,
       role: "member",
       created_on: timestamps.now(),
@@ -5272,7 +5280,7 @@ async function reconcilePendingInvitationsForUser(
     (await findPendingInvitationsForUser(env, {
       invitationId: options.invitationId,
       invitationToken: options.invitationToken,
-      organizationId: options.organizationId,
+      organizationId,
       email,
     }))
   ).filter((invitation) => invitation.email.trim().toLowerCase() === email);
