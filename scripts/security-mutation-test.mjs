@@ -1074,10 +1074,10 @@ const mutations = [
     to: "      true",
   },
   {
-    name: "temporary provider effect bypasses immutable intent audit",
-    file: "src/cloudflare-support/temporary-effect-fence.ts",
-    from: "  await input.audit();\n  return input.effect();",
-    to: "  await Promise.resolve();\n  return input.effect();",
+    name: "temporary provider reservation bypasses immutable intent audit",
+    file: "src/cloudflare-support/d1-temporary-operations.ts",
+    from: "    results = await input.db.batch(statements);\n  } catch (error) {\n    const consumed = await input.db\n      .prepare(\n        `SELECT 1 AS consumed FROM temporary_grant_consumptions\n         WHERE grant_digest = ? OR handle_digest = ? LIMIT 1`,\n      )\n      .bind(input.grant.grantDigest, input.grant.handleDigest)\n      .first<{ consumed: number }>();\n    if (consumed?.consumed === 1) {\n      return { ok: false as const, reason: \"temporary_grant_replayed\" };\n    }\n    throw error;\n  }\n  if (results.some((result) => result.meta.changes !== 1)) {\n    throw new Error(\"temporary_operation_intent_transaction_failed\");",
+    to: "    results = await input.db.batch(statements.slice(0, -1));\n  } catch (error) {\n    const consumed = await input.db\n      .prepare(\n        `SELECT 1 AS consumed FROM temporary_grant_consumptions\n         WHERE grant_digest = ? OR handle_digest = ? LIMIT 1`,\n      )\n      .bind(input.grant.grantDigest, input.grant.handleDigest)\n      .first<{ consumed: number }>();\n    if (consumed?.consumed === 1) {\n      return { ok: false as const, reason: \"temporary_grant_replayed\" };\n    }\n    throw error;\n  }\n  if (results.some((result) => result.meta.changes !== 1)) {\n    throw new Error(\"temporary_operation_intent_transaction_failed\");",
   },
   {
     name: "revoked provider credential is lost when cleanup indexing fails",
@@ -1164,7 +1164,8 @@ function copyHarness(destination) {
     "package.json",
     "package-lock.json",
     "tsconfig.json",
-    "vite.config.mts",
+    "openapi.json",
+    "vitest.config.mts",
     "vitest.security-mutation.config.mts",
     "wrangler.jsonc",
     "wrangler.test.jsonc",
@@ -1176,81 +1177,15 @@ function copyHarness(destination) {
   cpSync(path.join(repoRoot, "src"), path.join(destination, "src"), {
     recursive: true,
   });
+  cpSync(path.join(repoRoot, "public"), path.join(destination, "public"), {
+    recursive: true,
+  });
   cpSync(path.join(repoRoot, "workers"), path.join(destination, "workers"), {
     recursive: true,
   });
-  mkdirSync(path.join(destination, "test"), { recursive: true });
-  cpSync(
-    path.join(repoRoot, "test/helpers"),
-    path.join(destination, "test/helpers"),
-    { recursive: true },
-  );
-  cpSync(
-    path.join(repoRoot, "test/security-model.spec.ts"),
-    path.join(destination, "test/security-model.spec.ts"),
-  );
-  for (const testFile of [
-    "kernel-document-security.spec.ts",
-    "auth-consent.spec.ts",
-    "mcp-agent-registration.spec.ts",
-    "code-mode-custom-mcp.spec.ts",
-    "custom-mcp-authority-policy.spec.ts",
-    "custom-mcp-contract.spec.ts",
-    "d1-capability-kernel.spec.ts",
-    "d1-custom-mcp-activation-fence.spec.ts",
-    "d1-custom-mcp-dispatcher.spec.ts",
-    "deployment-api.spec.ts",
-    "deployment-status-api.spec.ts",
-    "cloudflare-oauth-api.spec.ts",
-    "d1-cloudflare-oauth-commit.spec.ts",
-    "oauth-finalization-delivery.spec.ts",
-    "oauth-crash-consistency.spec.ts",
-    "d1-cloudflare-revocation-index.spec.ts",
-    "d1-deployment-repository.spec.ts",
-    "d1-temporary-operation-recovery.spec.ts",
-    "deployment-orchestration.spec.ts",
-    "cloudflare-revocation-reconciler.spec.ts",
-    "cloudflare-temporary-readiness.spec.ts",
-    "cloudflare-support-health.spec.ts",
-    "customer-static-runtime-gate.spec.ts",
-    "support-service-attestation.spec.ts",
-    "support-service-attestation-api.spec.ts",
-    "managed-platform-reservation-api.spec.ts",
-    "managed-deployment-broker.spec.ts",
-    "managed-runtime-kernel.spec.ts",
-    "managed-runtime-gateway-contract.spec.ts",
-    "managed-runtime-state.spec.ts",
-    "temporary-claim-api.spec.ts",
-    "temporary-effect-fence.spec.ts",
-    "temporary-claim-delivery-recovery.spec.ts",
-    "temporary-operation-reconciler.spec.ts",
-    "cloudflare-support-services.spec.ts",
-    "revision-deployment-coordinator.spec.ts",
-    "trusted-review-confirmation-api.spec.ts",
-    "kernel-admin-audit.spec.ts",
-    "custom-workflow-api.spec.ts",
-    "cli.spec.ts",
-    "cli-browser-session-api.spec.ts",
-    "review-session-recovery.spec.ts",
-    "revision-api.spec.ts",
-    "ownership-page.spec.ts",
-    "trusted-review-host.spec.ts",
-    "timing-safe-secret.spec.ts",
-    "wordpress-embed.spec.ts",
-    "workos-invitation-security.spec.ts",
-  ]) {
-    cpSync(
-      path.join(repoRoot, "test", testFile),
-      path.join(destination, "test", testFile),
-    );
-  }
-  cpSync(
-    path.join(repoRoot, "test/fixtures"),
-    path.join(destination, "test/fixtures"),
-    {
-      recursive: true,
-    },
-  );
+  cpSync(path.join(repoRoot, "test"), path.join(destination, "test"), {
+    recursive: true,
+  });
   symlinkSync(
     path.join(repoRoot, "node_modules"),
     path.join(destination, "node_modules"),
@@ -1271,15 +1206,31 @@ function applyMutation(workdir, mutation) {
 }
 
 function runSecurityTests(workdir) {
-  execFileSync(
-    "npx",
-    ["vitest", "run", "--config", "vitest.security-mutation.config.mts"],
-    {
-      cwd: workdir,
-      stdio: "pipe",
-      timeout: 90_000,
-    },
-  );
+  const reportPath = path.join(workdir, "mutation-results.json");
+  let failed = false;
+  try {
+    execFileSync(
+      "npx",
+      ["vitest", "run", "--config", "vitest.security-mutation.config.mts", "--reporter=json", "--outputFile", reportPath],
+      { cwd: workdir, stdio: "pipe", timeout: 90_000 },
+    );
+  } catch (error) {
+    if (error.status !== 1 || !existsSync(reportPath)) throw error;
+    failed = true;
+  }
+  const report = JSON.parse(readFileSync(reportPath, "utf8"));
+  if (report.numTotalTests === 0 || (failed && report.numFailedTests === 0)) {
+    throw new Error(`Security tests failed to execute; this is not a killed mutant\n${report.testResults.map((suite) => suite.message).filter(Boolean).join("\n")}`);
+  }
+  if (report.numFailedTests > 0) {
+    for (const suite of report.testResults) {
+      for (const test of suite.assertionResults ?? []) {
+        if (test.status === "failed") console.log(`  Failed: ${test.fullName}`);
+      }
+    }
+    return false;
+  }
+  return true;
 }
 
 const selectedMutations = mutations.filter(
@@ -1312,6 +1263,16 @@ if (process.argv.includes("--preflight-only")) {
   process.exit(0);
 }
 
+const baselineWorkdir = path.join(tmpdir(), `shiplet-security-baseline-${process.pid}`);
+mkdirSync(baselineWorkdir, { recursive: true });
+try {
+  copyHarness(baselineWorkdir);
+  if (!runSecurityTests(baselineWorkdir)) throw new Error("Security mutation baseline must pass before applying mutants");
+  console.log("Security mutation baseline passed.");
+} finally {
+  rmSync(baselineWorkdir, { recursive: true, force: true });
+}
+
 const survivors = [];
 
 for (const mutation of selectedMutations) {
@@ -1322,17 +1283,10 @@ for (const mutation of selectedMutations) {
   rmSync(workdir, { recursive: true, force: true });
   mkdirSync(workdir, { recursive: true });
 
-  let mutationApplied = false;
   try {
     copyHarness(workdir);
     applyMutation(workdir, mutation);
-    mutationApplied = true;
-    runSecurityTests(workdir);
-    survivors.push(mutation.name);
-    console.log(`SURVIVED ${mutation.name}`);
-  } catch (error) {
-    if (!mutationApplied) throw error;
-    if (error?.status === 0) {
+    if (runSecurityTests(workdir)) {
       survivors.push(mutation.name);
       console.log(`SURVIVED ${mutation.name}`);
     } else {

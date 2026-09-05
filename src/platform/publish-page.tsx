@@ -12,10 +12,6 @@ import { createStore } from "zustand/vanilla";
 import { PlatformLiveUpdatesScript } from "./live-updates";
 import { PlatformNav } from "./navigation";
 import { ExternalUrlMetadataAutofillScript } from "./external-url-metadata-autofill";
-import {
-	PlatformStartShellStateScript,
-	platformStartShellAttributes,
-} from "./start-shell-contract";
 import { DashboardRuntimeScript } from "../render";
 import {
 	kernelScriptNonceAttribute,
@@ -91,7 +87,6 @@ export function BuildPlatformPublishPage(options: PublishPageOptions) {
 	queryKey: DASHBOARD_QUERY_KEY,
 	user: options.user,
 })}</script>
-${PlatformStartShellStateScript("publish", options.nonce)}
 ${PlatformLiveUpdatesScript(options.nonce)}
 ${DashboardRuntimeScript(options.nonce)}
 ${ExternalUrlMetadataAutofillScript(options.nonce)}`;
@@ -129,7 +124,6 @@ function PublishPage(props: {
 			data-platform-state="zustand"
 			data-dashboard-endpoint="/api/dashboard"
 			data-live-updates="polling"
-			{...platformStartShellAttributes("publish")}
 		>
 			<header className="app-page-topbar">
 				<div className="app-page-title">

@@ -6,7 +6,6 @@ import {
 	feedbackQueryKey,
 } from "./feedback-app";
 import { PlatformLiveUpdatesScript } from "./live-updates";
-import { PlatformStartShellStateScript } from "./start-shell-contract";
 import {
 	normalizeFeedbackFilters,
 	type FeedbackFilters,
@@ -52,7 +51,6 @@ export function BuildPlatformFeedbackPage(options: FeedbackPageOptions) {
 	initialUi,
 	queryKey: feedbackQueryKey(filters),
 })}</script>
-${PlatformStartShellStateScript("feedback", options.nonce)}
 <script data-shiplet-kernel-script="v1" ${kernelScriptNonceAttribute(options.nonce)} type="module" src="${FEEDBACK_CLIENT_ASSET}"></script>
 ${PlatformLiveUpdatesScript(options.nonce)}`;
 }

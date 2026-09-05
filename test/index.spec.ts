@@ -62,39 +62,6 @@ const AUTH_HEADERS = {
   "x-shiplet-user-email": "test@example.com",
 };
 
-function expectPlatformStartShell(html: string, currentRoute: string) {
-  expect(html).toContain('data-platform-start-shell="tanstack-start"');
-  expect(html).toContain(`data-platform-start-route="${currentRoute}"`);
-  const stateMatch = html.match(
-    /<script\b[^>]*type="application\/json"[^>]*id="shiplet-platform-start-shell"[^>]*>([\s\S]*?)<\/script>/,
-  );
-  expect(stateMatch?.[1]).toBeTruthy();
-  const state = JSON.parse(stateMatch![1]) as {
-    apiOwner: string;
-    currentRoute: string;
-    routes: Array<{ id: string; path: string; shell: string }>;
-    shell: string;
-  };
-  expect(state).toMatchObject({
-    apiOwner: "hono-worker",
-    currentRoute,
-    shell: "tanstack-start",
-  });
-  expect(state.routes.map((route) => route.path)).toEqual([
-    "/",
-    "/shiplets",
-    "/inbox",
-    "/feedback",
-    "/workspace",
-    "/account",
-    "/access",
-    "/agents",
-  ]);
-  expect(state.routes.every((route) => route.shell === "tanstack-start")).toBe(
-    true,
-  );
-}
-
 async function createTestOrganization(makeRequest: typeof requestHelper) {
   const response = await makeRequest("/api/organizations", {
     method: "POST",
@@ -2679,7 +2646,6 @@ describe("Shiplet", () => {
       expect(html).not.toContain("shiplet-brand-tagline");
       expect(html).toContain('data-platform-app="react-tanstack"');
       expect(html).toContain('data-platform-route="publish"');
-      expectPlatformStartShell(html, "publish");
       expect(html).toContain("shiplet-publish-page");
       expect(html).toContain('class="shiplet-upload-dropzone"');
       expect(html).toContain("projectForm");
@@ -2845,7 +2811,6 @@ describe("Shiplet", () => {
       expect(workspace.status).toBe(200);
       expect(workspaceHtml).toContain('data-platform-app="react-tanstack"');
       expect(workspaceHtml).toContain('data-platform-route="workspace"');
-      expectPlatformStartShell(workspaceHtml, "workspace");
       expect(workspaceHtml).toContain('data-platform-nav="primary"');
       expect(workspaceHtml).toContain("Workspace");
       expect(workspaceHtml).toContain('id="organizationForm"');
@@ -2861,7 +2826,6 @@ describe("Shiplet", () => {
       const accountHtml = await account.text();
       expect(account.status).toBe(200);
       expect(accountHtml).toContain('data-platform-route="account"');
-      expectPlatformStartShell(accountHtml, "account");
       expect(accountHtml).toContain("Profile");
       expect(accountHtml).toContain('id="avatarForm"');
       expect(accountHtml).toContain('id="accountList"');
@@ -2875,7 +2839,6 @@ describe("Shiplet", () => {
       const accessHtml = await access.text();
       expect(access.status).toBe(200);
       expect(accessHtml).toContain('data-platform-route="access"');
-      expectPlatformStartShell(accessHtml, "access");
       expect(accessHtml).toContain("Shiplets and sharing");
       expect(accessHtml).toContain('id="shipletShareForm"');
       expect(accessHtml).toContain('id="projectList"');
@@ -2887,7 +2850,6 @@ describe("Shiplet", () => {
       const agentsHtml = await agents.text();
       expect(agents.status).toBe(200);
       expect(agentsHtml).toContain('data-platform-route="agents"');
-      expectPlatformStartShell(agentsHtml, "agents");
       expect(agentsHtml).toContain("API Keys and MCP");
       expect(agentsHtml).toContain("MCP endpoint");
       expect(agentsHtml).toContain("Copy MCP endpoint");
@@ -3032,7 +2994,6 @@ describe("Shiplet", () => {
       expect(response.status).toBe(200);
       expect(html).toContain('data-platform-app="react-tanstack"');
       expect(html).toContain('data-platform-route="shiplets"');
-      expectPlatformStartShell(html, "shiplets");
       expect(html).toContain("All shiplets");
       expect(html).toContain("shiplet-list-shell");
       expect(html).toContain("shiplet-list-toolbar");
@@ -3072,7 +3033,6 @@ describe("Shiplet", () => {
       expect(html).toContain("shiplet-bulk-actions");
       expect(html).toContain('id="shiplets-platform-root"');
       expect(html).toContain('id="shiplet-platform-shiplets-state"');
-      expect(html).toContain('id="shiplet-platform-start-shell"');
       expect(html).toContain('src="/assets/platform/shiplets.js"');
       expect(html).toContain("shipletSelectAll");
       expect(html).toContain("data-shiplet-select");
@@ -11021,7 +10981,6 @@ describe("Shiplet", () => {
       expect(html).toContain('id="inbox-platform-root"');
       expect(html).toContain('data-platform-app="react-tanstack"');
       expect(html).toContain('data-platform-route="inbox"');
-      expectPlatformStartShell(html, "inbox");
       expect(html).toContain(
         'data-notifications-endpoint="/api/notifications?limit=100"',
       );
@@ -11057,7 +11016,6 @@ describe("Shiplet", () => {
 
       expect(response.status).toBe(200);
       expect(html).toContain('id="feedback-platform-root"');
-      expectPlatformStartShell(html, "feedback");
       expect(html).toContain('data-feedback-hydration="pending"');
       expect(html).toContain('data-feedback-filter-form="true"');
       expect(html).toContain('data-feedback-client-filters="local"');
@@ -11166,7 +11124,6 @@ describe("Shiplet", () => {
       expect(inboxHtml).toContain("/feedback");
       expect(inboxHtml).toContain('data-platform-app="react-tanstack"');
       expect(inboxHtml).toContain('data-platform-route="inbox"');
-      expectPlatformStartShell(inboxHtml, "inbox");
       expect(inboxHtml).toContain('id="inbox-platform-root"');
       expect(inboxHtml).toContain('id="shiplet-platform-inbox-state"');
       expect(inboxHtml).toContain('src="/assets/platform/inbox.js"');
@@ -11181,7 +11138,6 @@ describe("Shiplet", () => {
       expect(feedbackHtml).toContain("mentionedMe");
       expect(feedbackHtml).toContain('data-platform-app="react-tanstack"');
       expect(feedbackHtml).toContain('data-platform-route="feedback"');
-      expectPlatformStartShell(feedbackHtml, "feedback");
       expect(feedbackHtml).toContain('id="feedback-platform-root"');
       expect(feedbackHtml).toContain('id="shiplet-platform-feedback-state"');
       expect(feedbackHtml).toContain('src="/assets/platform/feedback.js"');

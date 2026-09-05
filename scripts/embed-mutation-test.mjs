@@ -22,10 +22,10 @@ const mutations = [
 			'if (false && url.protocol === "http:" && !isLocalHostname(url.hostname)) return null;',
 	},
 	{
-		name: "embedded review accepts the wrong browser origin",
+		name: "embedded feedback accepts the wrong browser origin",
 		file: "src/index.ts",
-		from: "installation && origin === installation.site_origin ? origin : null;",
-		to: "installation && origin !== installation.site_origin ? origin : null;",
+		from: '    if (c.req.header("origin") !== requestOrigin) {',
+		to: '    if (false && c.req.header("origin") !== requestOrigin) {',
 	},
 	{
 		name: "embedded review start skips project access",
@@ -36,12 +36,10 @@ const mutations = [
 			'      project.archived_on ||\n      (false && !(await canViewProject(c.env.DB, project, user.id)))\n    ) {\n      return embedReviewStateResponse(c, "permission_denied", {',
 	},
 	{
-		name: "review codes are not bound to the requested page",
+		name: "review sessions are not bound to the requested page",
 		file: "src/embed.ts",
-		from:
-			"if (input.returnUrl !== undefined && row.return_url !== input.returnUrl) {",
-		to:
-			"if (false && input.returnUrl !== undefined && row.return_url !== input.returnUrl) {",
+		from: "  if (!sessionPage || !requestPage || sessionPage !== requestPage) {",
+		to: "  if (false && (!sessionPage || !requestPage || sessionPage !== requestPage)) {",
 	},
 	{
 		name: "installation secrets are stored in plaintext",
@@ -65,10 +63,10 @@ const mutations = [
 		expectedOccurrences: 2,
 	},
 	{
-		name: "review CORS ignores installation records",
-		file: "src/embed.ts",
-		from: "return Boolean(installation);",
-		to: "return true;",
+		name: "review CORS grants arbitrary browser origins",
+		file: "src/index.ts",
+		from: "    if (originUrl.origin === requestOrigin || originUrl.origin === appOrigin) {",
+		to: "    if (true) {",
 	},
 ];
 
@@ -77,7 +75,8 @@ function copyHarness(destination) {
 		"package.json",
 		"package-lock.json",
 		"tsconfig.json",
-		"vite.config.mts",
+		"openapi.json",
+		"wrangler.test.jsonc",
 		"vitest.config.mts",
 		"wrangler.jsonc",
 		"worker-configuration.d.ts",
@@ -85,6 +84,9 @@ function copyHarness(destination) {
 		cpSync(path.join(repoRoot, entry), path.join(destination, entry));
 	}
 	cpSync(path.join(repoRoot, "src"), path.join(destination, "src"), {
+		recursive: true,
+	});
+	cpSync(path.join(repoRoot, "public"), path.join(destination, "public"), {
 		recursive: true,
 	});
 	mkdirSync(path.join(destination, "test"), { recursive: true });
@@ -112,6 +114,30 @@ function applyMutation(workdir, mutation) {
 	writeFileSync(filePath, source.split(mutation.from).join(mutation.to));
 }
 
+function runEmbedTests(workdir) {
+	const reportPath = path.join(workdir, "mutation-results.json");
+	const result = spawnSync("npx", ["vitest", "run", "test/wordpress-embed.spec.ts", "--reporter=json", "--outputFile", reportPath], {
+		cwd: workdir, encoding: "utf8", timeout: 90_000,
+	});
+	if (result.error) throw result.error;
+	if (result.status !== 0 && result.status !== 1) throw new Error(`Embed tests did not complete: ${result.signal ?? result.status}`);
+	const report = JSON.parse(readFileSync(reportPath, "utf8"));
+	if (report.numTotalTests === 0 || (result.status !== 0 && report.numFailedTests === 0)) {
+		throw new Error(`Embed tests failed to execute; this is not a killed mutant\n${report.testResults.map((suite) => suite.message).filter(Boolean).join("\n")}`);
+	}
+	return report.numFailedTests === 0;
+}
+
+const baselineWorkdir = path.join(tmpdir(), `shiplet-embed-baseline-${process.pid}`);
+mkdirSync(baselineWorkdir, { recursive: true });
+try {
+	copyHarness(baselineWorkdir);
+	if (!runEmbedTests(baselineWorkdir)) throw new Error("Embed mutation baseline must pass before applying mutants");
+	console.log("Embed mutation baseline passed.");
+} finally {
+	rmSync(baselineWorkdir, { recursive: true, force: true });
+}
+
 const survivors = [];
 for (let index = 0; index < mutations.length; index += 1) {
 	const mutation = mutations[index];
@@ -124,16 +150,7 @@ for (let index = 0; index < mutations.length; index += 1) {
 	try {
 		copyHarness(workdir);
 		applyMutation(workdir, mutation);
-		const result = spawnSync(
-			"npx",
-			["vitest", "run", "test/wordpress-embed.spec.ts"],
-			{
-				cwd: workdir,
-				encoding: "utf8",
-				timeout: 90_000,
-			},
-		);
-		if (result.status === 0) {
+		if (runEmbedTests(workdir)) {
 			survivors.push(mutation.name);
 			process.stdout.write(`SURVIVED ${mutation.name}\n`);
 		} else {

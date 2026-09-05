@@ -1,27 +1,10 @@
-import { cloudflareTest } from "@cloudflare/vitest-pool-workers";
 import { defineConfig } from "vitest/config";
+import base from "./vitest.config.mts";
 
 export default defineConfig({
-  envDir: false,
-  plugins: [
-    cloudflareTest({
-      wrangler: { configPath: "./wrangler.test.jsonc" },
-      remoteBindings: false,
-      miniflare: {
-        d1Databases: ["DB"],
-        r2Buckets: ["SHIPLET_ASSETS", "REVIEW_ASSETS"],
-        bindings: {
-          SHIPLET_AUTH_MODE: "test",
-          DISPATCH_NAMESPACE_NAME: "test-namespace",
-          CUSTOM_DOMAIN: "",
-          ACCOUNT_ID: "test-account-id",
-          DISPATCH_NAMESPACE_API_TOKEN: "test-api-token",
-          SHIPLET_BOOTSTRAP_TOKEN: "test-bootstrap-token",
-        },
-      },
-    }),
-  ],
+  ...base,
   test: {
+    ...base.test,
     include: [
       "test/auth-consent.spec.ts",
       "test/code-mode-custom-mcp.spec.ts",
@@ -49,7 +32,6 @@ export default defineConfig({
       "test/managed-runtime-gateway-contract.spec.ts",
       "test/managed-runtime-state.spec.ts",
       "test/temporary-claim-api.spec.ts",
-      "test/temporary-effect-fence.spec.ts",
       "test/temporary-claim-delivery-recovery.spec.ts",
       "test/temporary-operation-reconciler.spec.ts",
       "test/cloudflare-support-services.spec.ts",

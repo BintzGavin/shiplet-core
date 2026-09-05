@@ -11,10 +11,6 @@ import { createStore } from "zustand/vanilla";
 
 import { PlatformLiveUpdatesScript } from "./live-updates";
 import { PlatformNav, type PlatformRoute } from "./navigation";
-import {
-	PlatformStartShellStateScript,
-	platformStartShellAttributes,
-} from "./start-shell-contract";
 import { DashboardRuntimeScript } from "../render";
 import {
 	kernelScriptNonceAttribute,
@@ -81,7 +77,6 @@ export function BuildPlatformSettingsPage(options: SettingsPageOptions) {
 	queryKey,
 	user: options.user,
 })}</script>
-${PlatformStartShellStateScript(route, options.nonce)}
 ${PlatformLiveUpdatesScript(options.nonce)}
 ${DashboardRuntimeScript(options.nonce)}`;
 }
@@ -111,7 +106,6 @@ function SettingsPage(props: {
 			data-platform-route={props.route}
 			data-platform-state="zustand"
 			data-live-updates="polling"
-			{...platformStartShellAttributes(props.route)}
 		>
 			<header className="app-page-topbar">
 				<div className="app-page-title">

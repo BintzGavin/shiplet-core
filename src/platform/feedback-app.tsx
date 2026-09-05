@@ -28,7 +28,6 @@ import {
 	PLATFORM_FEEDBACK_QUERY_KEY,
 	usePlatformCounts,
 } from "./platform-counts";
-import { platformStartShellAttributes } from "./start-shell-contract";
 import type { ReviewFeedbackRecord } from "../review";
 
 export type FeedbackQueryResult = {
@@ -246,7 +245,6 @@ function FeedbackPage(props: {
 			data-platform-route="feedback"
 			data-platform-state="zustand"
 			data-selected-ticket-id={selectedTicketId || ""}
-			{...platformStartShellAttributes("feedback")}
 		>
 			<header className="app-page-topbar">
 				<div className="app-page-title">

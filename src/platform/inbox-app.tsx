@@ -26,7 +26,6 @@ import {
 	PLATFORM_NOTIFICATIONS_QUERY_KEY,
 	usePlatformCounts,
 } from "./platform-counts";
-import { platformStartShellAttributes } from "./start-shell-contract";
 import type { ReviewNotificationRecord } from "../notifications";
 
 export type NotificationsQueryResult = {
@@ -176,7 +175,6 @@ function InboxPage(props: {
 			data-selected-notification-id={selectedNotificationId || ""}
 			data-notifications-endpoint={props.notificationsEndpoint}
 			data-live-updates="polling"
-			{...platformStartShellAttributes("inbox")}
 		>
 			<header className="app-page-topbar">
 				<div className="app-page-title">

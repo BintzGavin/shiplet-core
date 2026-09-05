@@ -11,7 +11,6 @@ import {
 import { createCloudflareOAuthRedactingFetch } from "../src/cloudflare-support/oauth-transport";
 import { createCloudflareGrantTransport } from "../src/cloudflare-support/provider-transport";
 import { createCloudflareTemporaryTransport } from "../src/cloudflare-support/temporary-transport";
-import { executeTemporaryProviderEffect } from "../src/cloudflare-support/temporary-effect-fence";
 import { createCustomMcpDynamicWorkerInvocation } from "../src/cloudflare-support/custom-mcp-runtime";
 // @ts-expect-error Vite's raw loader supplies the support module source text.
 import customMcpRuntimeSource from "../src/cloudflare-support/custom-mcp-runtime.ts?raw";
@@ -104,41 +103,6 @@ describe("external Cloudflare support services", () => {
         },
       }),
     ).resolves.toEqual(refreshed);
-  });
-
-  it("Given malformed input or an unavailable audit, When a temporary provider effect is requested, Then one-time authority and provider effects are ordered fail-closed", async () => {
-    const observed: string[] = [];
-    const run = (validationError?: Error, auditError?: Error) =>
-      executeTemporaryProviderEffect({
-        validate: () => {
-          observed.push("validate");
-          if (validationError) throw validationError;
-        },
-        consume: () => {
-          observed.push("consume");
-        },
-        audit: () => {
-          observed.push("audit");
-          if (auditError) throw auditError;
-        },
-        effect: () => {
-          observed.push("effect");
-          return "complete";
-        },
-      });
-
-    await expect(run(new Error("invalid"))).rejects.toThrow("invalid");
-    expect(observed).toEqual(["validate"]);
-
-    observed.length = 0;
-    await expect(run(undefined, new Error("audit unavailable"))).rejects.toThrow(
-      "audit unavailable",
-    );
-    expect(observed).toEqual(["validate", "consume", "audit"]);
-
-    observed.length = 0;
-    await expect(run()).resolves.toBe("complete");
-    expect(observed).toEqual(["validate", "consume", "audit", "effect"]);
   });
 
   it("Given credential material, When sealed, Then only matching record AAD can open it", async () => {

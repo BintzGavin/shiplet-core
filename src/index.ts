@@ -517,9 +517,8 @@ function isReviewFeedbackApiPath(pathname: string) {
   );
 }
 
-async function allowedReviewCorsOrigin(
+function allowedReviewCorsOrigin(
   env: Env,
-  db: D1Database,
   requestUrl: string,
   origin: string | null,
 ) {
@@ -645,15 +644,13 @@ function hasBearerAuthorization(request: Request) {
   return /^Bearer\s+.+/i.test(request.headers.get("authorization") || "");
 }
 
-async function applyReviewCorsHeaders(
+function applyReviewCorsHeaders(
   headers: Headers,
   env: Env,
-  db: D1Database,
   request: Request,
 ) {
-  const origin = await allowedReviewCorsOrigin(
+  const origin = allowedReviewCorsOrigin(
     env,
-    db,
     request.url,
     request.headers.get("origin"),
   );
@@ -699,50 +696,14 @@ app.use("*", async (c, next) => {
         "content-type,authorization",
       "access-control-max-age": "86400",
     });
-    await applyReviewCorsHeaders(headers, c.env, c.env.DB, c.req.raw);
+    applyReviewCorsHeaders(headers, c.env, c.req.raw);
     return new Response(null, { status: 204, headers });
   }
 
   await next();
   if (c.res.status !== 101) {
     const headers = new Headers(c.res.headers);
-    await applyReviewCorsHeaders(headers, c.env, c.env.DB, c.req.raw);
-    c.res = new Response(c.res.body, {
-      status: c.res.status,
-      statusText: c.res.statusText,
-      headers,
-    });
-  }
-});
-
-app.use("/api/embed/session/exchange", async (c, next) => {
-  const installationId =
-    new URL(c.req.url).searchParams.get("installation_id") || "";
-  const origin = c.req.header("origin") || "";
-  const installation = installationId
-    ? await getEmbedInstallation(c.env.DB, installationId)
-    : null;
-  const allowedOrigin =
-    installation && origin === installation.site_origin ? origin : null;
-
-  if (c.req.method === "OPTIONS") {
-    const headers = new Headers({
-      "access-control-allow-methods": "POST,OPTIONS",
-      "access-control-allow-headers": "content-type",
-      "access-control-max-age": "86400",
-    });
-    if (allowedOrigin) {
-      headers.set("access-control-allow-origin", allowedOrigin);
-      headers.append("vary", "Origin");
-    }
-    return new Response(null, { status: 204, headers });
-  }
-
-  await next();
-  if (allowedOrigin) {
-    const headers = new Headers(c.res.headers);
-    headers.set("access-control-allow-origin", allowedOrigin);
-    headers.append("vary", "Origin");
+    applyReviewCorsHeaders(headers, c.env, c.req.raw);
     c.res = new Response(c.res.body, {
       status: c.res.status,
       statusText: c.res.statusText,
@@ -18750,10 +18711,7 @@ app.get("/api/projects/:projectId/review-presence/ws", async (c) => {
 
     const projectId = c.req.param("projectId");
     const origin = c.req.header("origin");
-    if (
-      origin &&
-      !(await allowedReviewCorsOrigin(c.env, c.env.DB, c.req.url, origin))
-    ) {
+    if (origin && !allowedReviewCorsOrigin(c.env, c.req.url, origin)) {
       return c.text("Review presence origin denied", 403);
     }
 

@@ -7,7 +7,6 @@ import {
 	type DashboardQueryResult,
 } from "./shiplets-app";
 import { PlatformLiveUpdatesScript } from "./live-updates";
-import { PlatformStartShellStateScript } from "./start-shell-contract";
 import type { OrganizationRecord } from "../store";
 import type { Project } from "../types";
 import {
@@ -56,7 +55,6 @@ export function BuildPlatformShipletsListPage(options: ShipletsPageOptions) {
 	initialUi,
 	queryKey: DASHBOARD_QUERY_KEY,
 })}</script>
-${PlatformStartShellStateScript("shiplets", options.nonce)}
 <script data-shiplet-kernel-script="v1" ${kernelScriptNonceAttribute(options.nonce)} type="module" src="${SHIPLETS_CLIENT_ASSET}"></script>
 ${PlatformLiveUpdatesScript(options.nonce)}`;
 }

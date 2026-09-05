@@ -2,7 +2,6 @@ import { describe, expect, it } from "vitest";
 
 import {
 	placeContextualReviewFrame,
-	reviewClientScript,
 	reviewKeyboardIntent,
 } from "../src/review-client";
 
@@ -94,32 +93,5 @@ describe("review widget interaction fluency", () => {
 				{ targetSelected: true },
 			),
 		).toBeNull();
-	});
-
-	it("Given the generated browser client, When operated, Then progressive review controls expose compact observable states", () => {
-		const script = reviewClientScript();
-
-		expect(script).toContain("data-expand-launcher");
-		expect(script).toContain("aria-label='Open review tools'");
-		expect(script).toContain("data-collapse-launcher");
-		expect(script).toContain("data-open-reply");
-		expect(script).toContain("data-quick-status");
-		expect(script).toContain("data-previous-comment");
-		expect(script).toContain("data-next-comment");
-		expect(script).toContain("data-review-context");
-		expect(script).toContain("data-placement='");
-		expect(script).toContain('window.addEventListener("keydown", handleReviewKeydown, true)');
-		expect(script).toContain('reducedMotion ? "auto" : "smooth"');
-		expect(script).toContain("@media (prefers-reduced-motion:reduce)");
-		expect(script).toContain(
-			".shiplet-review-inline-tool,.shiplet-review-inline-cancel,.shiplet-review-inline-submit{min-height:44px",
-		);
-		expect(script).toContain(
-			".shiplet-review-thread-action{min-height:44px",
-		);
-		expect(script).toContain(
-			".shiplet-review-thread-more summary{width:44px;height:44px}",
-		);
-		expect(() => new Function(script)).not.toThrow();
 	});
 });

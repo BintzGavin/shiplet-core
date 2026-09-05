@@ -25,7 +25,6 @@ import {
 } from "./shiplets-state";
 import { PlatformNav } from "./navigation";
 import { usePlatformCounts } from "./platform-counts";
-import { platformStartShellAttributes } from "./start-shell-contract";
 import type { OrganizationRecord } from "../store";
 import type { Project } from "../types";
 
@@ -277,7 +276,6 @@ function ShipletsPage(props: {
 			data-platform-state="zustand"
 			data-dashboard-endpoint={props.dashboardEndpoint}
 			data-live-updates="polling"
-			{...platformStartShellAttributes("shiplets")}
 		>
 			<header className="app-page-topbar">
 				<div className="app-page-title">

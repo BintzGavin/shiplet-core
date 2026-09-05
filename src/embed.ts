@@ -495,8 +495,6 @@ export async function consumeEmbedExchangeCode(
     code: unknown;
     purpose: EmbedExchangePurpose;
     siteOrigin: string;
-    installationId?: string | null;
-    returnUrl?: string;
   },
 ) {
   const code = normalizeString(input.code, 512);
@@ -516,16 +514,6 @@ export async function consumeEmbedExchangeCode(
     .bind(codeHash, input.purpose, now)
     .first<EmbedExchangeCodeRecord>();
   if (!row || row.site_origin !== input.siteOrigin) return null;
-  if (
-    input.installationId !== undefined &&
-    row.installation_id !== input.installationId
-  ) {
-    return null;
-  }
-  if (input.returnUrl !== undefined && row.return_url !== input.returnUrl) {
-    return null;
-  }
-
   const claimed = await db
     .prepare(
       `UPDATE embed_exchange_codes
@@ -657,31 +645,6 @@ export async function revokeEmbedInstallation(
     .bind(revokedOn, installationId)
     .run();
   return result.meta.changes === 1;
-}
-
-export async function isEmbedOriginAllowed(
-  db: D1Database,
-  projectId: string,
-  origin: string,
-) {
-  const normalizedOrigin = normalizeOrigin(origin);
-  if (!normalizedOrigin) return false;
-  try {
-    const installation = await db
-      .prepare(
-        `SELECT id
-				 FROM embed_installations
-				 WHERE project_id = ?
-				   AND site_origin = ?
-				   AND revoked_on IS NULL
-				 LIMIT 1`,
-      )
-      .bind(projectId, normalizedOrigin)
-      .first<{ id: string }>();
-    return Boolean(installation);
-  } catch {
-    return false;
-  }
 }
 
 export function publicEmbedInstallation(installation: EmbedInstallationRecord) {

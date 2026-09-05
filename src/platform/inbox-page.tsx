@@ -7,7 +7,6 @@ import {
 	type InboxAppProps,
 } from "./inbox-app";
 import { PlatformLiveUpdatesScript } from "./live-updates";
-import { PlatformStartShellStateScript } from "./start-shell-contract";
 import type { ReviewNotificationRecord } from "../notifications";
 import {
 	kernelScriptNonceAttribute,
@@ -44,7 +43,6 @@ export function BuildPlatformInboxPage(options: InboxPageOptions) {
 	initialUi: clientProps.initialUi,
 	queryKey: INBOX_QUERY_KEY,
 })}</script>
-${PlatformStartShellStateScript("inbox", options.nonce)}
 <script data-shiplet-kernel-script="v1" ${kernelScriptNonceAttribute(options.nonce)} type="module" src="${INBOX_CLIENT_ASSET}"></script>
 ${PlatformLiveUpdatesScript(options.nonce)}`;
 }

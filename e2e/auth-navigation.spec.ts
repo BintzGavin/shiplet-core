@@ -9,6 +9,23 @@ import {
 } from "./helpers";
 
 test.describe("authentication and dashboard navigation", () => {
+	test("keeps navigation visible and decorative motion stopped on narrow screens with reduced motion", async ({ page, request }) => {
+		const user = testUser("reduced-motion-nav");
+		await createOrganization(request, user);
+		await page.emulateMedia({ reducedMotion: "reduce" });
+		await loginAs(page, user);
+		for (const viewport of [{ width: 1280, height: 800 }, { width: 390, height: 844 }]) {
+			await page.setViewportSize(viewport);
+			await page.goto("/", { waitUntil: "networkidle" });
+			const header = page.getByRole("banner");
+			await expect(header.getByRole("link", { name: "Shiplet home" })).toBeVisible();
+			await expect(header.getByRole("link", { name: "Docs", exact: true })).toBeVisible();
+			await expect(page.getByRole("navigation", { name: "Platform" })).toBeVisible();
+			expect(await header.evaluate((element) => element.getAnimations({ subtree: true }).filter((animation) => animation.playState === "running").length)).toBe(0);
+			expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(viewport.width);
+		}
+	});
+
 	test("keeps protected app routes behind login while docs stays public", async ({
 		request,
 	}) => {

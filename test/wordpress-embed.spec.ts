@@ -414,7 +414,7 @@ describe("WordPress embed installations", () => {
     expect(crossOrigin.status).toBe(400);
   });
 
-  it("connects an exact site origin through a single-use server exchange", async () => {
+  it("connects an exact site origin through a single-use server exchange and rejects expired codes", async () => {
     const { organization } = await createOrganization();
     const { project } = await createExternalProject(organization.id);
     const connected = await connectInstallation(project.id);
@@ -428,6 +428,16 @@ describe("WordPress embed installations", () => {
       }),
     });
     expect(replay.status).toBe(401);
+
+    await (env as Env).DB.prepare(
+      "UPDATE embed_exchange_codes SET used_on = NULL, expires_on = ? WHERE code_hash = ?",
+    ).bind("2000-01-01T00:00:00.000Z", await sha256Hex(connected.code!)).run();
+    const expired = await request("/api/embed/installations/exchange", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ code: connected.code, siteUrl: "https://client.example.com/" }),
+    });
+    expect(expired.status).toBe(401);
 
     const row = await (env as Env).DB.prepare(
       `SELECT secret_hash
@@ -702,7 +712,7 @@ describe("WordPress embed installations", () => {
       comment,
       clientFeedbackId,
     });
-    const created = await request(feedbackUrl, {
+    const feedbackRequest = {
       method: "POST",
       headers: {
         Cookie: cookie,
@@ -716,7 +726,13 @@ describe("WordPress embed installations", () => {
         clientFeedbackId,
         actorUserId: "user_spoofed",
       }),
+    } satisfies RequestInit;
+    const wrongOrigin = await request(feedbackUrl, {
+      ...feedbackRequest,
+      headers: { ...feedbackRequest.headers, Origin: "https://attacker.example" },
     });
+    expect(wrongOrigin.status).toBe(403);
+    const created = await request(feedbackUrl, feedbackRequest);
     expect(created.status).toBe(201);
     const createdBody = (await created.json()) as {
       feedback: { submitted_by_user_id: string; page_url: string };
@@ -761,6 +777,7 @@ describe("WordPress embed installations", () => {
       },
     );
     expect(retiredExchange.status).toBe(410);
+    expect(retiredExchange.headers.get("access-control-allow-origin")).toBeNull();
     const retiredBody = await retiredExchange.text();
     expect(retiredBody).not.toContain("reviewToken");
     expect(retiredBody).not.toContain("presenceToken");
