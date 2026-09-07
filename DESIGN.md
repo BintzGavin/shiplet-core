@@ -164,6 +164,17 @@ preview-comment tools while keeping Shiplet's Harbor Office palette:
 
 ## 8. Motion
 
+- **Compact header**: one 6.4-second swell couples the canonical logo ship,
+  water-contact shadow, and three phase-offset wake releases. The pennant flexes
+  around its mast seam with a faster wind rhythm. Three overscanned wave strips
+  advance by exact tile lengths at different depths, so the water travels
+  continuously without reversing or exposing an edge. No extra ship or logo
+  outline is introduced, and the header and navigation never bob with the art.
+- Header motion uses native CSS transforms and bounded opacity changes, with no
+  animation dependency, frame loop, pointer tracking, or layout animation. A
+  keyboard-accessible pause control remembers the reviewer's preference. Hidden
+  tabs and offscreen headers pause all ambient layers; reduced motion and no-JS
+  render the complete static artwork immediately.
 - One orchestrated page-load (staggered card rise + scene line-draw), then a
   few high-impact moments: the publish stepper's rope drawing between
   bollards, the arrival sail-in + stamp slam on the cockpit, ticket stagger.
