@@ -3,6 +3,7 @@
 
 import { Project, ResourceValues } from "./types";
 import type { SandboxSnapshot } from "./sandbox";
+import { HEADER_WATER_LAYERS, headerWaterFrame } from "./header-water";
 import type { ReviewNotificationRecord } from "./notifications";
 import {
 	kernelScriptNonceAttribute,
@@ -298,20 +299,7 @@ hr.solid {
 @keyframes bob { 0%, 100% { transform: translateY(0) rotate(-1deg); } 50% { transform: translateY(-4px) rotate(1.4deg); } }
 @keyframes drift { from { background-position-x: 0; } to { background-position-x: -56px; } }
 @keyframes shiplet-header-wake-shimmer { 0%, 100% { transform: translateX(0) scaleX(1); } 50% { transform: translateX(1.2px) scaleX(1.025); } }
-/* Each traveling wave advances exactly one tile. Overscan in the SVG keeps
-   both edges covered, including on ultrawide screens and at the loop seam. */
-@keyframes shiplet-waterline-far-drift { from { transform: translateX(0); } to { transform: translateX(-204px); } }
-@keyframes shiplet-waterline-mid-drift { from { transform: translateX(0); } to { transform: translateX(-156px); } }
-@keyframes shiplet-waterline-near-drift { from { transform: translateX(0); } to { transform: translateX(-114px); } }
-@keyframes shiplet-waterline-foam-drift { 0%, 100% { transform: translate(0, 0); } 50% { transform: translate(-18px, -0.7px); } }
-@keyframes shiplet-waterline-buoy-drift { 0%, 100% { transform: translateY(0.5px) rotate(-2deg); } 50% { transform: translateY(-1px) rotate(2deg); } }
 @keyframes shiplet-waterline-avatar-ripple { 0%, 100% { transform: translateX(0) scaleX(1); } 50% { transform: translateX(1.5px) scaleX(1.018); } }
-@keyframes shiplet-vessel-swell {
-  0%, 100% { transform: translate(0, 1.4px) rotate(-1.4deg); }
-  25% { transform: translate(0.6px, -1.6px) rotate(0.65deg); }
-  50% { transform: translate(0, -0.5px) rotate(1.65deg); }
-  75% { transform: translate(-0.4px, 1.9px) rotate(-0.35deg); }
-}
 @keyframes shiplet-pennant-wind {
   0%, 100% { transform: skewY(-3deg) scaleX(0.96); }
   30% { transform: skewY(5deg) scaleX(0.88); }
@@ -330,7 +318,6 @@ hr.solid {
   68% { opacity: 0.28; }
   100% { transform: translateX(22px) scaleX(1.2); opacity: 0; }
 }
-@keyframes shiplet-crest-light { 0%, 100% { opacity: 0.24; } 40% { opacity: 0.85; } 70% { opacity: 0.38; } }
 @keyframes draw { to { stroke-dashoffset: 0; } }
 @keyframes stamp-in { 0% { opacity: 0; transform: scale(1.55) rotate(-8deg); } 62% { opacity: 1; transform: scale(0.95) rotate(-1deg); } 100% { opacity: 1; transform: scale(1) rotate(-2deg); } }
 @keyframes flag-pop { 0% { transform: scale(0); } 70% { transform: scale(1.25); } 100% { transform: scale(1); } }
@@ -478,20 +465,12 @@ html:not(.js) .harbor-scene-svg :is(.scene-cloud-near, .scene-cloud-far, .scene-
   .js .scene-bob { animation: bob 4.5s ease-in-out infinite; }
   .js .scene-gull { animation: gull-drift 6s ease-in-out infinite; }
   .shiplet-brand-header .shiplet-mark-water-motion { animation: shiplet-header-wake-shimmer 6.4s ease-in-out -1.7s infinite; }
-  .shiplet-brand-header .shiplet-mark-vessel { animation: shiplet-vessel-swell 6.4s cubic-bezier(0.45, 0, 0.55, 1) -1.7s infinite; }
   .shiplet-brand-header .shiplet-mark-pennant { animation: shiplet-pennant-wind 2.7s ease-in-out -0.8s infinite; }
   .shiplet-brand-header .shiplet-mark-pennant-light { animation: shiplet-pennant-light 2.7s ease-in-out -0.8s infinite; }
   .shiplet-brand-header .shiplet-mark-depth { animation: shiplet-hull-displacement 6.4s ease-in-out -1.7s infinite; }
   .shiplet-brand-header .shiplet-wake-ring { animation: shiplet-wake-release 6.4s linear -1.7s infinite; }
   .shiplet-brand-header .shiplet-wake-ring:nth-child(2) { animation-delay: -3.83s; }
   .shiplet-brand-header .shiplet-wake-ring:nth-child(3) { animation-delay: -5.96s; }
-  .shiplet-waterline-far { animation: shiplet-waterline-far-drift 40s linear -12s infinite; }
-  .shiplet-waterline-mid { animation: shiplet-waterline-mid-drift 24s linear -8s infinite; }
-  .shiplet-waterline-near { animation: shiplet-waterline-near-drift 12.8s linear -3s infinite; }
-  .shiplet-waterline-foam { animation: shiplet-waterline-foam-drift 12.8s ease-in-out -3s infinite; }
-  .shiplet-waterline-crest { animation: shiplet-crest-light 7.3s ease-in-out -1.9s infinite; }
-  .shiplet-waterline-crest:nth-child(even) { animation-delay: -5.4s; animation-duration: 9.1s; }
-  .shiplet-waterline-marker-buoy { animation: shiplet-waterline-buoy-drift 6.4s ease-in-out -3.2s infinite; }
   .shiplet-waterline-avatar-ripple { animation: shiplet-waterline-avatar-ripple 16s ease-in-out -5s infinite; }
   .scene-go .harbor-scene-svg .draw-path {
     animation: harbor-line-resolve 620ms var(--ease-out) both;
@@ -631,35 +610,10 @@ html:not(.js) .harbor-scene-svg :is(.scene-cloud-near, .scene-cloud-far, .scene-
 .shiplet-brand-wake-extension .shiplet-wake-ring:nth-child(3) { opacity: 0.2; }
 .shiplet-brand-lockup:is(:hover, :focus-visible) .shiplet-brand-wake-extension { opacity: 0.72; }
 
-/* One explicit pause controls the whole harbor. No frame loop, pointer tracking,
-   animated layout, or permanently promoted full-width compositor layers. */
+/* Ambient motion has no playback UI. Visibility and the system motion
+   preference gate both the bounded surface sampler and native detail motion. */
 .shiplet-brand-header[data-header-motion="paused"] [data-harbor-motion] { animation-play-state: paused !important; }
 html:not(.js) .shiplet-brand-header [data-harbor-motion] { animation: none; transform: none; }
-
-.shiplet-header-motion-control {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  flex: 0 0 40px;
-  width: 40px;
-  height: 40px;
-  padding: 0;
-  border: 1px solid transparent;
-  border-radius: 8px;
-  background: transparent;
-  color: var(--text-muted);
-  box-shadow: none;
-  cursor: pointer;
-  transition: background-color 180ms var(--ease-out), color 180ms var(--ease-out);
-}
-.shiplet-header-motion-control:hover { background: var(--surface-sunken); color: var(--text); }
-.shiplet-header-motion-control svg { display: block; width: 16px; height: 16px; }
-.shiplet-header-motion-control .shiplet-motion-play { display: none; }
-.shiplet-header-motion-control[aria-pressed="true"] .shiplet-motion-play { display: block; }
-.shiplet-header-motion-control[aria-pressed="true"] .shiplet-motion-pause { display: none; }
-@media (max-width: 640px) {
-  .shiplet-header-motion-control { flex-basis: 44px; width: 44px; height: 44px; }
-}
 
 .shiplet-brand-nav {
   position: relative;
@@ -928,6 +882,7 @@ html:not(.js) .shiplet-brand-header [data-harbor-motion] { animation: none; tran
   inset: auto -1px 0 -1px;
   height: 34px;
   overflow: hidden;
+  contain: paint;
   pointer-events: none;
   z-index: 2;
   color: var(--mark-harbor);
@@ -943,17 +898,18 @@ html:not(.js) .shiplet-brand-header [data-harbor-motion] { animation: none; tran
 .shiplet-waterline-svg * { vector-effect: non-scaling-stroke; }
 .shiplet-waterline-svg :is(.shiplet-waterline-wave, .shiplet-waterline-marker-buoy, .shiplet-waterline-avatar-ripple) { transform-box: fill-box; transform-origin: center; }
 .shiplet-waterline-svg .shiplet-waterline-marker-buoy { transform-origin: 50% 95%; }
-.shiplet-waterline-drawn { stroke-dasharray: 1; stroke-dashoffset: 0; }
-.shiplet-waterline-far { color: var(--mark-harbor); opacity: 0.3; }
-.shiplet-waterline-mid { color: var(--mark-harbor); opacity: 0.42; }
-.shiplet-waterline-near { color: var(--mark-harbor); opacity: 0.62; }
-.shiplet-waterline-foam { color: color-mix(in oklch, var(--surface), var(--mark-harbor) 24%); opacity: 0.72; }
+.shiplet-waterline-drawn { stroke-dashoffset: 0; }
+.shiplet-waterline-far { color: var(--mark-harbor); opacity: 0.46; }
+.shiplet-waterline-mid { color: var(--mark-harbor); opacity: 0.65; }
+.shiplet-waterline-near { color: var(--mark-harbor); opacity: 0.9; }
+.shiplet-waterline-body { fill: currentColor; fill-opacity: 0.2; stroke: none; }
+.shiplet-waterline-foam { color: color-mix(in oklch, var(--mark-harbor), white 62%); opacity: 0.86; stroke: currentColor; stroke-width: 1.1; }
 .shiplet-waterline-tertiary { opacity: 0.46; }
 .shiplet-waterline-marker-buoy { opacity: 0.78; }
 .shiplet-waterline-marker-buoy .shiplet-waterline-buoy-body { fill: var(--action); stroke: var(--action); }
 .shiplet-waterline-marker-buoy .shiplet-waterline-buoy-stem,
 .shiplet-waterline-marker-buoy .shiplet-waterline-buoy-topmark { fill: none; stroke: var(--mark-ink); stroke-linecap: round; stroke-linejoin: round; }
-.shiplet-brand-header[data-header-variant="public"] .shiplet-waterline-svg { opacity: 0.78; }
+.shiplet-brand-header[data-header-variant="public"] .shiplet-waterline-svg { opacity: 0.88; }
 
 html:not(.js) .shiplet-waterline-svg :is(.shiplet-waterline-wave, .shiplet-waterline-avatar-ripple) { animation: none; transform: none; }
 html:not(.js) .shiplet-waterline-marker-buoy { animation: none; transform: none; }
@@ -2892,14 +2848,15 @@ const BRAND_MARK_SVG = `<svg viewBox="0 0 128 128" xmlns="http://www.w3.org/2000
 
 type HeaderVariant = "authenticated" | "public";
 
-function headerWavePath(y: number, halfPeriod: number, amplitude: number) {
-  const control = halfPeriod / 3;
-  const period = halfPeriod * 2;
-  const tile = `c${control}-${amplitude} ${control * 2}-${amplitude} ${halfPeriod} 0s${control * 2} ${amplitude} ${halfPeriod} 0`;
-  return `M${-2 * period} ${y}${tile.repeat(Math.ceil(1200 / period) + 4)}`;
-}
-
 function HeaderWaterlineSvg(variant: HeaderVariant) {
+  const waterLayers = HEADER_WATER_LAYERS.map(layer => {
+    const frame = headerWaterFrame(1200, 0, layer, 150);
+    return `<g class="shiplet-waterline-wave shiplet-waterline-${layer.name} shiplet-waterline-primary" fill="none" stroke="currentColor" stroke-width="1.15" stroke-linecap="round" stroke-linejoin="round">
+      <path class="shiplet-waterline-body" d="${frame.body}"/>
+      <path class="shiplet-waterline-drawn" d="${frame.surface}"/>
+      <path class="shiplet-waterline-foam" d="${frame.foam}"/>
+    </g>`;
+  }).join("");
   const variantDetail =
     variant === "authenticated"
       ? `<g class="shiplet-waterline-position shiplet-waterline-marker-buoy-position shiplet-waterline-mobile-hide" transform="translate(300 11)">
@@ -2910,30 +2867,16 @@ function HeaderWaterlineSvg(variant: HeaderVariant) {
           <path class="shiplet-waterline-buoy-body" d="M7 17h8l-1.5 6h-5z"/>
         </g>
       </g>
-      <g class="shiplet-waterline-wave shiplet-waterline-avatar-ripple shiplet-waterline-tertiary" data-harbor-motion fill="none" stroke="currentColor" stroke-width="1.25" stroke-linecap="round">
+      <g class="shiplet-waterline-avatar-position"><g class="shiplet-waterline-wave shiplet-waterline-avatar-ripple shiplet-waterline-tertiary" data-harbor-motion fill="none" stroke="currentColor" stroke-width="1.25" stroke-linecap="round">
         <path class="shiplet-waterline-drawn" d="M1018 25c11-3 22-3 33 0s22 3 33 0"/>
         <path class="shiplet-waterline-drawn" d="M1040 31c9-2 18-2 27 0s18 2 27 0"/>
-      </g>`
+      </g></g>`
       : "";
 
   return `<div class="shiplet-waterline" data-waterline-variant="${variant}" aria-hidden="true">
   <svg class="shiplet-waterline-svg" viewBox="0 0 1200 40" preserveAspectRatio="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true" focusable="false" shape-rendering="geometricPrecision">
-    <g class="shiplet-waterline-wave shiplet-waterline-far shiplet-waterline-primary" data-harbor-motion fill="none" stroke="currentColor" stroke-width="1.1" stroke-linecap="round">
-      <path class="shiplet-waterline-drawn" pathLength="1" d="${headerWavePath(15, 102, 7)}"/>
-    </g>
-    <g class="shiplet-waterline-wave shiplet-waterline-mid shiplet-waterline-primary" data-harbor-motion fill="none" stroke="currentColor" stroke-width="1.35" stroke-linecap="round">
-      <path class="shiplet-waterline-drawn" pathLength="1" d="${headerWavePath(22, 78, 6)}"/>
-    </g>
-    <g class="shiplet-waterline-wave shiplet-waterline-near shiplet-waterline-primary" data-harbor-motion fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round">
-      <path class="shiplet-waterline-drawn" pathLength="1" d="${headerWavePath(29, 57, 5)}"/>
-    </g>
+    ${waterLayers}
     ${variantDetail}
-    <g class="shiplet-waterline-wave shiplet-waterline-foam shiplet-waterline-tertiary" data-harbor-motion fill="none" stroke="currentColor" stroke-width="1" stroke-linecap="round">
-      <path class="shiplet-waterline-crest" data-harbor-motion d="M88 35c11-2 22-2 33 0s22 2 33 0"/>
-      <path class="shiplet-waterline-crest" data-harbor-motion d="M304 34c10-2 20-2 30 0s20 2 30 0"/>
-      <path class="shiplet-waterline-crest" data-harbor-motion d="M496 35c12-2 24-2 36 0s24 2 36 0"/>
-      <path class="shiplet-waterline-crest" data-harbor-motion d="M1112 34c10-2 20-2 30 0s20 2 30 0"/>
-    </g>
   </svg>
 </div>`;
 }
@@ -3207,21 +3150,13 @@ function BuildAvatarPresetButtons() {
 }
 
 function BuildHeaderNav(user?: RenderUser | null) {
-  const motionControl = `<button class="shiplet-header-motion-control" type="button" aria-label="Pause header animation" title="Pause header animation" aria-pressed="false" hidden>
-    <svg viewBox="0 0 20 20" aria-hidden="true" focusable="false" fill="currentColor">
-      <path class="shiplet-motion-pause" d="M5 4h3v12H5zm7 0h3v12h-3z"/>
-      <path class="shiplet-motion-play" d="M6 3.5l10 6.5-10 6.5z"/>
-    </svg>
-  </button>`;
   if (user) {
     return `<nav class="shiplet-brand-nav" aria-label="Utility">
-      ${motionControl}
       <a href="/docs">Docs</a>
       <a class="shiplet-header-avatar" href="/account" aria-label="Open account for ${htmlAttribute(user.email || "your account")}" title="Account">${renderAvatar(user)}</a>
     </nav>`;
   }
   return `<nav class="shiplet-brand-nav" aria-label="Utility">
-      ${motionControl}
       <a href="/docs">Docs</a>
     </nav>`;
 }
@@ -3239,28 +3174,84 @@ const EnhanceScript = (nonce: KernelDocumentNonce) => `
 	var reduced = motionPreference && motionPreference.matches;
 	d.addEventListener("DOMContentLoaded", function () {
 		var header = d.querySelector(".shiplet-brand-header");
-		var motionButton = header && header.querySelector(".shiplet-header-motion-control");
-		if (header && motionButton) {
-			var motionPaused = false;
+		var water = header && header.querySelector(".shiplet-waterline-svg");
+		if (header && water) {
+			var sampleWater = ${headerWaterFrame.toString()};
+			var waterModels = ${scriptJson(HEADER_WATER_LAYERS)};
+			var waterNodes = waterModels.map(function (model) {
+				var layer = water.querySelector(".shiplet-waterline-" + model.name);
+				return { surface: layer.querySelector(".shiplet-waterline-drawn"), body: layer.querySelector(".shiplet-waterline-body"), foam: layer.querySelector(".shiplet-waterline-foam") };
+			});
+			var vessel = header.querySelector(".shiplet-mark-vessel");
+			var contact = header.querySelector(".shiplet-mark-water-motion");
+			var depth = header.querySelector(".shiplet-mark-depth");
+			var wake = header.querySelector(".shiplet-brand-wake-extension");
+			var buoy = water.querySelector(".shiplet-waterline-marker-buoy-position");
+			var avatarWater = water.querySelector(".shiplet-waterline-avatar-position");
 			var headerInView = true;
-			try { motionPaused = localStorage.getItem("shiplet-header-motion") === "paused"; } catch (error) {}
+			var suspended = false;
+			var waterWidth = 1200;
+			var waterScale = 0.85;
+			var shipX = 150;
+			var buoyX = 320;
+			var waterTime = 0;
+			var previousFrame = 0;
+			var frameRequest = 0;
+			function drawWater(still) {
+				waterModels.forEach(function (model, index) {
+					var frame = sampleWater(waterWidth, waterTime, model, index === 2 ? buoyX : shipX);
+					var nodes = waterNodes[index];
+					nodes.surface.setAttribute("d", frame.surface);
+					nodes.body.setAttribute("d", frame.body);
+					nodes.foam.setAttribute("d", frame.foam);
+					if (index === 1 && vessel) {
+						var heave = still ? 0 : frame.heave * waterScale;
+						vessel.style.transform = still ? "" : "translateY(" + (heave * 3.2).toFixed(2) + "px) rotate(" + (frame.pitch * 0.5).toFixed(2) + "deg)";
+						if (contact) contact.style.translate = still ? "" : "0 " + (heave * 3.2).toFixed(2) + "px";
+						if (depth) depth.style.translate = still ? "" : "0 " + (heave * 3.2).toFixed(2) + "px";
+						if (wake) wake.style.translate = still ? "" : "0 " + heave.toFixed(2) + "px";
+					}
+					if (index === 2 && buoy) buoy.setAttribute("transform", "translate(" + (buoyX - 11).toFixed(2) + " " + (model.level + frame.heave - 22).toFixed(2) + ")");
+				});
+			}
+			function tickWater(now) {
+				frameRequest = 0;
+				if (header.getAttribute("data-header-motion") !== "running") return;
+				// A capped delta avoids a jump after an inactive page or a slow frame.
+				if (previousFrame) waterTime += Math.min((now - previousFrame) / 1000, 0.05);
+				previousFrame = now;
+				drawWater(false);
+				frameRequest = requestAnimationFrame(tickWater);
+			}
 			function syncHeaderMotion() {
 				var prefersStill = !motionPreference || motionPreference.matches;
-				header.setAttribute("data-header-motion", motionPaused || prefersStill || d.hidden || !headerInView ? "paused" : "running");
-				motionButton.hidden = prefersStill;
-				motionButton.setAttribute("aria-pressed", String(motionPaused));
-				var label = motionPaused ? "Resume header animation" : "Pause header animation";
-				motionButton.setAttribute("aria-label", label);
-				motionButton.setAttribute("title", label);
+				var paused = prefersStill || d.hidden || !headerInView || suspended;
+				header.setAttribute("data-header-motion", paused ? "paused" : "running");
+				if (paused) {
+					cancelAnimationFrame(frameRequest);
+					frameRequest = 0;
+					previousFrame = 0;
+					if (prefersStill) drawWater(true);
+				} else if (!frameRequest) frameRequest = requestAnimationFrame(tickWater);
 			}
-			motionButton.addEventListener("click", function () {
-				motionPaused = !motionPaused;
-				try { localStorage.setItem("shiplet-header-motion", motionPaused ? "paused" : "running"); } catch (error) {}
-				syncHeaderMotion();
-			});
+			function measureWater() {
+				var bounds = water.getBoundingClientRect();
+				var mark = header.querySelector(".shiplet-brand-mark").getBoundingClientRect();
+				waterWidth = Math.max(1, Math.round(bounds.width));
+				waterScale = bounds.height / 40;
+				shipX = mark.left + mark.width / 2 - bounds.left;
+				buoyX = Math.max(shipX + 170, waterWidth * 0.25);
+				water.setAttribute("viewBox", "0 0 " + waterWidth + " 40");
+				if (avatarWater) avatarWater.setAttribute("transform", "translate(" + (waterWidth - 1200) + " 0)");
+				drawWater(!motionPreference || motionPreference.matches);
+			}
+			measureWater();
+			if (window.ResizeObserver) new ResizeObserver(measureWater).observe(header);
+			else window.addEventListener("resize", measureWater);
 			d.addEventListener("visibilitychange", syncHeaderMotion);
-			window.addEventListener("pagehide", function () { header.setAttribute("data-header-motion", "paused"); });
+			window.addEventListener("pagehide", function () { suspended = true; syncHeaderMotion(); });
 			window.addEventListener("pageshow", function () {
+				suspended = false;
 				var bounds = header.getBoundingClientRect();
 				headerInView = bounds.bottom > 0 && bounds.top < window.innerHeight;
 				syncHeaderMotion();

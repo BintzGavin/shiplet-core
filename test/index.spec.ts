@@ -4356,6 +4356,8 @@ describe("Shiplet", () => {
         expect(header).toContain(markDetail);
       }
       expect(header).toContain('data-header-variant="authenticated"');
+      expect(header).not.toContain("shiplet-header-motion-control");
+      expect(header.match(/class="shiplet-waterline-body"/g)).toHaveLength(3);
       expect(header.match(/<svg class="shiplet-waterline-svg"/g)).toHaveLength(
         1,
       );
@@ -4409,11 +4411,6 @@ describe("Shiplet", () => {
       expect(avatarCss).toContain("background: var(--surface-sunken);");
       const slowMotionNames = [
         "shiplet-header-wake-shimmer",
-        "shiplet-waterline-far-drift",
-        "shiplet-waterline-mid-drift",
-        "shiplet-waterline-near-drift",
-        "shiplet-waterline-foam-drift",
-        "shiplet-waterline-buoy-drift",
         "shiplet-waterline-avatar-ripple",
       ];
       for (const animationName of slowMotionNames) {
@@ -4441,7 +4438,7 @@ describe("Shiplet", () => {
         ".shiplet-waterline-mid { color: var(--mark-harbor);",
         ".shiplet-waterline-near { color: var(--mark-harbor);",
         ".shiplet-waterline-marker-buoy .shiplet-waterline-buoy-body { fill: var(--action); stroke: var(--action);",
-        ".shiplet-waterline-foam { color: color-mix(in oklch, var(--surface), var(--mark-harbor) 24%);",
+        ".shiplet-waterline-foam { color: color-mix(in oklch, var(--mark-harbor), white 62%);",
       ]) {
         expect(waterlineCss).toContain(waterlineColorRule);
       }
