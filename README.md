@@ -52,6 +52,18 @@ npm run deploy -- --config ./wrangler.self-hosted.jsonc
 The deploy command rejects the checked-in example configurations and refuses to
 run unless an explicit user-owned configuration path is provided.
 
+## Kody review workflow
+
+The maintained [Kody source package](integrations/kody/shiplet/README.md) turns a
+caller's Shiplet connection into a complete static artifact review workflow:
+publish, page through contextual feedback, prepare an immutable revision,
+collect before/after evidence, and activate after trusted owner approval.
+
+Run the [local browser demo](integrations/kody/demo/README.md) to exercise a real
+annotation and revision at the original review link. The demo uses local
+Wrangler storage and a synthetic account; hosted OAuth consent and a hosted
+Kody package installation remain separate verification steps.
+
 ## Architecture
 
 Shiplet defaults to static artifact publishing. The trusted host owns identity,

@@ -57,6 +57,8 @@ export type ReviewCapability = {
 type JsonObject = Record<string, unknown>;
 
 export type ReviewFeedbackRecord = {
+	/** Active revision recorded by the canonical creation event, not a client claim. */
+	source_revision_id?: string | null;
 	id: string;
 	project_id: string;
 	organization_id: string;
@@ -706,42 +708,79 @@ export async function createReviewFeedback(
 	return getReviewFeedback(env.DB, project.id, id);
 }
 
+type FeedbackListOptions = {
+	pageUrl?: string | null;
+	status?: string | null;
+	includeClosed?: boolean;
+	limit?: number;
+	revisionId?: string | null;
+	cursor?: string | null;
+};
+
 export async function listReviewFeedback(
-	db: D1Database,
-	projectId: string,
-	options: {
-		pageUrl?: string | null;
-		status?: string | null;
-		includeClosed?: boolean;
-		limit?: number;
-	} = {},
+	db: D1Database, projectId: string, options: FeedbackListOptions = {},
+) {
+	return queryFeedbackRows(db, projectId, options, Math.min(Math.max(options.limit || 100, 1), 250));
+}
+
+/** Keyset continuation is bound to the project and effective filters, never authority. */
+export async function listReviewFeedbackPage(
+	db: D1Database, projectId: string, options: FeedbackListOptions = {},
+) {
+	const limit = options.limit ?? 100;
+	if (!Number.isInteger(limit) || limit < 1 || limit > 250 ||
+		(options.status && !isReviewStatus(options.status))) {
+		throw new Response("Invalid feedback limit or status", { status: 400 });
+	}
+	const binding = JSON.stringify([projectId, options.pageUrl ? buildPageUrlKey(options.pageUrl) : null,
+		options.status || null, options.status ? false : !!options.includeClosed, options.revisionId || null]);
+	let before: number | undefined;
+	if (options.cursor) {
+		try {
+			if (options.cursor.length > 8192) throw new Error();
+			const cursor = JSON.parse(decodeURIComponent(atob(options.cursor)));
+			if (cursor.v !== 1 || cursor.binding !== binding || !Number.isSafeInteger(cursor.before) || cursor.before < 1) throw new Error();
+			before = cursor.before;
+		} catch {
+			throw new Response("Invalid feedback cursor or changed filters", { status: 400 });
+		}
+	}
+	const rows = await queryFeedbackRows(db, projectId, options, limit + 1, before);
+	const feedback = rows.slice(0, limit);
+	const nextCursor = rows.length > limit
+		? btoa(encodeURIComponent(JSON.stringify({ v: 1, binding, before: feedback[feedback.length - 1].ticket_number })))
+		: null;
+	return { feedback, nextCursor };
+}
+
+async function queryFeedbackRows(
+	db: D1Database, projectId: string, options: FeedbackListOptions, limit: number, before?: number,
 ) {
 	const where = ["project_id = ?"];
 	const bindings: Array<string | number> = [projectId];
-
 	if (options.pageUrl) {
 		where.push("page_url_key = ?");
 		bindings.push(buildPageUrlKey(options.pageUrl));
 	}
-
 	if (options.status && isReviewStatus(options.status)) {
 		where.push("status = ?");
 		bindings.push(options.status);
 	} else if (!options.includeClosed) {
 		where.push("status NOT IN ('Done', 'Dropped')");
 	}
-
-	const limit = Math.min(Math.max(options.limit || 100, 1), 250);
-	const rows = await db
-		.prepare(
-			`SELECT * FROM review_feedback
-			 WHERE ${where.join(" AND ")}
-			 ORDER BY created_on DESC
-			 LIMIT ?`,
-		)
-		.bind(...bindings, limit)
-		.all<ReviewFeedbackRow>();
-
+	if (before !== undefined) {
+		where.push("ticket_number < ?"); bindings.push(before);
+	}
+	if (options.revisionId) {
+		where.push(`EXISTS (SELECT 1 FROM shiplet_events event
+			WHERE event.project_id = review_feedback.project_id
+			AND event.event_kind = 'review.feedback-created'
+			AND json_extract(event.custom_payload_json, '$.feedbackId') = review_feedback.id
+			AND event.revision_id = ?)`);
+		bindings.push(options.revisionId);
+	}
+	const rows = await db.prepare(`SELECT * FROM review_feedback WHERE ${where.join(" AND ")}
+		ORDER BY ticket_number DESC LIMIT ?`).bind(...bindings, limit).all<ReviewFeedbackRow>();
 	return hydrateFeedbackRows(db, rows.results || []);
 }
 
@@ -1418,8 +1457,17 @@ function requireScope(token: ReviewTokenRecord, scope: ReviewScope) {
 	}
 }
 
-async function hydrateFeedbackRows(db: D1Database, rows: ReviewFeedbackRow[]) {
+async function hydrateFeedbackRows(db: D1Database, rows: ReviewFeedbackRow[]): Promise<ReviewFeedbackRecord[]> {
 	if (rows.length === 0) return [];
+	// Keep every hydration query below D1's bound-parameter ceiling, including
+	// the project binding on canonical provenance queries.
+	if (rows.length > 80) {
+		const hydrated: ReviewFeedbackRecord[] = [];
+		for (let offset = 0; offset < rows.length; offset += 80) {
+			hydrated.push(...await hydrateFeedbackRows(db, rows.slice(offset, offset + 80)));
+		}
+		return hydrated;
+	}
 	const ids = rows.map((row) => row.id);
 	const placeholders = ids.map(() => "?").join(", ");
 	const replyRows = await db
@@ -1437,6 +1485,17 @@ async function hydrateFeedbackRows(db: D1Database, rows: ReviewFeedbackRow[]) {
 		repliesByFeedback.set(reply.feedback_id, replies);
 	}
 
+	// Canonical events supply provenance; capture_context_json remains untrusted data.
+	const revisionsByFeedback = new Map<string, string>();
+	for (const projectId of new Set(rows.map(row => row.project_id))) {
+		const events = await db.prepare(`SELECT revision_id, json_extract(custom_payload_json, '$.feedbackId') AS feedback_id
+			FROM shiplet_events WHERE project_id = ? AND event_kind = 'review.feedback-created'
+			AND json_extract(custom_payload_json, '$.feedbackId') IN (${placeholders})
+			ORDER BY created_at ASC, id ASC`).bind(projectId, ...ids).all<{ revision_id: string; feedback_id: string }>();
+		for (const event of events.results || []) {
+			if (!revisionsByFeedback.has(event.feedback_id)) revisionsByFeedback.set(event.feedback_id, event.revision_id);
+		}
+	}
 	const mentionsByFeedback = await listReviewMentions(db, ids);
 
 	const userIds = Array.from(
@@ -1470,7 +1529,7 @@ async function hydrateFeedbackRows(db: D1Database, rows: ReviewFeedbackRow[]) {
 
 	return rows.map((row) =>
 		hydrateFeedbackRow(
-			row,
+			{ ...row, source_revision_id: revisionsByFeedback.get(row.id) ?? null },
 			repliesByFeedback.get(row.id) || [],
 			mentionsByFeedback.get(row.id) || [],
 			row.submitted_by_user_id
