@@ -1,0 +1,12 @@
+{
+  "manifest_version": 3,
+  "name": "Shiplet Browser Companion",
+  "version": "1.0.0",
+  "description": "Capture browser work, redact it locally, and share a canvas for teammate and AI agent feedback.",
+  "minimum_chrome_version": "116",
+  "permissions": ["activeTab", "storage", "alarms"],
+  "action": { "default_title": "Capture with Shiplet", "default_popup": "popup.html" },
+  "background": { "service_worker": "background.js" },
+  "content_scripts": [{ "matches": ["https://shiplet.cc/capture"], "js": ["receiver.js"], "run_at": "document_idle", "all_frames": false }],
+  "content_security_policy": { "extension_pages": "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data: blob:; object-src 'none'; connect-src 'none'; base-uri 'none'" }
+}

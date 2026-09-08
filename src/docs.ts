@@ -1,3 +1,4 @@
+import { BROWSER_CAPTURE_DOCS_HTML } from "./browser-capture-docs";
 import { EMBED_DOCS_HTML } from "./embed-docs";
 interface DocsPage {
   slug: string;
@@ -9,6 +10,7 @@ interface DocsPage {
 
 // prettier-ignore
 const DOCS_PUBLIC_CONTENT_SHA256: Record<string, string> = {
+  "browser-capture": "1b6542d6a598b88c6dacda840930f1ff5095d9c0952778bb3a26672603a61643",
   "introduction": "85ada0b46d8b7b9285ea49ab385534abfda44ee3b6e09a89bcd0e84e3aec5042",
   "why-shiplet":
     "a34409ae0097659bc90a6d30c9ae63733565e418412175f3871993a452735db4",
@@ -28,11 +30,12 @@ const DOCS_PUBLIC_CONTENT_SHA256: Record<string, string> = {
     "9fb78882f2041ecf900e128ad19c53131617c987bcb347f084d46c871d2ed83a",
   "api-surface":
     "ae7d36eb6be9d7c20c4e9a493540d3b9f3d89ce7d31dbb1de9a25d8ee5f56f95",
-  "embed": "992a9caac4f8782bd419c1f23617ed81f3da16f80af340ba90d414b6d331e92d",
+  "embed": "948c7b0492546b4e157336a96f4c9394a2c2925fbf8c7e9c86501413219a844e",
   "security": "5b52e175c0b5cb8630e199c1bfc126895eadaa47e5f0fa3ec19d7878b6e7caa6"
 };
 
 const DOCS_PAGES: DocsPage[] = [
+  { slug: "browser-capture", title: "Capture browser work", description: "Review any visible browser work with a shared visual copy.", group: "Start", body: BROWSER_CAPTURE_DOCS_HTML },
   {
     slug: "introduction",
     title: "Introduction",

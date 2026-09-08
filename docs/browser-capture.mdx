@@ -1,0 +1,111 @@
+---
+title: "Capture browser work"
+description: "Review any visible browser work with a shared visual capture, including sites you cannot edit."
+---
+
+Shiplet brings multiplayer Figma-style comments to anything you can open in a
+browser. Leave feedback directly on the work so teammates and AI agents can see
+what needs changing and act on it.
+
+Use the [live widget](/docs/embed) on sites your team controls. For other browser
+work, **capture what you see** and comment on the shared visual copy. Captures
+preserve signed-in app screens, PDFs, documents, canvas content, embedded frames,
+and pages that cannot run a widget. They are still images, not live replicas.
+
+## Start without installing anything
+
+1. Open [Capture browser work](https://shiplet.cc/capture).
+2. Choose **Capture a tab or window** and select the work in the browser's picker.
+   You can also upload or paste a PNG, JPEG, or WebP screenshot.
+3. Review the image. Drag over sensitive areas to redact them, or enter a
+   rectangle under **Redact using coordinates**. Only the edited image is shared.
+4. Sign in, choose a workspace, confirm sharing, and select **Create shared review**.
+5. Choose **Annotate**, click a point in the capture, and leave a comment. Share
+   the review link with a teammate who has workspace access.
+
+Screen sharing captures one frame and immediately stops; there is no background
+recording. Upload/paste works on browsers and devices without screen sharing.
+Images must fit within 20 megapixels, 16,384 pixels per side, and a 6 MB PNG after
+conversion. Capture a smaller area if an image exceeds those limits.
+
+## Install the browser companion
+
+The Chromium companion captures the visible area of your current tab directly,
+without changing the website or requiring its owner to install anything.
+
+1. [Download the browser companion](https://shiplet.cc/downloads/shiplet-browser-companion.zip)
+   and unzip it to a folder you will keep.
+2. Open Chrome's `chrome://extensions` (or Edge's `edge://extensions`). Turn on
+   **Developer mode**, choose **Load unpacked**, and select the extracted folder
+   containing `manifest.json`.
+3. Pin **Shiplet Browser Companion** to your toolbar.
+4. Open the work, click the companion, then **Capture this tab**. Review and
+   redact the local preview. Choose **Continue to Shiplet** to select a workspace
+   and confirm publishing.
+
+This download is the release distribution; it does not require a store listing.
+Chrome/Edge desktop 116 or newer is required. Updates are manual: download the
+new archive, replace the extracted files, and choose **Reload** on the extensions
+page. Remove the extension there to uninstall it. Firefox, Safari and mobile
+users can use the web capture/upload path above.
+
+## What teammates and agents receive
+
+Each capture creates an organization-visible Shiplet with the reviewed image,
+capture timestamp, pixel dimensions, and optional original page URL. Comments,
+numbered pins, replies, resolution and reopening use Shiplet's normal shared
+review workflow. Teammates do not need the original site's account or cookies.
+This also means that sharing a capture shares its visible information.
+
+Agents read the same feedback through [Code Mode MCP](/docs/code-mode-mcp) and
+the [review feedback API](/docs/review-feedback). The artifact includes
+`capture.png` and `capture.json`; comment screenshots preserve raster pixels.
+Agents can inspect the requested change and act in a connected repository or
+tool when authorized. A capture does not grant access to edit the original site.
+
+## Privacy and browser restrictions
+
+The companion has temporary access to the tab you explicitly invoke it on and
+uses no persistent access to third-party sites. It does not read page DOM,
+cookies, passwords, network requests, or browsing history. Its only content
+script runs on Shiplet's capture page to deliver the preview. It executes bundled
+code only, keeps pending images in browser session memory for at most ten minutes,
+and consumes each transfer once. Closing its preview or destination tab discards
+the pending transfer. Captured images are not automatically uploaded.
+
+Pixels can contain sensitive information, including visible input values.
+Review and redact before sharing. Black redactions are baked into the PNG;
+Shiplet never receives the original under those rectangles. A preview's reset
+button only restores the local image. URL query strings and fragments are
+removed, and non-web URLs (including local file paths) are omitted. Clear the
+optional source URL when the URL path itself is private.
+
+Browser-protected screens, enterprise policies, DRM video, and operating-system
+capture restrictions can block or blank pixels. Shiplet cannot bypass those
+restrictions. Use a screenshot or exported image you are permitted to share.
+For long pages, capture the relevant region or upload a full-page screenshot.
+Captured links, forms and video are pixels; use the live widget when teammates
+need to interact with the running site.
+
+## Paste this into your agent
+
+```text
+Help me set up Shiplet browser capture using https://shiplet.cc/docs/browser-capture.
+Download https://shiplet.cc/downloads/shiplet-browser-companion.zip and extract
+it into a persistent folder. Show me how to load that folder from my Chromium
+browser's extensions page using Developer mode > Load unpacked, then pin it.
+Do not alter browser security policy or install it silently.
+
+Walk me through capturing one page, redacting sensitive pixels locally, and
+publishing the reviewed image to my chosen Shiplet workspace. Verify that a
+second authorized reviewer can pin a comment, reply and resolve it, and that
+the same feedback is available through Shiplet's API or Code Mode MCP.
+Use https://shiplet.cc/capture with image upload if extension installation or
+screen capture is unavailable. Do not upload private content without my review.
+```
+
+For self-hosted Shiplet, build the companion from source after changing the
+trusted origin in `browser-companion/config.js`, the exact capture-page match in
+`manifest.json`, and the fallback link in `popup.html`. Rebuild with
+`node scripts/build-browser-companion.mjs`. Keep the match limited to your
+Shiplet origin; never add all-sites access.

@@ -1720,7 +1720,9 @@ export function trustedReviewHostScript(): string {
 	}
 
 	async function request(method, body) {
-		return requestAt(apiUrl, method, body);
+		const url = new URL(apiUrl);
+		if (method === "GET") url.searchParams.set("includeClosed", "true");
+		return requestAt(url.toString(), method, body);
 	}
 
 	function renderWatch() {

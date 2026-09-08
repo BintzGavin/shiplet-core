@@ -24,7 +24,8 @@
           "docs/introduction",
           "docs/why-shiplet",
           "docs/quickstart",
-          "docs/embed"
+          "docs/embed",
+          "docs/browser-capture"
         ]
       },
       {

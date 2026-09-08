@@ -79,9 +79,12 @@ and get the two-tag snippet. The [website widget guide](https://shiplet.cc/docs/
 includes HTML and framework examples, a copyable agent installation prompt, CSP
 settings, privacy controls, and removal instructions.
 
-URL previews remain experimental. Use the widget for interactive websites and
-uploads for builds and files; arbitrary third-party sites need a separate
-extension or captured artifact.
+For pages your team cannot edit, use [Browser capture](https://shiplet.cc/capture).
+Capture a tab with the browser picker or the downloadable Chromium companion,
+or upload a screenshot. Review and redact it locally, then share a private
+visual copy with the same pins, conversations, and agent feedback APIs.
+The [capture guide](https://shiplet.cc/docs/browser-capture) includes installation,
+privacy details, and a copyable agent prompt. URL previews remain experimental.
 
 ## License
 

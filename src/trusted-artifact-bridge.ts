@@ -347,9 +347,22 @@ export function trustedArtifactBridgeScript(embedded = false) {
 		return clone;
 	}
 
-	async function domScreenshot() {
+	async function domScreenshot(target) {
 		const width = Math.max(1, Math.min(1920, Math.round(innerWidth || 1)));
 		const height = Math.max(1, Math.min(1080, Math.round(innerHeight || 1)));
+		// Raster capture artifacts carry their reviewed PNG inline. Drawing those
+		// pixels is safe in an opaque artifact sandbox and preserves canvas/PDF
+		// evidence that the privacy-filtered DOM clone intentionally removes.
+		if (target.tagName === "IMG" && target.hasAttribute("data-shiplet-raster-capture") && !target.closest("[data-shiplet-private]") && /^data:image\/png;base64,[A-Za-z0-9+/]+=*$/.test(target.src) && target.src.length <= 8388630) {
+			await target.decode();
+			const canvas = document.createElement("canvas"); canvas.width = width; canvas.height = height;
+			const context = canvas.getContext("2d"); if (!context) throw new Error("Canvas capture is unavailable.");
+			context.fillStyle = "#eef0f2"; context.fillRect(0, 0, width, height);
+			const rect = target.getBoundingClientRect(); context.drawImage(target, rect.left, rect.top, rect.width, rect.height);
+			const dataUrl = canvas.toDataURL("image/png");
+			if (dataUrl.length > 13400000) throw new Error("Artifact screenshot exceeded the bounded capture size.");
+			return dataUrl;
+		}
 		const serialized = new XMLSerializer().serializeToString(sanitizedClone());
 		if (new TextEncoder().encode(serialized).byteLength > 1000000) throw new Error("Artifact DOM exceeded the bounded capture size.");
 		const svg = '<svg xmlns="http://www.w3.org/2000/svg" width="' + width + '" height="' + height + '"><foreignObject width="100%" height="100%"><div xmlns="http://www.w3.org/1999/xhtml">' + serialized + "</div></foreignObject></svg>";
@@ -402,7 +415,7 @@ export function trustedArtifactBridgeScript(embedded = false) {
 		let screenshotDataUrl = null;
 		let screenshotFailureNote = null;
 		removeHighlight();
-		try { screenshotDataUrl = await domScreenshot(); }
+		try { screenshotDataUrl = await domScreenshot(target); }
 		catch (error) {
 			screenshotFailureNote = safeText(error && error.message ? error.message : "Artifact screenshot capture failed.", 500);
 			screenshotDataUrl = syntheticScreenshot(target);

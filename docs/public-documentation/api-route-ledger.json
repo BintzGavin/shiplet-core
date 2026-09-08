@@ -4,6 +4,16 @@
   "policy": "Every statically registered Hono operation, including local and imported string constants, is either a supported public automation operation in OpenAPI or matches exactly one narrow exclusion family below; dynamic or unresolvable route registration fails closed.",
   "exclusions": [
     {
+      "id": "browser_capture",
+      "methods": [
+        "GET",
+        "POST"
+      ],
+      "pathPattern": "^/(?:capture(?:/(?:workspaces|:asset\\{editor\\.js\\|client\\.js\\}))?|downloads/shiplet-browser-companion\\.zip)$",
+      "category": "first_party_browser_model",
+      "rationale": "The capture preview, publication ceremony, companion download and bundled editor are first-party browser surfaces. Published captures use the existing public artifact and review APIs."
+    },
+    {
       "id": "sandbox_browser_session",
       "methods": ["GET", "POST"],
       "pathPattern": "^/(?:play(?:/preview/:projectId(?:/artifact-frame)?)?|api/play/(?:session|reset|mcp))$",

@@ -145,7 +145,7 @@ function PublishPage(props: {
 				<h2>Review your website where it runs</h2>
 				<p>Add Shiplet with two HTML tags. Keep your site's login, navigation, and interactions while your team comments in context.</p>
 				<a className="btn btn-primary" href="/embed/install">Connect a website</a>
-				<p><a href="/docs/embed">Install with your coding agent</a></p>
+				<p><a href="/docs/embed">Install with your coding agent</a> · <a href="/capture">Capture a page you can’t edit</a></p>
 			</section>
 
 			<section className="success-card shiplet-panel shiplet-focus-strip publish-primary-panel">

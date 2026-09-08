@@ -1184,6 +1184,7 @@ describe("Shiplet", () => {
         "/docs/publishing",
         "/docs/review-feedback",
         "/docs/embed",
+        "/docs/browser-capture",
       ]) {
         const response = await requestHelper(route);
         const html = await response.text();

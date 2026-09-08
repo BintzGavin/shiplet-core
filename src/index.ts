@@ -26,6 +26,8 @@
 import { Hono } from "hono";
 import { registerBrowserEmbed, renderEmbedSetup } from "./embed-setup";
 import { EMBED_WIDGET_CSS, embedWidgetScript } from "./embed-widget";
+import { CAPTURE_BODY_LIMIT, capturePublishPayload, renderBrowserCapture } from "./browser-capture";
+import { BROWSER_CAPTURE_ASSETS, BROWSER_COMPANION_ZIP } from "./generated-browser-companion";
 import { DynamicWorkerExecutor } from "@cloudflare/codemode";
 import {
   openApiMcpServer,
@@ -490,8 +492,10 @@ const RESERVED_PLATFORM_PATHS = new Set([
   "assets",
   "auth",
   "brand",
+  "capture",
   "dispatch",
   "docs",
+  "downloads",
   "embed",
   "favicon.ico",
   "favicon.svg",
@@ -641,6 +645,7 @@ function isPlatformCookieAuthRoute(pathname: string, method: string) {
   if (method !== "GET" && pathname === "/auth/login") return true;
   if (method !== "GET" && pathname === "/embed/connect") return true;
   if (method !== "GET" && pathname === "/embed/install") return true;
+  if (method !== "GET" && pathname === "/capture") return true;
   if (method !== "GET" && pathname === "/auth/switch-account") return true;
   return false;
 }
@@ -10962,6 +10967,53 @@ app.post("/auth/switch-account", async (c) => {
 
 app.get("/auth/logout", async (c) => {
   return logoutResponse(c.req.raw, c.env);
+});
+
+app.get("/downloads/shiplet-browser-companion.zip", (c) => {
+  const bytes = Uint8Array.from(atob(BROWSER_COMPANION_ZIP), char => char.charCodeAt(0));
+  return new Response(bytes, { headers: { "Content-Type": "application/zip", "Content-Disposition": 'attachment; filename="shiplet-browser-companion-1.0.0.zip"', "Cache-Control": "public, max-age=300", "X-Content-Type-Options": "nosniff" } });
+});
+
+app.get("/capture/:asset{editor.js|client.js}", (c) => {
+  const script = BROWSER_CAPTURE_ASSETS[new URL(c.req.url).pathname];
+  return script ? new Response(script, { headers: { "Content-Type": "application/javascript; charset=utf-8", "Cache-Control": "public, max-age=300", "X-Content-Type-Options": "nosniff" } }) : c.notFound();
+});
+
+app.get("/capture/workspaces", async (c) => {
+  const user = await getCurrentUser(c.req.raw, c.env);
+  if (!user) return c.text("Sign in required", 401);
+  c.header("Cache-Control", "no-store");
+  return json({ organizations: (await listOrganizationsForUser(c.env.DB, user.id)).map(org => ({ id: org.id, name: org.name })) });
+});
+
+app.get("/capture", async (c) => {
+  const user = await getCurrentUser(c.req.raw, c.env);
+  const organizations = user ? await listOrganizationsForUser(c.env.DB, user.id) : [];
+  c.header("Cache-Control", "no-store");
+  return c.html(renderPage(renderBrowserCapture(organizations, authLoginRedirectUrl(c.env, c.req.url, "/capture"), kernelDocumentNonce(c)), {
+    nonce: kernelDocumentNonce(c), user, customDomain: c.env.CUSTOM_DOMAIN,
+    appUrl: appBaseUrl(c.env, c.req.url), title: "Capture browser work | Shiplet",
+    description: "Capture, redact and share browser work for contextual feedback.", canonicalPath: null, indexing: "noindex",
+  }));
+});
+
+app.post("/capture", async (c) => {
+  try {
+    const user = await getCurrentUser(c.req.raw, c.env);
+    if (!user) return c.text("Sign in required", 401);
+    if (c.req.header("origin") !== new URL(c.req.url).origin) return c.text("Same-origin capture required", 403);
+    if (Number(c.req.header("content-length") || "0") > CAPTURE_BODY_LIMIT) return c.text("Capture is too large", 413);
+    let input: unknown;
+    try { input = JSON.parse(await readRequestTextWithLimit(c.req.raw, CAPTURE_BODY_LIMIT)); }
+    catch (error) { if (isResponse(error)) return error; return c.text("Invalid capture request", 400); }
+    const payload = capturePublishPayload(input);
+    const result = await publishShiplet(c.env, c.var.db, user, payload);
+    c.header("Cache-Control", "no-store");
+    return json({ ...publishResultPayload(c.env, c.req.url, result), reviewUrl: new URL(`/shiplets/${result.project.id}/review-host`, c.req.url).toString() }, 201);
+  } catch (error) {
+    if (isResponse(error)) return error;
+    return c.text("Could not create this capture. Your local image has been kept; try again.", 500);
+  }
 });
 
 app.on(["GET", "POST"], "/embed/install", async (c) => {
