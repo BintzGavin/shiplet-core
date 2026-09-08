@@ -167,6 +167,13 @@ describe("framework-independent widget installation", () => {
     const second = await project();
     await request("/embed/install", form(first));
     await request("/embed/install", form(second));
+    // Rolling back the Worker must not fail its previous schema initializer
+    // after two projects have connected the same host origin.
+    await expect(
+      (env as Env).DB.prepare(
+        `CREATE UNIQUE INDEX IF NOT EXISTS idx_embed_installations_active_origin ON embed_installations(site_origin) WHERE revoked_on IS NULL`,
+      ).run(),
+    ).resolves.toBeTruthy();
     for (const id of [first, second])
       expect(
         (
