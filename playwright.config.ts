@@ -13,6 +13,8 @@ const envLines = [
 
 export default defineConfig({
 	testDir: "./e2e",
+	// The Kody demo owns its isolated server and evidence configuration.
+	testIgnore: "kody-workflow.spec.ts",
 	timeout: 45_000,
 	expect: { timeout: 8_000 },
 	fullyParallel: false,
