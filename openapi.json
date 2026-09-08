@@ -361,6 +361,481 @@
     }
   },
   "paths": {
+    "/api/shiplets/{projectId}/package": {
+      "get": {
+        "operationId": "getActiveShipletPackage",
+        "x-shiplet-code-mode": true,
+        "x-shiplet-scopes": [
+          "shiplets:read"
+        ],
+        "tags": [
+          "Revisions"
+        ],
+        "summary": "Read the active immutable package and revision identity",
+        "parameters": [
+          {
+            "name": "projectId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Acknowledged operation result. Inspect validation.ok or trusted_approval_required before continuing.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request or package."
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "description": "Project, revision or draft unavailable."
+          },
+          "409": {
+            "description": "Revision or draft version conflict."
+          },
+          "428": {
+            "description": "Required version precondition or explicit approval absent."
+          }
+        }
+      }
+    },
+    "/api/shiplets/{projectId}/revisions/{revisionId}/package": {
+      "get": {
+        "operationId": "getShipletRevisionPackage",
+        "x-shiplet-code-mode": true,
+        "x-shiplet-scopes": [
+          "shiplets:read"
+        ],
+        "tags": [
+          "Revisions"
+        ],
+        "summary": "Read one immutable revision package within this project",
+        "parameters": [
+          {
+            "name": "projectId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "revisionId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Acknowledged operation result. Inspect validation.ok or trusted_approval_required before continuing.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request or package."
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "description": "Project, revision or draft unavailable."
+          },
+          "409": {
+            "description": "Revision or draft version conflict."
+          },
+          "428": {
+            "description": "Required version precondition or explicit approval absent."
+          }
+        }
+      }
+    },
+    "/api/shiplets/{projectId}/drafts": {
+      "post": {
+        "operationId": "forkShipletRevision",
+        "x-shiplet-code-mode": true,
+        "x-shiplet-scopes": [
+          "shiplets:write"
+        ],
+        "tags": [
+          "Revisions"
+        ],
+        "summary": "Fork an accessible revision into a draft (not idempotent)",
+        "parameters": [
+          {
+            "name": "projectId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Acknowledged operation result. Inspect validation.ok or trusted_approval_required before continuing.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request or package."
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "description": "Project, revision or draft unavailable."
+          },
+          "409": {
+            "description": "Revision or draft version conflict."
+          },
+          "428": {
+            "description": "Required version precondition or explicit approval absent."
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "fromRevisionId": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "fromRevisionId"
+                ]
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/drafts/{draftId}/package": {
+      "get": {
+        "operationId": "getShipletDraftPackage",
+        "x-shiplet-code-mode": true,
+        "x-shiplet-scopes": [
+          "shiplets:read"
+        ],
+        "tags": [
+          "Revisions"
+        ],
+        "summary": "Read draft content and its concurrency version",
+        "parameters": [
+          {
+            "name": "draftId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Acknowledged operation result. Inspect validation.ok or trusted_approval_required before continuing.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request or package."
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "description": "Project, revision or draft unavailable."
+          },
+          "409": {
+            "description": "Revision or draft version conflict."
+          },
+          "428": {
+            "description": "Required version precondition or explicit approval absent."
+          }
+        }
+      },
+      "put": {
+        "operationId": "updateShipletDraftPackage",
+        "x-shiplet-code-mode": true,
+        "x-shiplet-scopes": [
+          "shiplets:write"
+        ],
+        "tags": [
+          "Revisions"
+        ],
+        "summary": "Replace a draft package with an exact expectedVersion fence",
+        "parameters": [
+          {
+            "name": "draftId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Acknowledged operation result. Inspect validation.ok or trusted_approval_required before continuing.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request or package."
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "description": "Project, revision or draft unavailable."
+          },
+          "409": {
+            "description": "Revision or draft version conflict."
+          },
+          "428": {
+            "description": "Required version precondition or explicit approval absent."
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "package": {
+                    "type": "object"
+                  },
+                  "expectedVersion": {
+                    "type": "integer",
+                    "minimum": 1
+                  }
+                },
+                "required": [
+                  "package",
+                  "expectedVersion"
+                ]
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/drafts/{draftId}/validate": {
+      "post": {
+        "operationId": "validateShipletDraft",
+        "x-shiplet-code-mode": true,
+        "x-shiplet-scopes": [
+          "shiplets:write"
+        ],
+        "tags": [
+          "Revisions"
+        ],
+        "summary": "Validate this draft version and return its immutable revision and preview URL",
+        "parameters": [
+          {
+            "name": "draftId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Acknowledged operation result. Inspect validation.ok or trusted_approval_required before continuing.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request or package."
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "description": "Project, revision or draft unavailable."
+          },
+          "409": {
+            "description": "Revision or draft version conflict."
+          },
+          "428": {
+            "description": "Required version precondition or explicit approval absent."
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "expectedVersion": {
+                    "type": "integer",
+                    "minimum": 1
+                  }
+                },
+                "required": [
+                  "expectedVersion"
+                ]
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/drafts/{draftId}/promote": {
+      "post": {
+        "operationId": "promoteShipletDraft",
+        "x-shiplet-code-mode": true,
+        "x-shiplet-scopes": [
+          "shiplets:write"
+        ],
+        "tags": [
+          "Revisions"
+        ],
+        "summary": "Promote a validated draft using an active revision fence and trusted owner approval",
+        "parameters": [
+          {
+            "name": "draftId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "schema": {
+              "type": "string"
+            },
+            "description": "Stable caller operation key; reuse only for this exact candidate, prior revision and targets."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Acknowledged operation result. Inspect validation.ok or trusted_approval_required before continuing.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request or package."
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "description": "Project, revision or draft unavailable."
+          },
+          "409": {
+            "description": "Revision or draft version conflict."
+          },
+          "428": {
+            "description": "Required version precondition or explicit approval absent."
+          }
+        },
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "expectedActiveRevisionId": {
+                    "type": "string"
+                  },
+                  "approvalRequestId": {
+                    "type": "string"
+                  },
+                  "approval": {
+                    "type": "boolean",
+                    "description": "Browser-session user approval only; ignored as authority for agents."
+                  }
+                },
+                "required": [
+                  "expectedActiveRevisionId"
+                ]
+              }
+            }
+          }
+        },
+        "description": "OAuth agents additionally require shiplets:promote. Organization keys retain their existing shiplets:write plus project grants. All agents require an exact trusted owner approval; return trusted_approval_required with confirmationPath, approvalRequestId and expiry. Resume after approval. Static promotion needs no deployment target. Idempotency-Key replays the exact committed operation, never a changed candidate.",
+        "x-shiplet-oauth-permissions": [
+          "shiplets:write",
+          "shiplets:promote"
+        ]
+      }
+    },
     "/api/shiplets": {
       "get": {
         "operationId": "listShiplets",
@@ -745,39 +1220,143 @@
       "get": {
         "operationId": "listReviewFeedback",
         "x-shiplet-code-mode": true,
-        "x-shiplet-scopes": ["feedback:read"],
-        "tags": ["Feedback"],
+        "x-shiplet-scopes": [
+          "feedback:read"
+        ],
+        "tags": [
+          "Feedback"
+        ],
         "summary": "List review feedback",
         "parameters": [
-          { "$ref": "#/components/parameters/ProjectId" },
-          { "name": "pageUrl", "in": "query", "schema": { "type": "string" } },
-          { "name": "status", "in": "query", "schema": { "type": "string" } },
-          { "name": "includeClosed", "in": "query", "schema": { "type": "boolean" } },
-          { "name": "limit", "in": "query", "schema": { "type": "integer", "minimum": 1, "maximum": 100 } }
+          {
+            "$ref": "#/components/parameters/ProjectId"
+          },
+          {
+            "name": "pageUrl",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "status",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "New",
+                "In Progress",
+                "Blocked",
+                "Done",
+                "Dropped"
+              ]
+            }
+          },
+          {
+            "name": "includeClosed",
+            "in": "query",
+            "schema": {
+              "type": "boolean"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 250
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "description": "Opaque continuation from nextCursor. Keep project and filters unchanged; newest ticket first. A changed filter or malformed cursor returns 400.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "revisionId",
+            "in": "query",
+            "description": "Filter by the active revision recorded in the canonical feedback creation event. This is submission provenance, not browser snapshot verification.",
+            "schema": {
+              "type": "string"
+            }
+          }
         ],
         "responses": {
           "200": {
             "description": "Feedback list.",
             "content": {
-              "application/json": { "schema": { "type": "object" } }
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "feedback",
+                    "nextCursor"
+                  ],
+                  "properties": {
+                    "feedback": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "source_revision_id": {
+                            "type": [
+                              "string",
+                              "null"
+                            ],
+                            "description": "Canonical creation-event revision; null for legacy feedback without a creation event. Never sourced from captureContext."
+                          }
+                        }
+                      }
+                    },
+                    "nextCursor": {
+                      "type": [
+                        "string",
+                        "null"
+                      ],
+                      "description": "Null when this traversal has no further matching tickets. Concurrent status changes can change membership; restart for a fresh review."
+                    }
+                  }
+                }
+              }
             }
           },
-          "401": { "$ref": "#/components/responses/Unauthorized" },
-          "403": { "$ref": "#/components/responses/Forbidden" }
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "400": {
+            "description": "Invalid limit, status, cursor, or changed cursor filters."
+          }
         }
       },
       "post": {
         "operationId": "createReviewFeedback",
         "x-shiplet-code-mode": true,
-        "x-shiplet-scopes": ["feedback:write"],
-        "tags": ["Feedback"],
+        "x-shiplet-scopes": [
+          "feedback:write"
+        ],
+        "tags": [
+          "Feedback"
+        ],
         "summary": "Create review feedback",
-        "parameters": [{ "$ref": "#/components/parameters/ProjectId" }],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ProjectId"
+          }
+        ],
         "requestBody": {
           "required": true,
           "content": {
             "application/json": {
-              "schema": { "$ref": "#/components/schemas/FeedbackCreateRequest" }
+              "schema": {
+                "$ref": "#/components/schemas/FeedbackCreateRequest"
+              }
             }
           }
         },
@@ -785,12 +1364,22 @@
           "201": {
             "description": "Feedback created.",
             "content": {
-              "application/json": { "schema": { "type": "object" } }
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
             }
           },
-          "400": { "$ref": "#/components/responses/BadRequest" },
-          "401": { "$ref": "#/components/responses/Unauthorized" },
-          "403": { "$ref": "#/components/responses/Forbidden" }
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          }
         }
       }
     },

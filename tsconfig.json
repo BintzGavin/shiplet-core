@@ -22,6 +22,8 @@
 		"workers/**/*.ts",
 		"e2e/**/*.ts",
 		"test/**/*.ts",
+		"integrations/kody/**/*.ts",
+		"playwright.kody.config.ts",
 		"playwright.config.ts",
 		"vite.config.mts",
 		"vitest.config.mts"

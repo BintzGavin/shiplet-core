@@ -24,7 +24,10 @@
 		"test:mutation:embed": "node scripts/embed-mutation-test.mjs",
 		"test:mutation:security": "node scripts/security-mutation-test.mjs",
 		"typecheck": "wrangler types --check && tsc --noEmit",
-		"verify": "npm run typecheck && npm test && npm run build && npm run audit:licenses && npm run audit:security"
+		"verify": "npm run typecheck && npm test && npm run build && npm run audit:licenses && npm run audit:security",
+		"test:kody": "vitest run test/kody-*.spec.ts",
+		"test:mutation:kody": "node scripts/kody-mutation-test.mjs",
+		"demo:kody": "playwright test --config playwright.kody.config.ts"
 	},
 	"dependencies": {
 		"@cfworker/json-schema": "^4.1.1",

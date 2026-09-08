@@ -1,0 +1,23 @@
+{
+  "name": "@your-account/shiplet",
+  "exports": {
+    "./publish": "./src/publish.ts",
+    "./feedback": "./src/feedback.ts",
+    "./prepare-revision": "./src/prepare-revision.ts",
+    "./activate-revision": "./src/activate-revision.ts",
+    "./verify-revision": "./src/verify-revision.ts",
+    "./inspect": "./src/inspect.ts",
+    "./inspect-draft": "./src/inspect-draft.ts",
+    "./list": "./src/list.ts"
+  },
+  "kody": {
+    "description": "Publish static artifacts, retrieve contextual feedback, prepare revisions and verify ticket evidence with Shiplet.",
+    "tags": [
+      "shiplet",
+      "review",
+      "static",
+      "feedback"
+    ],
+    "category": "integrations"
+  }
+}
