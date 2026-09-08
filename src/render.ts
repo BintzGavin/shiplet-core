@@ -594,7 +594,7 @@ html:not(.js) .harbor-scene-svg :is(.scene-cloud-near, .scene-cloud-far, .scene-
 .shiplet-brand-wake-extension {
   position: absolute;
   z-index: 0;
-  left: 34px;
+  left: 16px;
   top: 28px;
   width: 88px;
   height: 22px;
@@ -602,6 +602,7 @@ html:not(.js) .harbor-scene-svg :is(.scene-cloud-near, .scene-cloud-far, .scene-
   opacity: 0.58;
   pointer-events: none;
   transform-origin: left center;
+  transform: scaleX(-1);
   transition: opacity var(--speed) var(--ease), transform var(--speed) var(--ease-out);
 }
 .shiplet-brand-wake-extension svg { display: block; width: 100%; height: 100%; overflow: visible; }

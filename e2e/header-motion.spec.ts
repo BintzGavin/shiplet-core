@@ -42,6 +42,34 @@ for (const variant of ["public", "authenticated"] as const) {
 		await expect(page).toHaveURL(/\/docs/);
 	});
 
+	test(`Given the ${variant} ship, When wakelets age, Then they trail left from the stern instead of spreading ahead of the bow`, async ({ page }) => {
+		await page.emulateMedia({ reducedMotion: "no-preference" });
+		const header = await openHeader(page, variant);
+		for (const width of [390, 1280]) {
+			await page.setViewportSize({ width, height: 800 });
+			await expect(header).toHaveAttribute("data-header-motion", "running");
+			const vessel = await header.locator(".shiplet-mark-vessel").boundingBox();
+			const wake = header.locator(".shiplet-wake-ring").first();
+			const [early, late] = await wake.evaluate(element => {
+				const animation = element.getAnimations()[0];
+				animation.pause();
+				const timing = animation.effect!.getTiming();
+				return [0.25, 0.7].map(progress => {
+					animation.currentTime = (timing.delay ?? 0) + Number(timing.duration) * progress;
+					const bounds = element.getBoundingClientRect();
+					return { center: bounds.x + bounds.width / 2, right: bounds.right };
+				});
+			});
+			expect(early.right).toBeLessThanOrEqual(vessel!.x + 3);
+			expect(late.center).toBeLessThan(early.center - 5);
+		}
+		await page.emulateMedia({ reducedMotion: "reduce" });
+		await expectStillWater(page, header);
+		const vessel = await header.locator(".shiplet-mark-vessel").boundingBox();
+		const wake = await header.locator(".shiplet-wake-ring").first().boundingBox();
+		expect(wake!.x + wake!.width).toBeLessThanOrEqual(vessel!.x + 4);
+	});
+
 	test(`Given the ${variant} waterline, When swells pass, Then the surface changes shape with clearly visible rise and fall`, async ({ page }) => {
 		await page.emulateMedia({ reducedMotion: "no-preference" });
 		const header = await openHeader(page, variant);
@@ -123,6 +151,9 @@ test("Given no JavaScript, When the header renders, Then static water and naviga
 	await expect(header.getByRole("button", { name: /header animation/ })).toHaveCount(0);
 	await expectStillWater(page, header);
 	expect((await waterShapes(header)).every(shape => shape && shape.length > 100)).toBe(true);
+	const vessel = await header.locator(".shiplet-mark-vessel").boundingBox();
+	const wake = await header.locator(".shiplet-wake-ring").first().boundingBox();
+	expect(wake!.x + wake!.width).toBeLessThanOrEqual(vessel!.x + 4);
 	await header.getByRole("link", { name: "Shiplet home" }).click();
 	await expect(page).toHaveURL(`${baseURL}/`);
 	await context.close();
