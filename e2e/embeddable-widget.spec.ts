@@ -156,6 +156,13 @@ test("two-tag install selects real page content, shares feedback, follows SPA na
       await teammateFrame
         .getByRole("textbox", { name: "Reply text for PF-1" })
         .fill("I can take this change.");
+      await teammatePage.waitForTimeout(5500);
+      await expect(
+        teammateFrame.getByRole("textbox", { name: "Reply text for PF-1" }),
+      ).toHaveValue("I can take this change.");
+      await expect(
+        teammateFrame.getByRole("textbox", { name: "Reply text for PF-1" }),
+      ).toBeFocused();
       const replyPopup = teammatePage.waitForEvent("popup");
       await teammateFrame
         .getByRole("button", { name: "Reply to PF-1", exact: true })

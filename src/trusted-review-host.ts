@@ -1490,6 +1490,9 @@ export function trustedReviewHostScript(): string {
 
 	function render(items) {
 		const requestedActiveId = activeFeedbackId;
+		const editingThread = threadViews.find(view => view.replyInput && view.replyInput === document.activeElement);
+		const editingSelection = editingThread ? [editingThread.replyInput.selectionStart, editingThread.replyInput.selectionEnd] : null;
+		const drafts = new Map(threadViews.map(view => [view.id, { text: view.replyInput?.value || "", mentions: selectedMentions(view.replyMentions) }]));
 		renderedItems = Array.isArray(items) ? items.slice(0, 100) : [];
 		list.replaceChildren();
 		pinLayer.replaceChildren();
@@ -1613,6 +1616,8 @@ export function trustedReviewHostScript(): string {
 			replyForm.className = "shiplet-review-reply-form";
 			const replyInput = document.createElement("input");
 			replyInput.type = "text";
+			replyInput.value = drafts.get(feedbackId)?.text || "";
+			threadView.replyInput = replyInput;
 			replyInput.maxLength = 5000;
 			replyInput.placeholder = "Reply to this thread…";
 			replyInput.setAttribute("aria-label", "Reply text for " + ticket);
@@ -1623,13 +1628,16 @@ export function trustedReviewHostScript(): string {
 			replyButton.setAttribute("data-shiplet-review-reply-submit", feedbackId);
 			replyButton.disabled = !feedbackId;
 			const replyMentions = createReplyMentionSelect(ticket);
+			threadView.replyMentions = replyMentions;
+			const draftMentions = drafts.get(feedbackId)?.mentions || [];
+			for (const option of Array.from(replyMentions.options || [])) option.selected = draftMentions.some(mention => mention.userId === option.value);
 			async function submitReply() {
 				const replyValue = String(replyInput.value || "").trim();
 				if (!replyValue || replyButton.disabled) return;
 				replyButton.disabled = true;
 				try {
 					const response = await requestAt(childApiUrl("replies", feedbackId), "POST", { comment: replyValue, mentions: selectedMentions(replyMentions) });
-					if (response.pendingConfirmation) { setStatus("Confirm this reply in the secure Shiplet window.", "ready"); return; }
+					if (response.pendingConfirmation) { replyInput.value = ""; setStatus("Confirm this reply in the secure Shiplet window.", "ready"); return; }
 					replyInput.value = "";
 					if (isRecord(response) && isRecord(response.feedback) && response.feedback.id === feedbackId) {
 						render(renderedItems.map((entry) => isRecord(entry) && entry.id === feedbackId ? response.feedback : entry));
@@ -1680,6 +1688,11 @@ export function trustedReviewHostScript(): string {
 		if (embeddedSiteOrigin) parent.postMessage({ protocol: "shiplet.embed.ui.v1", pins: threadViews.map((view, index) => ({ index, selector: view.item.selected_element?.selector || "", pageX: Number(view.item.coordinates?.pageX), pageY: Number(view.item.coordinates?.pageY) })).filter(pin => Number.isFinite(pin.pageX) && Number.isFinite(pin.pageY)) }, embeddedSiteOrigin);
 		const restoredThread = requestedActiveId ? threadViews.find((entry) => entry.id === requestedActiveId) : null;
 		setActiveThread(restoredThread || null);
+		const restoredEditor = editingThread && threadViews.find(view => view.id === editingThread.id)?.replyInput;
+		if (restoredEditor && restoredThread?.id === editingThread.id) {
+			restoredEditor.focus();
+			if (editingSelection && typeof restoredEditor.setSelectionRange === "function") restoredEditor.setSelectionRange(editingSelection[0], editingSelection[1]);
+		}
 		updateCount(list.childElementCount);
 		setStatus(list.childElementCount === 0 ? "No comments yet. Add the first comment." : list.childElementCount + (list.childElementCount === 1 ? " comment." : " comments."), "ready");
 	}
