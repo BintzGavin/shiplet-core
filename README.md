@@ -68,6 +68,21 @@ Current behavior and security contracts are documented in:
 - [`docs/self-owned-shiplets/threat-model.md`](docs/self-owned-shiplets/threat-model.md)
 - [`openapi.json`](openapi.json)
 
+## Review an existing website
+
+Install Shiplet's web component on a site your team can edit. It keeps the page
+on its original origin and shares pinned comments, replies, and resolution with
+teammates and Shiplet's agent feedback queue.
+
+Open [Connect a website](https://shiplet.cc/embed/install) to register your site
+and get the two-tag snippet. The [website widget guide](https://shiplet.cc/docs/embed)
+includes HTML and framework examples, a copyable agent installation prompt, CSP
+settings, privacy controls, and removal instructions.
+
+URL previews remain experimental. Use the widget for interactive websites and
+uploads for builds and files; arbitrary third-party sites need a separate
+extension or captured artifact.
+
 ## License
 
 Apache-2.0. See [`LICENSE`](LICENSE) and [`NOTICE`](NOTICE).

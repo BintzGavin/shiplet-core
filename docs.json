@@ -23,7 +23,8 @@
         "pages": [
           "docs/introduction",
           "docs/why-shiplet",
-          "docs/quickstart"
+          "docs/quickstart",
+          "docs/embed"
         ]
       },
       {
@@ -45,7 +46,7 @@
       },
       {
         "group": "Integrations and safety",
-        "pages": ["docs/wordpress", "docs/security"]
+        "pages": ["docs/security"]
       },
       {
         "group": "API reference",

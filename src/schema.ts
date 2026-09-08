@@ -666,9 +666,10 @@ export async function ensureSchema(db: D1Database) {
 			`CREATE INDEX IF NOT EXISTS idx_embed_installations_project_origin
 			 ON embed_installations(project_id, site_origin, revoked_on)`,
 		),
+		db.prepare(`DROP INDEX IF EXISTS idx_embed_installations_active_origin`),
 		db.prepare(
-			`CREATE UNIQUE INDEX IF NOT EXISTS idx_embed_installations_active_origin
-			 ON embed_installations(site_origin)
+			`CREATE UNIQUE INDEX IF NOT EXISTS idx_embed_installations_active_project_origin
+			 ON embed_installations(project_id, site_origin)
 			 WHERE revoked_on IS NULL`,
 		),
 		db.prepare(

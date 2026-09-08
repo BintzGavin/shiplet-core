@@ -1183,7 +1183,7 @@ describe("Shiplet", () => {
         "/docs/security",
         "/docs/publishing",
         "/docs/review-feedback",
-        "/docs/wordpress",
+        "/docs/embed",
       ]) {
         const response = await requestHelper(route);
         const html = await response.text();
@@ -1221,11 +1221,9 @@ describe("Shiplet", () => {
       expect(introduction).not.toContain("immutable revision");
       expect(mcp).not.toContain("custom_shiplet_scope_required");
 
-      const wordpress = await (await requestHelper("/docs/wordpress")).text();
-      expect(wordpress).toContain("source-checkout-only");
-      expect(wordpress).toContain(
-        "does not publish an official public download",
-      );
+      const wordpress = await requestHelper("/docs/wordpress");
+      expect(wordpress.status).toBe(301);
+      expect(wordpress.headers.get("location")).toBe("/docs/embed");
     });
 
     it("Given a visitor opens Why Shiplet, When the article renders, Then its product argument and future-facing ownership idea are canonical", async () => {
@@ -1385,7 +1383,7 @@ describe("Shiplet", () => {
       expect(publishing.status).toBe(200);
       const html = await publishing.text();
 
-      expect(html).toContain("Existing public URLs");
+      expect(html).toContain("Experimental URL previews");
       expect(html).toContain("external_url");
       expect(html).toContain("assets");
       expect(html).not.toContain("script_content");
@@ -2292,7 +2290,7 @@ describe("Shiplet", () => {
           expect(response.status).toBe(200);
           const html = await response.text();
           expect(html).toContain("Create a shiplet");
-          expect(html).toContain("Add access controls, contextual feedback");
+          expect(html).toContain("Connect your website or upload a build or file.");
           expect(html).toContain("shiplet-header-avatar");
           expect(html).not.toContain(">Settings</a>");
         });
@@ -2620,7 +2618,7 @@ describe("Shiplet", () => {
       const html = await response.text();
       expect(html).toContain("Shiplet");
       expect(html).toContain("Create a shiplet");
-      expect(html).toContain("Add access controls, contextual feedback");
+      expect(html).toContain("Connect your website or upload a build or file.");
       expect(html).toContain(">Create shiplet</button>");
       expect(html).toContain("Choose the source");
       expect(html).toContain("Upload a build or file");
@@ -2737,7 +2735,7 @@ describe("Shiplet", () => {
       expect(html).toContain("sourceModeUrl");
       expect(html).toContain("URL");
       expect(html).toContain(
-        "Attach a staging page, PR deployment, hosted report, or public URL.",
+        "Experimental URL preview",
       );
       expect(html).toContain("sourceModeHosting");
       expect(html).toContain("Agent or CI");

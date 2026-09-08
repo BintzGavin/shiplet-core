@@ -1,3 +1,4 @@
+import { EMBED_DOCS_HTML } from "./embed-docs";
 interface DocsPage {
   slug: string;
   title: string;
@@ -8,7 +9,7 @@ interface DocsPage {
 
 // prettier-ignore
 const DOCS_PUBLIC_CONTENT_SHA256: Record<string, string> = {
-  "introduction": "9663596c77c9da2252b7ca9e73e2b01512fdb489b8a67897d5baf4d911a35c14",
+  "introduction": "85ada0b46d8b7b9285ea49ab385534abfda44ee3b6e09a89bcd0e84e3aec5042",
   "why-shiplet":
     "a34409ae0097659bc90a6d30c9ae63733565e418412175f3871993a452735db4",
   "quickstart":
@@ -16,7 +17,7 @@ const DOCS_PUBLIC_CONTENT_SHA256: Record<string, string> = {
   "access-control":
     "2f643ec9eb0cdec1a026a9f806b9eb1a3a8a2337494b6e1631ed26a09aa90e79",
   "publishing":
-    "30d1d9970f7f8e78f1a4ca50c79aa3bf4f556ba61996972786320cd7e60e61f7",
+    "e5b55aef5d6d2177a884fe6ecd68f999a58c6630737b275c8e460d81ccb16a94",
   "extensions":
     "c834eef088f4ab55ed628fe95cc4b169445c7ca3f77732e8717e5c048fc70d13",
   "review-feedback":
@@ -27,7 +28,7 @@ const DOCS_PUBLIC_CONTENT_SHA256: Record<string, string> = {
     "9fb78882f2041ecf900e128ad19c53131617c987bcb347f084d46c871d2ed83a",
   "api-surface":
     "ae7d36eb6be9d7c20c4e9a493540d3b9f3d89ce7d31dbb1de9a25d8ee5f56f95",
-  "wordpress": "6d2985eb2714be25e001b9b179ef8f889593488ebdd72cd5986e1269cb42f6b9",
+  "embed": "992a9caac4f8782bd419c1f23617ed81f3da16f80af340ba90d414b6d331e92d",
   "security": "5b52e175c0b5cb8630e199c1bfc126895eadaa47e5f0fa3ec19d7878b6e7caa6"
 };
 
@@ -47,7 +48,7 @@ const DOCS_PAGES: DocsPage[] = [
   <li><strong><a href="/docs/review-feedback">Collect feedback</a>:</strong> leave contextual comments and work through review tickets.</li>
   <li><strong><a href="/docs/code-mode-mcp">Automate with an agent</a>:</strong> connect through Code Mode MCP or use documented REST operations.</li>
   <li><strong><a href="/docs/access-control">Manage access</a>:</strong> choose who can view or edit each Shiplet.</li>
-  <li><strong><a href="/docs/wordpress">Review a WordPress site</a>:</strong> attach the Shiplet review layer to an existing site.</li>
+  <li><strong><a href="/docs/embed">Connect a website</a>:</strong> attach the Shiplet review layer to an existing site.</li>
 </ul>
 <p>Read <a href="/docs/why-shiplet">Why Shiplet</a> for the product idea behind a customizable review room rooted in durable state.</p>
 <h2>How Shiplet fits around your work</h2>
@@ -202,7 +203,7 @@ const DOCS_PAGES: DocsPage[] = [
   "visibility": "organization",
   "assets": [{ "path": "index.html", "content": "...base64..." }]
 }</code></pre>
-<h2>Existing public URLs</h2>
+<h2>Experimental URL previews</h2><p>URL previews are read-only and may not reproduce authentication, origin-bound JavaScript, forms, maps, or live connections. For working websites, <a href="/docs/embed">install the website widget</a> so the page stays on its original origin.</p>
 <p>Send <code>external_url</code> for an existing staging page or public preview. The proxy allows read-only <code>GET</code> and <code>HEAD</code> requests and rejects private-network destinations, unsafe redirects, and nonstandard ports. HTML and CSS use an 8 MiB in-memory fast path plus private streaming for larger documents, with a 64 MiB actual text-response safety ceiling. Large inlined CSS data, quoted custom-property values, and simple unquoted custom-property identifiers stream through that path. HTML <code>style</code>, <code>srcdoc</code>, and <code>srcset</code> attribute values that themselves exceed 8 MiB fail closed instead of being returned raw. The same per-attribute bound protects the HTML parser; unrelated large attributes within that bound are preserved. Larger binary assets are not subject to text rewriting.</p>
 <h2>Trusted review boundary</h2>
 <p>The review URL belongs to Shiplet. The artifact runs in a sandboxed frame, and Shiplet renders the review layer outside it. Browser sessions and reviewer authority remain in the trusted host.</p>
@@ -348,17 +349,12 @@ const DOCS_PAGES: DocsPage[] = [
 <p><strong>Next:</strong> read <a href="/docs/api-keys">API keys</a> or <a href="/docs/code-mode-mcp">Code Mode MCP</a>.</p>`,
   },
   {
-    slug: "wordpress",
-    title: "WordPress",
-    description: "Attach Shiplet's review layer to a WordPress site.",
-    group: "Integrations and safety",
-    body: `
-<p>The WordPress plugin adds Shiplet's review layer to one configured site without putting organization API keys in page source.</p>
-<h2>Availability</h2>
-<p>The plugin is source-checkout-only today. Shiplet does not publish an official public download.</p>
-<h2>Connection boundary</h2>
-<p>Each installation is bound to one exact origin and stores its installation secret on the server. The browser receives a short-lived review session scoped to that installation and Shiplet.</p>
-<p><strong>Next:</strong> verify reviewer access in <a href="/docs/access-control">Access control</a>.</p>`,
+    slug: "embed",
+    title: "Website widget",
+    description:
+      "Install contextual Shiplet feedback on your website with two HTML tags.",
+    group: "Start",
+    body: EMBED_DOCS_HTML,
   },
   {
     slug: "security",

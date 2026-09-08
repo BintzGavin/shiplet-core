@@ -103,7 +103,14 @@ async function fixture() {
     now: new Date(),
     expiresOn: session.expiresOn,
   }).split(";", 1)[0];
-  return { project, user, installationId, pageUrl, cookie };
+  return {
+    project,
+    user,
+    installationId,
+    pageUrl,
+    cookie,
+    revisionId: activeRevision.active_revision_id,
+  };
 }
 
 describe("trusted embedded review confirmation", () => {
@@ -215,6 +222,127 @@ describe("trusted embedded review confirmation", () => {
       }),
     });
     expect(replay.status).toBe(409);
+    const saved = await (env as Env).DB.prepare(
+      "SELECT id FROM review_feedback WHERE project_id = ? AND client_feedback_id = ?",
+    )
+      .bind(project.id, clientFeedbackId)
+      .first<{ id: string }>();
+    const revision = await (env as Env).DB.prepare(
+      "SELECT active_revision_id FROM projects WHERE id = ?",
+    )
+      .bind(project.id)
+      .first<{ active_revision_id: string }>();
+    const threadForm = {
+      installation_id: installationId,
+      shiplet_id: project.id,
+      revision_id: revision!.active_revision_id,
+      page_url: pageUrl,
+      feedback_id: saved!.id,
+      action: "replies",
+      value: "A shared reply",
+    };
+    const prepare = (fields = {}, origin = "http://localhost") =>
+      request("/embed/review/thread", {
+        method: "POST",
+        headers: { ...OWNER, Origin: origin },
+        body: new URLSearchParams({ ...threadForm, ...fields }),
+      });
+    expect((await prepare({}, "https://attacker.example")).status).toBe(403);
+    expect((await prepare({ page_url: pageUrl + "wrong" })).status).toBe(403);
+    expect((await prepare({ action: "status", value: "invalid" })).status).toBe(
+      400,
+    );
+    const replyIntent = await prepare();
+    expect(replyIntent.status).toBe(200);
+    const replyIntentId = (await replyIntent.text()).match(
+      /name="intent_id" value="([^"]+)"/,
+    )![1];
+    const confirmReply = () =>
+      request("/embed/review/confirm/complete", {
+        method: "POST",
+        headers: { ...OWNER, Origin: "http://localhost" },
+        body: new URLSearchParams({
+          intent_id: replyIntentId,
+          approval: "confirm",
+        }),
+      });
+    expect((await confirmReply()).status).toBe(200);
+    expect((await confirmReply()).status).toBe(409);
+    expect(
+      (
+        await (env as Env).DB.prepare(
+          "SELECT COUNT(*) AS count FROM review_feedback_replies WHERE feedback_id = ?",
+        )
+          .bind(saved!.id)
+          .first<{ count: number }>()
+      )?.count,
+    ).toBe(1);
+    const revokedIntent = await prepare({ action: "status", value: "Done" });
+    const revokedId = (await revokedIntent.text()).match(
+      /name="intent_id" value="([^"]+)"/,
+    )![1];
+    await (env as Env).DB.prepare(
+      "UPDATE embed_installations SET revoked_on = ? WHERE id = ?",
+    )
+      .bind(new Date().toISOString(), installationId)
+      .run();
+    expect(
+      (
+        await request("/embed/review/confirm/complete", {
+          method: "POST",
+          headers: { ...OWNER, Origin: "http://localhost" },
+          body: new URLSearchParams({
+            intent_id: revokedId,
+            approval: "confirm",
+          }),
+        })
+      ).status,
+    ).toBe(403);
+  });
+
+  it("confirms a browser install using top-level identity without an iframe cookie", async () => {
+    const { installationId, pageUrl, revisionId, project } = await fixture();
+    const submit = (overrides = {}, headers = OWNER) =>
+      request("/embed/review/confirm", {
+        method: "POST",
+        headers: { ...headers, Origin: "http://localhost" },
+        body: new URLSearchParams({
+          installation_id: installationId,
+          shiplet_id: project.id,
+          revision_id: revisionId,
+          page_url: pageUrl,
+          request_id: `request_${crypto.randomUUID()}`,
+          operation: "feedback.create",
+          comment: "Native page feedback",
+          client_feedback_id: `client-${crypto.randomUUID()}`,
+          ...overrides,
+        }),
+      });
+    expect(
+      (await submit({ page_url: "https://attacker.example/" })).status,
+    ).toBe(403);
+    expect((await submit({ revision_id: "stale" })).status).toBe(409);
+    expect((await submit({ shiplet_id: "project_other" })).status).toBe(403);
+    expect(
+      (
+        await submit(
+          {},
+          {
+            "x-shiplet-user-id": "user_outsider",
+            "x-shiplet-user-email": "outsider@example.com",
+          },
+        )
+      ).status,
+    ).toBe(403);
+    const prepared = await submit();
+    expect(prepared.status).toBe(200);
+    expect(await prepared.text()).toContain("Native page feedback");
+    await (env as Env).DB.prepare(
+      "UPDATE embed_installations SET revoked_on = ? WHERE id = ?",
+    )
+      .bind(new Date().toISOString(), installationId)
+      .run();
+    expect((await submit()).status).toBe(403);
   });
 
   it("rejects a cross-origin intent before storing any human-attributed action", async () => {

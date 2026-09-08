@@ -18,6 +18,7 @@ export interface TrustedReviewHostInput {
   submissionMode?: "confirmation" | "sandbox";
   allowArtifactDownloads?: boolean;
   frameAncestorOrigins?: string[];
+  embeddedSiteOrigin?: string;
   reviewState?: TrustedReviewHostState;
 }
 
@@ -257,7 +258,15 @@ function parseReviewPageUrl(value: string, allowLocalKernelHttp = false): URL {
 }
 
 function sanitizeReviewPageUrl(url: URL, depth: number): URL {
+  const fragment = url.hash;
   url.hash = "";
+  if (fragment.startsWith("#/") && !fragment.startsWith("#//") && depth < 8) {
+    const route = new URL(fragment.slice(1), url.origin);
+    if (route.origin === url.origin) {
+      const sanitized = sanitizeReviewPageUrl(route, depth + 1);
+      url.hash = `#${sanitized.pathname}${sanitized.search}`;
+    }
+  }
   const entries = Array.from(url.searchParams.entries());
   url.search = "";
   for (const [key, value] of entries) {
@@ -514,6 +523,11 @@ export function createTrustedReviewHostResponse(
     frameAncestorOrigins.length ? ` ${frameAncestorOrigins.join(" ")}` : ""
   }`;
   const title = escapeHtml(input.title);
+  const embeddedSiteOrigin = input.embeddedSiteOrigin
+    ? parseOrigin(input.embeddedSiteOrigin, "embedded site")
+    : "";
+  if (embeddedSiteOrigin && !frameAncestorOrigins.includes(embeddedSiteOrigin))
+    throw new TypeError("Embedded site must be an allowed frame ancestor");
   if (reviewState !== "ready") {
     const states = {
       expired: {
@@ -615,7 +629,7 @@ export function createTrustedReviewHostResponse(
     ? `<iframe data-shiplet-widget-frame="v1" title="Review widget for ${title}" src="${escapeHtml(widgetUrl.toString())}" sandbox="${widgetSandbox}" referrerpolicy="no-referrer"></iframe>`
     : "";
   const html = `<!doctype html>
-<html lang="en" data-shiplet-trusted-review-host="v1" data-review-state="ready" data-shiplet-id="${escapeHtml(input.shipletId)}" data-revision-id="${escapeHtml(input.revisionId)}" data-review-api-url="${escapeHtml(reviewApiUrl.toString())}" data-review-confirm-url="${escapeHtml(confirmationUrl.toString())}" data-review-page-url="${escapeHtml(reviewPageUrl)}" data-review-submission-mode="${submissionMode}">
+<html lang="en" data-shiplet-trusted-review-host="v1" data-review-state="ready" data-shiplet-embed-origin="${escapeHtml(embeddedSiteOrigin)}" data-shiplet-id="${escapeHtml(input.shipletId)}" data-revision-id="${escapeHtml(input.revisionId)}" data-review-api-url="${escapeHtml(reviewApiUrl.toString())}" data-review-confirm-url="${escapeHtml(confirmationUrl.toString())}" data-review-page-url="${escapeHtml(reviewPageUrl)}" data-review-submission-mode="${submissionMode}">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
@@ -625,7 +639,7 @@ export function createTrustedReviewHostResponse(
 </head>
 <body>
 <main aria-label="${title}">
-<iframe data-shiplet-artifact-frame="v1" title="Artifact for ${title}" src="${escapeHtml(artifactUrl.toString())}" sandbox="${artifactSandbox}" referrerpolicy="no-referrer"></iframe>
+${embeddedSiteOrigin ? '<div data-shiplet-artifact-frame="v1" hidden></div>' : `<iframe data-shiplet-artifact-frame="v1" title="Artifact for ${title}" src="${escapeHtml(artifactUrl.toString())}" sandbox="${artifactSandbox}" referrerpolicy="no-referrer"></iframe>`}
 <section id="shiplet-kernel-review-panel" aria-label="Review ${title}" aria-live="polite" hidden>
 <div data-shiplet-kernel-review-controls="v1"></div>
 ${widget}
@@ -648,6 +662,7 @@ export function trustedReviewHostScript(): string {
   return String.raw`(() => {
 	"use strict";
 	const page = document.documentElement;
+	const embeddedSiteOrigin = page.getAttribute("data-shiplet-embed-origin") || "";
 	const panel = document.getElementById("shiplet-kernel-review-panel");
 	const controls = document.querySelector("[data-shiplet-kernel-review-controls]");
 	const apiUrl = page.getAttribute("data-review-api-url") || "";
@@ -784,7 +799,7 @@ export function trustedReviewHostScript(): string {
 	annotationCardTitle.textContent = "New annotation";
 	const annotationExactContext = document.createElement("span");
 	annotationExactContext.className = "shiplet-annotation-exact-context";
-	annotationExactContext.textContent = "Revision " + revisionId + " · " + reviewPath;
+	annotationExactContext.textContent = embeddedSiteOrigin ? reviewPath : "Revision " + revisionId + " · " + reviewPath;
 	annotationExactContext.title = "Shiplet " + shipletId;
 	annotationCardHeading.append(annotationCardTitle, annotationExactContext);
 	const annotationCardControls = document.createElement("div");
@@ -810,7 +825,7 @@ export function trustedReviewHostScript(): string {
 	label.textContent = "Annotation";
 	const composerContext = document.createElement("p");
 	composerContext.className = "shiplet-review-composer-context";
-	composerContext.textContent = "Revision " + revisionId + " · " + reviewPath;
+	composerContext.textContent = embeddedSiteOrigin ? reviewPath : "Revision " + revisionId + " · " + reviewPath;
 	composerContext.title = composerContext.textContent;
 	composerContext.hidden = true;
 	const comment = document.createElement("textarea");
@@ -890,6 +905,7 @@ export function trustedReviewHostScript(): string {
 	form.append(annotationCardHeader, selectedTarget, label, comment, composerActions, annotationProperties, mentionDetails, captureTools, composerContext);
 	form.hidden = true;
 	controls.replaceChildren(header, status, list);
+	if (embeddedSiteOrigin) watchButton.hidden = true;
 	panel.hidden = true;
 	document.body.appendChild(launcherDock);
 	document.body.appendChild(form);
@@ -999,6 +1015,12 @@ export function trustedReviewHostScript(): string {
 	function childApiUrl(kind, feedbackId) {
 		try {
 			const url = new URL(apiUrl);
+			if (embeddedSiteOrigin && feedbackId && (kind === "status" || kind === "replies")) {
+				url.pathname = "/embed/review/thread";
+				url.searchParams.set("feedback_id", feedbackId);
+				url.searchParams.set("action", kind);
+				return url.toString();
+			}
 			if (kind === "mentions" && /\/review-feedback$/.test(url.pathname)) url.pathname = url.pathname.replace(/\/review-feedback$/, "/review-mention-users");
 			else if (kind === "mentions" && /\/__shiplet\/review\/feedback$/.test(url.pathname)) url.pathname = url.pathname.replace(/\/feedback$/, "/mention-users");
 			else if (kind === "watch" && /\/review-feedback$/.test(url.pathname)) url.pathname = url.pathname.replace(/\/review-feedback$/, "/review-watch");
@@ -1340,7 +1362,7 @@ export function trustedReviewHostScript(): string {
 	}
 
 	function setAnnotationExpanded(expanded) {
-		annotationExpanded = Boolean(expanded);
+		annotationExpanded = Boolean(expanded || embeddedSiteOrigin);
 		form.setAttribute("data-annotation-state", annotationExpanded ? "expanded" : "compact");
 		annotationSettings.setAttribute("aria-expanded", annotationExpanded ? "true" : "false");
 		if (annotationExpanded) form.setAttribute("role", "dialog");
@@ -1358,6 +1380,7 @@ export function trustedReviewHostScript(): string {
 		launcher.setAttribute("data-panel-open", annotationActive ? "true" : "false");
 		artifact.setAttribute("data-shiplet-selecting", annotationSelecting ? "true" : "false");
 		document.body.setAttribute("data-shiplet-annotating", annotationActive ? "true" : "false");
+		if (embeddedSiteOrigin && window !== parent) parent.postMessage({ protocol: "shiplet.embed.ui.v1", selecting: annotationSelecting, composing: annotationActive }, embeddedSiteOrigin);
 	}
 
 	function cancelTargetSelection() {
@@ -1458,6 +1481,13 @@ export function trustedReviewHostScript(): string {
 		}
 	}
 
+	if (embeddedSiteOrigin) window.addEventListener("message", event => {
+		if (event.source !== parent || event.origin !== embeddedSiteOrigin || !event.data || event.data.protocol !== "shiplet.embed.focus.v1") return;
+		const index = event.data.index;
+		if (!Number.isInteger(index) || index < 0 || index >= threadViews.length) return;
+		setPanelOpen(true); setActiveThread(threadViews[index]);
+	});
+
 	function render(items) {
 		const requestedActiveId = activeFeedbackId;
 		renderedItems = Array.isArray(items) ? items.slice(0, 100) : [];
@@ -1523,6 +1553,7 @@ export function trustedReviewHostScript(): string {
 				quickStatusButton.disabled = true;
 				try {
 					const response = await requestAt(childApiUrl("status", feedbackId), "POST", { status: quickStatus });
+					if (response.pendingConfirmation) { setStatus("Confirm this status change in the secure Shiplet window.", "ready"); return; }
 					if (isRecord(response) && isRecord(response.feedback) && response.feedback.id === feedbackId) {
 						renderedItems = renderedItems.map((entry) => isRecord(entry) && entry.id === feedbackId ? response.feedback : entry);
 						render(renderedItems);
@@ -1548,6 +1579,7 @@ export function trustedReviewHostScript(): string {
 				statusSelect.disabled = true;
 				try {
 					const response = await requestAt(childApiUrl("status", feedbackId), "POST", { status: statusSelect.value });
+					if (response.pendingConfirmation) { setStatus("Confirm this status change in the secure Shiplet window.", "ready"); return; }
 					if (isRecord(response) && isRecord(response.feedback) && response.feedback.id === feedbackId) render(renderedItems.map((entry) => isRecord(entry) && entry.id === feedbackId ? response.feedback : entry));
 					else await refresh();
 					setStatus(ticket + " status updated.", "ready");
@@ -1597,6 +1629,7 @@ export function trustedReviewHostScript(): string {
 				replyButton.disabled = true;
 				try {
 					const response = await requestAt(childApiUrl("replies", feedbackId), "POST", { comment: replyValue, mentions: selectedMentions(replyMentions) });
+					if (response.pendingConfirmation) { setStatus("Confirm this reply in the secure Shiplet window.", "ready"); return; }
 					replyInput.value = "";
 					if (isRecord(response) && isRecord(response.feedback) && response.feedback.id === feedbackId) {
 						render(renderedItems.map((entry) => isRecord(entry) && entry.id === feedbackId ? response.feedback : entry));
@@ -1625,7 +1658,7 @@ export function trustedReviewHostScript(): string {
 			list.appendChild(row);
 			threadViews.push(threadView);
 			const pinPoint = reviewCoordinates(item);
-			if (pinPoint && feedbackId) {
+			if (pinPoint && feedbackId && !embeddedSiteOrigin) {
 				const pin = document.createElement("button");
 				pin.type = "button";
 				pin.className = "shiplet-review-pin";
@@ -1644,6 +1677,7 @@ export function trustedReviewHostScript(): string {
 				pinLayer.appendChild(pin);
 			}
 		}
+		if (embeddedSiteOrigin) parent.postMessage({ protocol: "shiplet.embed.ui.v1", pins: threadViews.map((view, index) => ({ index, selector: view.item.selected_element?.selector || "", pageX: Number(view.item.coordinates?.pageX), pageY: Number(view.item.coordinates?.pageY) })).filter(pin => Number.isFinite(pin.pageX) && Number.isFinite(pin.pageY)) }, embeddedSiteOrigin);
 		const restoredThread = requestedActiveId ? threadViews.find((entry) => entry.id === requestedActiveId) : null;
 		setActiveThread(restoredThread || null);
 		updateCount(list.childElementCount);
@@ -1652,6 +1686,15 @@ export function trustedReviewHostScript(): string {
 
 	async function requestAt(url, method, body) {
 		if (!url) throw new Error("Review endpoint unavailable.");
+		if (embeddedSiteOrigin && new URL(url).pathname === "/embed/review/thread") {
+			const actionUrl = new URL(url);
+			const form = document.createElement("form");
+			form.method = "POST"; form.action = actionUrl.origin + "/embed/review/thread"; form.target = "_blank"; form.rel = "noopener"; form.hidden = true;
+			const values = { installation_id: actionUrl.searchParams.get("installation_id"), shiplet_id: shipletId, revision_id: revisionId, page_url: reviewPageUrl, feedback_id: actionUrl.searchParams.get("feedback_id"), action: actionUrl.searchParams.get("action"), value: body.comment || body.status };
+			for (const [name, value] of Object.entries(values)) { const input = document.createElement("input"); input.name = name; input.value = value || ""; form.append(input); }
+			document.body.append(form); form.requestSubmit(); form.remove();
+			return { pendingConfirmation: true };
+		}
 		const options = { method, credentials: "include", headers: { "content-type": "application/json" } };
 		if (body !== undefined) options.body = JSON.stringify(body);
 		const response = await fetch(url, options);
@@ -2014,6 +2057,7 @@ export function trustedReviewHostScript(): string {
 			appendField("client_feedback_id", "embed-" + crypto.randomUUID());
 		}
 		appendField("page_url", reviewPageUrl);
+		if (embeddedSiteOrigin) appendField("installation_id", new URL(apiUrl).searchParams.get("installation_id") || "");
 		appendField("shiplet_id", shipletId);
 		appendField("revision_id", revisionId);
 		if (!workflowOperation && confirmedMentions.length > 0) appendField("mentions_json", JSON.stringify(confirmedMentions));
@@ -2135,7 +2179,7 @@ export function trustedReviewHostScript(): string {
 	}
 
 	function offerArtifactChannel() {
-		if (!artifact || !artifact.contentWindow || typeof MessageChannel !== "function") return;
+		if (!artifact || (!embeddedSiteOrigin && !artifact.contentWindow) || typeof MessageChannel !== "function") return;
 		if (artifactPort && pendingArtifactRequestId) {
 			try { artifactPort.postMessage({ protocol: "shiplet.artifact.capture.command.v1", type: "cancel", channelNonce: artifactChannelNonce, shipletId, revisionId, requestId: pendingArtifactRequestId }); } catch {}
 		}
@@ -2149,13 +2193,13 @@ export function trustedReviewHostScript(): string {
 		setAnnotationMode(false, false);
 		clearArtifactCapture();
 		selectTarget.disabled = true;
-		artifactSourceWindow = artifact.contentWindow;
+		artifactSourceWindow = embeddedSiteOrigin ? parent : artifact.contentWindow;
 		artifactChannelNonce = crypto.randomUUID();
-		artifactSourceWindow.postMessage({ protocol: "shiplet.artifact.channel.v1", type: "offer", channelNonce: artifactChannelNonce, shipletId, revisionId }, "*");
+		artifactSourceWindow.postMessage({ protocol: "shiplet.artifact.channel.v1", type: "offer", channelNonce: artifactChannelNonce, shipletId, revisionId }, embeddedSiteOrigin || "*");
 	}
 
 	window.addEventListener("message", (event) => {
-		if (!artifactSourceWindow || event.source !== artifactSourceWindow || event.origin !== "null" || artifactChannelConnected) return;
+		if (!artifactSourceWindow || event.source !== artifactSourceWindow || event.origin !== (embeddedSiteOrigin || "null") || artifactChannelConnected) return;
 		const data = event.data;
 		if (!isRecord(data) || !hasExactKeys(data, ["protocol", "type", "channelNonce", "shipletId", "revisionId"])) return;
 		if (data.protocol !== "shiplet.artifact.channel.v1" || data.type !== "ready" || data.channelNonce !== artifactChannelNonce || data.shipletId !== shipletId || data.revisionId !== revisionId) return;
@@ -2208,7 +2252,7 @@ export function trustedReviewHostScript(): string {
 			setStatus("Element context captured. Add an annotation and continue to secure confirmation.", "ready");
 		});
 		connectedPort.start();
-		artifactSourceWindow.postMessage({ protocol: "shiplet.artifact.channel.v1", type: "connect", channelNonce: artifactChannelNonce, shipletId, revisionId }, "*", [channel.port2]);
+		artifactSourceWindow.postMessage({ protocol: "shiplet.artifact.channel.v1", type: "connect", channelNonce: artifactChannelNonce, shipletId, revisionId }, embeddedSiteOrigin || "*", [channel.port2]);
 		selectTarget.disabled = false;
 		if (annotationSelecting && !pendingArtifactRequestId) startTargetSelection();
 	});
@@ -2492,6 +2536,7 @@ export function trustedReviewHostScript(): string {
 	});
 	if (typeof window.setInterval === "function") window.setInterval(() => { if (!document.hidden) void refresh(); }, 5000);
 
+	if (embeddedSiteOrigin) setPanelOpen(true);
 	void refresh();
 	void loadWatch();
 	void loadMentionUsers();
@@ -2525,6 +2570,14 @@ iframe[data-shiplet-artifact-frame][data-shiplet-selecting="true"]{outline:3px s
 button:disabled{cursor:wait;opacity:.58}:focus-visible{outline:3px solid #2f6e88;outline-offset:2px}
 @media (max-width:480px){#shiplet-kernel-review-panel{right:8px;bottom:8px;width:calc(100vw - 16px);max-height:min(68dvh,560px);border-radius:12px}.shiplet-review-launcher-dock{right:10px;bottom:10px}.shiplet-review-launcher,.shiplet-review-comments-launcher{min-height:44px}.shiplet-review-comments-launcher{width:44px}.shiplet-annotation-modebar{top:8px;width:calc(100vw - 16px);min-height:44px;justify-content:space-between}.shiplet-annotation-modebar button{min-width:44px;min-height:44px}.shiplet-review-form{width:calc(100vw - 16px);max-width:calc(100vw - 16px)}.shiplet-review-form[data-annotation-state="compact"]{grid-template-columns:minmax(0,1fr) auto}.shiplet-review-form[data-annotation-state="expanded"]{max-height:calc(100dvh - 16px)}.shiplet-review-form textarea{min-height:52px;font-size:16px}.shiplet-annotation-drag-handle,.shiplet-annotation-card-close,.shiplet-review-composer-actions button{min-width:44px;min-height:44px}.shiplet-review-presence{top:10px;left:10px;max-width:calc(100vw - 20px)}.shiplet-review-presence-summary{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0,0,0,0)}.shiplet-review-head{flex-wrap:wrap}.shiplet-review-heading{flex-basis:100%}.shiplet-review-context-disclosure summary{display:flex;align-items:center;min-height:44px}.shiplet-review-actions{width:100%;justify-content:flex-end}.shiplet-review-compose{width:44px;padding:0;font-size:18px}.shiplet-review-secondary,.shiplet-review-icon,.shiplet-review-primary,.shiplet-review-thread-action,.shiplet-review-status-more summary,.shiplet-review-options summary,.shiplet-review-reply-form button,.shiplet-review-composer-actions button,.shiplet-review-capture-tools button{min-width:44px;min-height:44px}.shiplet-review-reply-form input{min-height:44px}.shiplet-review-thread-summary{min-height:52px}.shiplet-review-annotation-toolbar{top:8px;left:8px;right:8px;transform:none;justify-content:center}}
 @media (prefers-reduced-motion:reduce){*,*::before,*::after{scroll-behavior:auto!important;transition-duration:.01ms!important;animation-duration:.01ms!important;animation-iteration-count:1!important}}
+
+html[data-shiplet-embed-origin]:not([data-shiplet-embed-origin=""]) main{background:#fbf9f4}
+html[data-shiplet-embed-origin]:not([data-shiplet-embed-origin=""]) #shiplet-kernel-review-panel{position:absolute;inset:0 0 70px;width:100%;max-width:none;max-height:none;border:0;border-radius:0;box-shadow:none}
+html[data-shiplet-embed-origin]:not([data-shiplet-embed-origin=""]) .shiplet-review-form{left:12px!important;top:auto!important;bottom:12px;width:calc(100% - 24px);max-height:calc(100dvh - 24px);box-shadow:0 8px 24px #20293a22}
+html[data-shiplet-embed-origin]:not([data-shiplet-embed-origin=""]) .shiplet-review-target{max-width:100%;white-space:normal;border-radius:8px}
+html[data-shiplet-embed-origin]:not([data-shiplet-embed-origin=""]) .shiplet-annotation-drag-handle,html[data-shiplet-embed-origin]:not([data-shiplet-embed-origin=""]) .shiplet-annotation-modebar,
+html[data-shiplet-embed-origin]:not([data-shiplet-embed-origin=""]) .shiplet-annotation-target-focus,
+html[data-shiplet-embed-origin]:not([data-shiplet-embed-origin=""]) .shiplet-annotation-target-pin{display:none!important}
 `;
 }
 

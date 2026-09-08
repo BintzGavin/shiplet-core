@@ -24,6 +24,8 @@
  */
 
 import { Hono } from "hono";
+import { registerBrowserEmbed, renderEmbedSetup } from "./embed-setup";
+import { EMBED_WIDGET_CSS, embedWidgetScript } from "./embed-widget";
 import { DynamicWorkerExecutor } from "@cloudflare/codemode";
 import {
   openApiMcpServer,
@@ -443,6 +445,7 @@ import {
   createEmbedConnectionCode,
   createEmbedInstallation,
   createEmbedReviewSession,
+  createEmbedReviewGrant,
   createEmbedReviewSessionCookieHeader,
   digestEmbedReviewOperationReceiptHandle,
   embedClientScript,
@@ -455,6 +458,7 @@ import {
   readEmbedReviewSessionHandle,
   revokeEmbedInstallation,
   validateEmbedReviewSessionBinding,
+  type EmbedInstallationRecord,
 } from "./embed";
 import {
   SandboxSession,
@@ -636,6 +640,7 @@ function isPlatformCookieAuthRoute(pathname: string, method: string) {
     return true;
   if (method !== "GET" && pathname === "/auth/login") return true;
   if (method !== "GET" && pathname === "/embed/connect") return true;
+  if (method !== "GET" && pathname === "/embed/install") return true;
   if (method !== "GET" && pathname === "/auth/switch-account") return true;
   return false;
 }
@@ -644,11 +649,7 @@ function hasBearerAuthorization(request: Request) {
   return /^Bearer\s+.+/i.test(request.headers.get("authorization") || "");
 }
 
-function applyReviewCorsHeaders(
-  headers: Headers,
-  env: Env,
-  request: Request,
-) {
+function applyReviewCorsHeaders(headers: Headers, env: Env, request: Request) {
   const origin = allowedReviewCorsOrigin(
     env,
     request.url,
@@ -10426,6 +10427,7 @@ app.get("/docs/:slug", (c) => {
     "packages-revisions": "/docs/publishing",
     cli: "/docs/code-mode-mcp",
     deployment: "/docs/publishing",
+    wordpress: "/docs/embed",
     "external-setup": "/docs/security",
   };
   const retiredRedirect = retiredPublicDocRedirects[slug];
@@ -10961,6 +10963,154 @@ app.post("/auth/switch-account", async (c) => {
 app.get("/auth/logout", async (c) => {
   return logoutResponse(c.req.raw, c.env);
 });
+
+app.on(["GET", "POST"], "/embed/install", async (c) => {
+  const user = await getCurrentUser(c.req.raw, c.env);
+  if (!user)
+    return c.redirect(
+      authLoginRedirectUrl(c.env, c.req.url, embedRouteReturnTo(c.req.url)),
+    );
+  const appOrigin = new URL(appBaseUrl(c.env, c.req.url)).origin;
+  const url = new URL(c.req.url);
+  let selectedProjectId = url.searchParams.get("project_id") || "";
+  let message = "";
+  try {
+    if (c.req.method === "POST") {
+      if (c.req.header("origin") !== url.origin)
+        return c.text("Same-origin setup required", 403);
+      if (Number(c.req.header("content-length") || "0") > 16_384)
+        return c.text("Request too large", 413);
+      const body = await readRequestTextWithLimit(c.req.raw, 16_384);
+      const form = new URLSearchParams(body);
+      selectedProjectId = form.get("project_id") || "";
+      const action = form.get("action") || "create";
+      if (action !== "create" && action !== "revoke")
+        return c.text("Invalid action", 400);
+      const site = normalizeEmbedSiteUrl(form.get("site_url"));
+      if (action === "create" && !site)
+        return c.text(
+          "Use an HTTPS site URL, or localhost for development",
+          400,
+        );
+      let project: Project | null;
+      if (selectedProjectId === "new" && action === "create" && site) {
+        const name = new URL(site.siteUrl).hostname;
+        const landing = `<!doctype html><meta name="viewport" content="width=device-width,initial-scale=1"><title>${escapeEmbedHtml(name)}</title><main style="font:18px system-ui;max-width:640px;margin:12vh auto;padding:24px"><h1>Review ${escapeEmbedHtml(name)}</h1><p>This Shiplet collects feedback on the website itself. Open the site and choose Shiplet feedback to leave a comment.</p><a href="${escapeEmbedHtml(site.siteUrl)}" target="_blank" rel="noopener noreferrer">Open the website</a></main>`;
+        project = (
+          await publishShiplet(c.env, c.var.db, user, {
+            name,
+            organization_id: form.get("organization_id"),
+            subdomain: embedProjectSubdomain(name, site.siteUrl),
+            visibility: "organization",
+            assets: [{ path: "index.html", content: btoa(landing) }],
+          })
+        ).project;
+        selectedProjectId = project.id;
+      } else {
+        project = await getProjectById(c.env.DB, selectedProjectId);
+        if (
+          !project ||
+          project.archived_on ||
+          !(await canEditProject(c.env.DB, project, user))
+        )
+          return c.text("Shiplet project edit access required", 403);
+      }
+      if (action === "revoke") {
+        await c.env.DB.prepare(
+          "UPDATE embed_installations SET revoked_on = ? WHERE id = ? AND project_id = ? AND revoked_on IS NULL",
+        )
+          .bind(
+            new Date().toISOString(),
+            form.get("installation_id") || "",
+            project.id,
+          )
+          .run();
+        message = "Site disconnected. Its feedback stays in Shiplet.";
+      } else {
+        await registerBrowserEmbed(c.env.DB, project, user, site!.siteUrl);
+        message = "Your install snippet is ready.";
+      }
+    }
+    const [organizations, accessible] = await Promise.all([
+      listOrganizationsForUser(c.env.DB, user.id),
+      listProjectsForUser(c.env.DB, user.id),
+    ]);
+    const projects: Project[] = [];
+    for (const project of accessible)
+      if (
+        project.organization_id &&
+        !project.archived_on &&
+        (await canEditProject(c.env.DB, project, user))
+      )
+        projects.push(project);
+    if (
+      selectedProjectId &&
+      !projects.some((project) => project.id === selectedProjectId)
+    )
+      return c.text("Shiplet project edit access required", 403);
+    const installations = selectedProjectId
+      ? (
+          await c.env.DB.prepare(
+            "SELECT * FROM embed_installations WHERE project_id = ? AND revoked_on IS NULL ORDER BY created_on DESC",
+          )
+            .bind(selectedProjectId)
+            .all<EmbedInstallationRecord>()
+        ).results
+      : [];
+    c.header("Cache-Control", "no-store");
+    return c.html(
+      renderPage(
+        renderEmbedSetup({
+          appOrigin,
+          projects,
+          organizations,
+          selectedProjectId,
+          installations,
+          message,
+        }),
+        {
+          nonce: kernelDocumentNonce(c),
+          user,
+          customDomain: c.env.CUSTOM_DOMAIN,
+          appUrl: appOrigin,
+          title: "Connect a website | Shiplet",
+          description: "Install Shiplet feedback on your website.",
+          canonicalPath: null,
+          indexing: "noindex",
+        },
+      ),
+    );
+  } catch (error) {
+    if (isResponse(error)) return error;
+    return c.text("Could not update this installation. Try again.", 500);
+  }
+});
+
+app.get(
+  "/api/embed/widget.css",
+  () =>
+    new Response(EMBED_WIDGET_CSS, {
+      headers: {
+        "content-type": "text/css; charset=utf-8",
+        "cache-control": "public, max-age=300",
+        "access-control-allow-origin": "*",
+        "x-content-type-options": "nosniff",
+      },
+    }),
+);
+
+app.get(
+  "/api/embed/widget.js",
+  () =>
+    new Response(embedWidgetScript(), {
+      headers: {
+        "content-type": "application/javascript; charset=utf-8",
+        "cache-control": "public, max-age=300",
+        "access-control-allow-origin": "*",
+        "x-content-type-options": "nosniff",
+      },
+    }),
+);
 
 app.get("/embed/connect", async (c) => {
   try {
@@ -12196,17 +12346,22 @@ function embedAuthBootstrapResponse(
 ) {
   const origin = new URL(c.req.url).origin;
   const nonce = createKernelDocumentNonce();
-  const loginUrl = authLoginRedirectUrl(
-    c.env,
-    c.req.url,
-    embedRouteReturnTo(c.req.url),
+  const authorization = new URL("/embed/review/authorize", origin);
+  authorization.searchParams.set("installation_id", installation.id);
+  authorization.searchParams.set(
+    "return_url",
+    normalizeEmbedReturnUrl(
+      new URL(c.req.url).searchParams.get("return_url"),
+      installation.site_origin,
+    ) || installation.site_url,
   );
+  const loginUrl = authorization.toString();
   const html = `<!doctype html><html lang="en" data-shiplet-embed-auth-bootstrap="v1"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Sign in to review · Shiplet</title><script src="${origin}/api/embed/auth-bootstrap.js" nonce="${nonce}" defer></script></head><body><main><h1>Sign in to review</h1><p>Authentication opens in a secure Shiplet window.</p><button type="button" data-shiplet-embed-auth-open data-login-url="${escapeEmbedHtml(loginUrl)}">Open secure Shiplet sign-in</button><p role="status" aria-live="polite" data-shiplet-embed-auth-status></p></main></body></html>`;
   return new Response(html, {
     status: 200,
     headers: {
       "content-type": "text/html; charset=utf-8",
-      "content-security-policy": `default-src 'none'; script-src 'nonce-${nonce}'; script-src-attr 'none'; connect-src 'none'; img-src 'none'; style-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'self' ${installation.site_origin}`,
+      "content-security-policy": `default-src 'none'; script-src 'nonce-${nonce}'; script-src-attr 'none'; connect-src 'self'; img-src 'none'; style-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'self' ${installation.site_origin}`,
       "referrer-policy": "no-referrer",
       "x-content-type-options": "nosniff",
     },
@@ -12237,7 +12392,12 @@ function trustedConfirmationHtml(input: {
   intentId?: string;
   summary: string;
   workflowFields?: Record<string, unknown> | null;
-  completeHeading?: "Feedback sent" | "Workflow event recorded";
+  completeHeading?:
+    | "Feedback sent"
+    | "Workflow event recorded"
+    | "Reply added"
+    | "Status updated";
+  confirmLabel?: string;
   completePath?: "/embed/review/confirm/complete" | "/review/confirm/complete";
 }) {
   const complete = input.state === "complete";
@@ -12259,7 +12419,7 @@ function trustedConfirmationHtml(input: {
   const completePath = input.completePath ?? "/embed/review/confirm/complete";
   const form =
     !complete && input.intentId
-      ? `<form method="post" action="${completePath}"><input type="hidden" name="intent_id" value="${escapeEmbedHtml(input.intentId)}"><button type="submit" name="approval" value="confirm">${isWorkflow ? "Confirm and record workflow event" : "Confirm and send feedback"}</button></form>`
+      ? `<form method="post" action="${completePath}"><input type="hidden" name="intent_id" value="${escapeEmbedHtml(input.intentId)}"><button type="submit" name="approval" value="confirm">${escapeEmbedHtml(input.confirmLabel || (isWorkflow ? "Confirm and record workflow event" : "Confirm and send feedback"))}</button></form>`
       : "";
   return `<!doctype html><html lang="en" data-shiplet-confirmation="${input.state === "complete" ? "complete" : "v1"}"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${complete ? completeHeading : isWorkflow ? "Confirm workflow event" : "Confirm feedback"} · Shiplet</title></head><body><main><h1>${complete ? completeHeading : isWorkflow ? "Confirm workflow event" : "Confirm feedback"}</h1><p>${escapeEmbedHtml(input.summary)}</p>${fieldDetails}${form}</main></body></html>`;
 }
@@ -12284,7 +12444,36 @@ function trustedConfirmationResponse(
 
 app.get("/api/embed/auth-bootstrap.js", () => {
   return new Response(
-    `(()=>{"use strict";const button=document.querySelector("[data-shiplet-embed-auth-open]");const status=document.querySelector("[data-shiplet-embed-auth-status]");if(!button)return;button.addEventListener("click",event=>{if(!event.isTrusted)return;const url=button.getAttribute("data-login-url");if(!url)return;const popup=window.open(url,"shiplet-embed-auth","popup,width=560,height=720,resizable=yes,scrollbars=yes");if(!popup){if(status)status.textContent="Allow the secure sign-in window to continue.";return;}if(status)status.textContent="Complete sign-in in the secure Shiplet window.";popup.focus();});})();`,
+    String.raw`(() => {
+      "use strict";
+      const button = document.querySelector("[data-shiplet-embed-auth-open]");
+      const status = document.querySelector("[data-shiplet-embed-auth-status]");
+      if (!button) return;
+      const registeredPage = new URL(location.href).searchParams.get("return_url");
+      try { if (registeredPage && parent !== window) parent.postMessage({ protocol: "shiplet.embed.ui.v1", ready: true }, new URL(registeredPage).origin); } catch {}
+      let popup = null;
+      let exchanging = false;
+      button.addEventListener("click", event => {
+        if (!event.isTrusted) return;
+        popup = window.open(button.getAttribute("data-login-url"), "shiplet-embed-auth", "popup,width=560,height=720,resizable=yes,scrollbars=yes");
+        status.textContent = popup ? "Complete sign-in in the secure Shiplet window." : "Allow the secure sign-in window, then try again.";
+        if (popup) popup.focus();
+      });
+      window.addEventListener("message", async event => {
+        if (!popup || event.source !== popup || event.origin !== location.origin || exchanging) return;
+        const data = event.data;
+        if (!data || data.protocol !== "shiplet.embed.auth.v1" || typeof data.ticket !== "string" || !/^shiplet_embed_auth_[A-Za-z0-9_-]{20,200}$/.test(data.ticket)) return;
+        exchanging = true;
+        try {
+          const response = await fetch("/embed/review/authorize", { method: "POST", credentials: "include", body: new URLSearchParams({ ticket: data.ticket, installation_id: new URL(location.href).searchParams.get("installation_id") || "" }) });
+          if (!response.ok) throw new Error("exchange_failed");
+          const result = await response.json();
+          const host = new URL(result.hostUrl, location.origin);
+          if (host.origin !== location.origin || host.pathname !== "/embed/review/host") throw new Error("invalid_host");
+          popup.close(); location.replace(host.toString());
+        } catch { status.textContent = "Sign-in could not be completed. Open secure sign-in to retry."; exchanging = false; }
+      });
+    })();`,
     {
       headers: {
         "content-type": "application/javascript; charset=utf-8",
@@ -12293,6 +12482,101 @@ app.get("/api/embed/auth-bootstrap.js", () => {
       },
     },
   );
+});
+
+app.on(["GET", "POST"], "/embed/review/authorize", async (c) => {
+  const url = new URL(c.req.url);
+  try {
+    let installationId = url.searchParams.get("installation_id") || "";
+    let ticket = "";
+    if (c.req.method === "POST") {
+      if (c.req.header("origin") !== url.origin)
+        return c.text("Trusted sign-in origin required", 403);
+      if (Number(c.req.header("content-length") || "0") > 4096)
+        return c.text("Request too large", 413);
+      const body = await readRequestTextWithLimit(c.req.raw, 4096);
+      const form = new URLSearchParams(body);
+      installationId = form.get("installation_id") || "";
+      ticket = form.get("ticket") || "";
+    }
+    const installation = await getEmbedInstallation(c.env.DB, installationId);
+    if (!installation || installation.revoked_on)
+      return c.text("Site installation unavailable", 403);
+    const project = await getProjectById(c.env.DB, installation.project_id);
+    if (!project || project.archived_on)
+      return c.text("Shiplet unavailable", 403);
+    if (c.req.method === "GET") {
+      const user = await getCurrentUser(c.req.raw, c.env);
+      if (!user)
+        return c.redirect(
+          authLoginRedirectUrl(c.env, c.req.url, embedRouteReturnTo(c.req.url)),
+        );
+      if (!(await canViewProject(c.env.DB, project, user.id)))
+        return c.text("Shiplet review access required", 403);
+      const pageUrl = normalizeEmbedReturnUrl(
+        url.searchParams.get("return_url"),
+        installation.site_origin,
+      );
+      if (!pageUrl) return c.text("Invalid review page", 400);
+      const grant = await createEmbedReviewGrant(c.env.DB, {
+        installation,
+        project,
+        user,
+        pageUrl,
+      });
+      const nonce = createKernelDocumentNonce();
+      return new Response(
+        `<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Return to your website · Shiplet</title><h1>You’re signed in</h1><p>Return to your website to continue reviewing. You can close this window.</p><script nonce="${nonce}">if(window.opener)window.opener.postMessage({protocol:"shiplet.embed.auth.v1",ticket:${JSON.stringify(grant)}},location.origin);</script></html>`,
+        {
+          headers: {
+            "content-type": "text/html; charset=utf-8",
+            "cache-control": "no-store",
+            "referrer-policy": "no-referrer",
+            "content-security-policy": `default-src 'none'; script-src 'nonce-${nonce}'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'`,
+          },
+        },
+      );
+    }
+    const grant = await consumeEmbedExchangeCode(c.env.DB, {
+      code: ticket,
+      purpose: "review",
+      siteOrigin: installation.site_origin,
+    });
+    if (
+      !grant ||
+      grant.installation_id !== installation.id ||
+      grant.project_id !== project.id
+    )
+      return c.text("Sign-in handoff expired or already used", 403);
+    const user = await getUser(c.env.DB, grant.user_id);
+    if (!user || !(await canViewProject(c.env.DB, project, user.id)))
+      return c.text("Shiplet review access required", 403);
+    const session = await createEmbedReviewSession(c.env.DB, {
+      installation,
+      project,
+      user,
+      revisionId: trustedReviewRevisionId(project),
+      pageUrl: grant.return_url,
+    });
+    const host = new URL("/embed/review/host", url.origin);
+    host.searchParams.set("installation_id", installation.id);
+    host.searchParams.set("page_url", session.publicSession.pageUrl);
+    const response = json({ hostUrl: host.toString() });
+    response.headers.set("cache-control", "no-store");
+    response.headers.append(
+      "set-cookie",
+      createEmbedReviewSessionCookieHeader({
+        installationId: installation.id,
+        sessionHandle: session.sessionHandle,
+        now: new Date(),
+        expiresOn: session.expiresOn,
+      }),
+    );
+    return response;
+  } catch (error) {
+    if (isResponse(error)) return error;
+    return c.text("Sign-in could not be completed", 500);
+  }
 });
 
 app.get("/embed/review/start", async (c) => {
@@ -12305,7 +12589,7 @@ app.get("/embed/review/start", async (c) => {
           includeRevoked: true,
         })
       : null;
-    if (!installation) return c.text("WordPress installation not found", 404);
+    if (!installation) return c.text("Site installation not found", 404);
     if (installation.revoked_on) {
       return embedReviewStateResponse(c, "revoked", { installation });
     }
@@ -12315,7 +12599,27 @@ app.get("/embed/review/start", async (c) => {
     );
     if (!returnUrl) return c.text("Invalid review return URL", 400);
 
-    const user = await getCurrentUser(c.req.raw, c.env);
+    let user = await getCurrentUser(c.req.raw, c.env);
+    let sessionDeadline: Date | undefined;
+    if (!user) {
+      const handle = readEmbedReviewSessionHandle(
+        c.req.header("cookie") || null,
+        installation.id,
+      );
+      const existing = handle
+        ? await getEmbedReviewSession(c.env.DB, handle)
+        : null;
+      if (
+        existing &&
+        !existing.revokedOn &&
+        existing.installationId === installation.id &&
+        existing.projectId === installation.project_id &&
+        existing.siteOrigin === installation.site_origin
+      ) {
+        user = await getUser(c.env.DB, existing.actorUserId);
+        sessionDeadline = new Date(existing.expiresOn);
+      }
+    }
     if (!user) {
       return embedAuthBootstrapResponse(c, installation);
     }
@@ -12336,6 +12640,7 @@ app.get("/embed/review/start", async (c) => {
       revisionId: trustedReviewRevisionId(project),
       user,
       pageUrl: returnUrl,
+      expiresOn: sessionDeadline,
     });
     const trustedHostUrl = new URL(
       "/embed/review/host",
@@ -12677,6 +12982,46 @@ app.post("/review/confirm", async (c) => {
   }
 });
 
+async function requireEmbedConfirmationBinding(c: any, form: FormData) {
+  const user = await requireCurrentUser(c);
+  const installation = await getEmbedInstallation(
+    c.env.DB,
+    String(form.get("installation_id") || ""),
+  );
+  if (!installation)
+    throw new Response("Site installation unavailable", { status: 403 });
+  const project = await getProjectById(c.env.DB, installation.project_id);
+  if (
+    !project ||
+    project.archived_on ||
+    project.id !== form.get("shiplet_id") ||
+    !(await canViewProject(c.env.DB, project, user.id))
+  ) {
+    throw new Response("Shiplet review access required", { status: 403 });
+  }
+  const revisionId = trustedReviewRevisionId(project);
+  if (form.get("revision_id") !== revisionId)
+    throw new Response("Shiplet revision changed; reopen review", {
+      status: 409,
+    });
+  const pageUrl = normalizeEmbedReturnUrl(
+    String(form.get("page_url") || ""),
+    installation.site_origin,
+  );
+  if (!pageUrl)
+    throw new Response("Embedded review page mismatch", { status: 403 });
+  return {
+    project,
+    pageUrl,
+    session: {
+      installationId: installation.id,
+      revisionId,
+      actorUserId: user.id,
+      siteOrigin: installation.site_origin,
+    },
+  };
+}
+
 app.post("/embed/review/confirm", async (c) => {
   try {
     const origin = new URL(appBaseUrl(c.env, c.req.url)).origin;
@@ -12696,8 +13041,14 @@ app.post("/embed/review/confirm", async (c) => {
     if (contentLength > 14_000_000) {
       return c.text("Trusted confirmation form is too large", 413);
     }
-    const { session, project, pageUrl } = await requireEmbedReviewSession(c);
     const formData = await c.req.raw.formData();
+    // A top-level confirmation window has its own cookie partition. Authorize
+    // it with the signed-in user and public installation binding, never by
+    // copying an embedded session out of the trusted frame.
+    const binding = formData.has("installation_id")
+      ? await requireEmbedConfirmationBinding(c, formData)
+      : await requireEmbedReviewSession(c);
+    const { session, project, pageUrl } = binding;
     const requestId = String(formData.get("request_id") || "").trim();
     const operation = String(formData.get("operation") || "").trim();
     const submittedPageUrl = String(formData.get("page_url") || "");
@@ -12836,6 +13187,83 @@ app.post("/embed/review/confirm", async (c) => {
   }
 });
 
+app.post("/embed/review/thread", async (c) => {
+  try {
+    if (
+      !hasTrustedTopLevelFormProvenance(c.req.raw, [new URL(c.req.url).origin])
+    )
+      return c.text("Trusted review origin required", 403);
+    if (
+      !c.req
+        .header("content-type")
+        ?.startsWith("application/x-www-form-urlencoded")
+    )
+      return c.text("Trusted confirmation form required", 403);
+    const form = new FormData();
+    for (const [key, value] of new URLSearchParams(
+      await readRequestTextWithLimit(c.req.raw, 32_768),
+    ))
+      form.set(key, value);
+    const { project, session, pageUrl } = await requireEmbedConfirmationBinding(
+      c,
+      form,
+    );
+    const feedbackId = String(form.get("feedback_id") || "");
+    const feedback = await getReviewFeedback(c.env.DB, project.id, feedbackId);
+    if (
+      !feedback ||
+      normalizeEmbedReturnUrl(feedback.page_url, session.siteOrigin) !== pageUrl
+    )
+      return c.text("Review thread unavailable on this page", 403);
+    const action = String(form.get("action") || "");
+    const value = String(form.get("value") || "").trim();
+    if (action !== "replies" && action !== "status")
+      return c.text("Invalid review action", 400);
+    if (
+      action === "replies"
+        ? !value || value.length > 5000
+        : !["New", "In Progress", "Blocked", "Done", "Dropped"].includes(value)
+    )
+      return c.text("Invalid review action value", 400);
+    const payload = JSON.stringify({ feedbackId, value });
+    const intentId = `embed_intent_${crypto.randomUUID().replace(/-/g, "")}`;
+    const now = new Date();
+    await c.env.DB.prepare(
+      `INSERT INTO embed_review_operation_intents
+      (id, installation_id, project_id, revision_id, actor_user_id, effect, payload_json, payload_digest, request_id, page_url, expires_on, created_on)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    )
+      .bind(
+        intentId,
+        session.installationId,
+        project.id,
+        session.revisionId,
+        session.actorUserId,
+        action === "replies" ? "feedback.reply" : "feedback.status",
+        payload,
+        await sha256HexText(payload),
+        intentId,
+        pageUrl,
+        new Date(now.getTime() + 120_000).toISOString(),
+        now.toISOString(),
+      )
+      .run();
+    return trustedConfirmationResponse(
+      c.req.url,
+      trustedConfirmationHtml({
+        state: "pending",
+        intentId,
+        summary: `${feedback.ticket_label}: ${action === "replies" ? "Reply" : "Change status to"} — ${value}`,
+        confirmLabel:
+          action === "replies" ? "Confirm reply" : "Confirm status change",
+      }),
+    );
+  } catch (error) {
+    if (isResponse(error)) return error;
+    return c.text("Could not prepare review action", 500);
+  }
+});
+
 type EmbedReviewIntentRow = {
   id: string;
   installation_id: string;
@@ -12895,6 +13323,75 @@ async function completeTrustedReviewConfirmation(c: any) {
       return c.text("Shiplet review access required", 403);
     }
     const now = new Date();
+    if (
+      intent.effect === "feedback.reply" ||
+      intent.effect === "feedback.status"
+    ) {
+      const installation = await getEmbedInstallation(
+        c.env.DB,
+        intent.installation_id,
+      );
+      if (!installation || installation.project_id !== project.id)
+        return c.text("Site installation unavailable", 403);
+      const payload = JSON.parse(intent.payload_json) as {
+        feedbackId: string;
+        value: string;
+      };
+      const feedback = await getReviewFeedback(
+        c.env.DB,
+        project.id,
+        payload.feedbackId,
+      );
+      if (
+        !feedback ||
+        normalizeEmbedReturnUrl(feedback.page_url, installation.site_origin) !==
+          intent.page_url
+      )
+        return c.text("Review thread unavailable", 403);
+      const claimed = await c.env.DB.prepare(
+        `UPDATE embed_review_operation_intents SET confirmed_on = ?, completed_on = ?
+        WHERE id = ? AND actor_user_id = ? AND confirmed_on IS NULL AND expires_on > ?
+        AND EXISTS (SELECT 1 FROM embed_installations WHERE id = ? AND revoked_on IS NULL)`,
+      )
+        .bind(
+          now.toISOString(),
+          now.toISOString(),
+          intent.id,
+          user.id,
+          now.toISOString(),
+          installation.id,
+        )
+        .run();
+      if (claimed.meta.changes !== 1)
+        return c.text("Confirmation intent expired or already used", 409);
+      if (intent.effect === "feedback.reply")
+        await createReviewReplyWithNotifications(
+          c.env,
+          project,
+          payload.feedbackId,
+          payload.value,
+          user,
+        );
+      else
+        await updateReviewStatusWithNotifications(
+          c.env,
+          project,
+          payload.feedbackId,
+          payload.value,
+          user,
+        );
+      return trustedConfirmationResponse(
+        c.req.url,
+        trustedConfirmationHtml({
+          state: "complete",
+          summary: "Your change is visible in the shared thread.",
+          completeHeading:
+            intent.effect === "feedback.reply"
+              ? "Reply added"
+              : "Status updated",
+        }),
+      );
+    }
     if (intent.effect === "workflow.event.create") {
       let payload: unknown;
       try {
@@ -13055,7 +13552,13 @@ app.get("/embed/review/host", async (c) => {
   try {
     const { session, project, pageUrl } = await requireEmbedReviewSession(c);
     const origin = new URL(c.req.url).origin;
-    const widget = await activeReviewWidget(c.env, project);
+    const installation = await getEmbedInstallation(
+      c.env.DB,
+      session.installationId,
+    );
+    const widget = installation?.secret_hash.startsWith("browser-only:")
+      ? null
+      : await activeReviewWidget(c.env, project);
     const bindingQuery = new URLSearchParams({
       installation_id: session.installationId,
       page_url: pageUrl,
@@ -13072,6 +13575,7 @@ app.get("/embed/review/host", async (c) => {
       reviewApiUrl: `${origin}/embed/review/feedback?${bindingQuery}`,
       reviewPageUrl: pageUrl,
       frameAncestorOrigins: [session.siteOrigin],
+      embeddedSiteOrigin: session.siteOrigin,
     });
   } catch (error) {
     if (isResponse(error)) {
@@ -13123,6 +13627,7 @@ app.get("/embed/review/feedback", async (c) => {
     return json({
       feedback: await listReviewFeedback(c.env.DB, project.id, {
         pageUrl,
+        includeClosed: true,
         limit: 100,
       }),
     });
@@ -16543,9 +17048,12 @@ app.post("/api/mcp", async (c) => {
         oauthPrincipal.credentialKind === "agent_registration" &&
         !oauthPrincipal.permissions.includes("mcp")
       ) {
-        throw new Response("Registered agent is missing required permission: mcp", {
-          status: 403,
-        });
+        throw new Response(
+          "Registered agent is missing required permission: mcp",
+          {
+            status: 403,
+          },
+        );
       }
       return handleCodeModeMcpRequest(
         c.env,

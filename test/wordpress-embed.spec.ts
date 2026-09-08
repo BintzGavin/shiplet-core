@@ -1012,29 +1012,9 @@ describe("WordPress embed installations", () => {
     expect.soft(embedHtml).toContain(`data-revision-id="${active.revisionId}"`);
     expect.soft(embedHtml).toContain('data-shiplet-widget-frame="v1"');
     expect(embedHtml).not.toContain("reviewToken");
-    const contextUrl = embedHtml
-      .match(
-        /<iframe[^>]+data-shiplet-artifact-frame="v1"[^>]+src="([^"]+)"/,
-      )?.[1]
-      ?.replaceAll("&amp;", "&");
-    expect.soft(contextUrl).toBeTruthy();
-    if (contextUrl) {
-      const contextResponse = await request(contextUrl, {
-        headers: { Cookie: session.cookie },
-      });
-      expect.soft(contextResponse.status).toBe(200);
-      const contextCsp =
-        contextResponse.headers.get("content-security-policy") || "";
-      const contextSandbox =
-        contextCsp
-          .split(";")
-          .map((directive) => directive.trim())
-          .find((directive) => directive.startsWith("sandbox")) || "";
-      expect.soft(contextSandbox).toBe("sandbox");
-      expect.soft(contextCsp).toContain("script-src 'none'");
-      expect.soft(contextCsp).toContain("script-src-attr 'none'");
-      expect.soft(contextCsp).not.toContain("'unsafe-inline'");
-    }
+    expect(embedHtml).toContain('data-shiplet-embed-origin="https://client.example.com"');
+    expect(embedHtml).not.toMatch(/<iframe[^>]+data-shiplet-artifact-frame/);
+
   });
 
   it("fails closed when a bypassed runtime-v1 widget contains an unsupported module graph", async () => {
@@ -1204,7 +1184,7 @@ describe("WordPress embed installations", () => {
     expect(html).not.toContain("data-shiplet-artifact-frame");
   });
 
-  it("keeps exactly one active installation per site origin across reconnects", async () => {
+  it("keeps different projects connected independently on the same origin", async () => {
     const { organization } = await createOrganization();
     const firstProject = await createExternalProject(organization.id);
     const secondProject = await createExternalProject(organization.id);
@@ -1219,7 +1199,7 @@ describe("WordPress embed installations", () => {
     expect(rows.results).toHaveLength(2);
     expect(
       rows.results.find((row) => row.id === first.installation.id)?.revoked_on,
-    ).toBeTruthy();
+    ).toBeNull();
     expect(
       rows.results.find((row) => row.id === second.installation.id)?.revoked_on,
     ).toBeNull();
@@ -1230,7 +1210,7 @@ describe("WordPress embed installations", () => {
       })}`,
       { headers: OWNER_HEADERS },
     );
-    expect(retiredStart.status).toBe(410);
+    expect(retiredStart.status).toBe(302);
     const activeStart = await startReviewSession(second.installation.id);
     expect(activeStart.start.status).toBe(302);
   });

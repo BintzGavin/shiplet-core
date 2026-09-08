@@ -34,9 +34,9 @@
     {
       "id": "embed_review_bridge",
       "methods": ["GET", "POST", "DELETE"],
-      "pathPattern": "^/(?:embed/(?:connect|review/(?:start|confirm(?:/complete)?|host|context|widget|feedback))|review/confirm(?:/complete)?|api/embed/(?:auth-bootstrap\\.js|client\\.js|installations/(?:exchange|:installationId)|session/exchange))$",
+      "pathPattern": "^/(?:embed/(?:(?:connect|install)|review/(?:start|authorize|thread|confirm(?:/complete)?|host|context|widget|feedback))|review/confirm(?:/complete)?|api/embed/(?:auth-bootstrap\\.js|widget\\.(?:js|css)|client\\.js|installations/(?:exchange|:installationId)|session/exchange))$",
       "category": "trusted_embed_protocol",
-      "rationale": "The WordPress and external-review bridge is a first-party origin-bound protocol with installation and browser-session checks, not a general REST surface."
+      "rationale": "The website widget and external-review bridge is a first-party origin-bound protocol with installation and browser-session checks, not a general REST surface."
     },
     {
       "id": "browser_account_models",

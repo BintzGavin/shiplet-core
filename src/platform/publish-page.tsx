@@ -130,8 +130,8 @@ function PublishPage(props: {
 					<span className="success-card-label">Shiplet</span>
 					<h1>Create a shiplet</h1>
 					<p>
-						Upload a build or file, or paste a public URL. Add access controls,
-						contextual feedback, and agent handoff to the shiplet.
+						Connect your website or upload a build or file. Leave feedback on
+						the work so teammates and AI agents can act on it.
 					</p>
 				</div>
 				<div className="url-tag" aria-hidden="true">
@@ -141,6 +141,12 @@ function PublishPage(props: {
 			</header>
 
 			<PlatformNav current="publish" />
+			<section className="success-card shiplet-panel">
+				<h2>Review your website where it runs</h2>
+				<p>Add Shiplet with two HTML tags. Keep your site's login, navigation, and interactions while your team comments in context.</p>
+				<a className="btn btn-primary" href="/embed/install">Connect a website</a>
+				<p><a href="/docs/embed">Install with your coding agent</a></p>
+			</section>
 
 			<section className="success-card shiplet-panel shiplet-focus-strip publish-primary-panel">
 				<form id="projectForm" className="publish-layout voyage">
@@ -191,19 +197,16 @@ function SourceChoiceGrid(props: { sourceMode: PublishSourceMode }) {
 				activeValue={props.sourceMode}
 			/>
 			<SourceChoice
-				id="sourceModeUrl"
-				title="URL"
-				copy="Attach a staging page, PR deployment, hosted report, or public URL."
-				value="external_url"
-				activeValue={props.sourceMode}
-			/>
-			<SourceChoice
 				id="sourceModeHosting"
 				title="Agent or CI"
 				copy="Use API/MCP from agents, CLIs, CI jobs, and local scripts after build."
 				value="hosting"
 				activeValue={props.sourceMode}
 			/>
+			<details>
+				<summary>Experimental options</summary>
+				<SourceChoice id="sourceModeUrl" title="Experimental URL preview" copy="Try a read-only public page preview. For working websites, use Connect a website." value="external_url" activeValue={props.sourceMode} />
+			</details>
 		</div>
 	);
 }
@@ -261,6 +264,7 @@ function UploadStep(props: { sourceMode: PublishSourceMode }) {
 					</label>
 				</div>
 				<div id="sourcePanelUrl" hidden={props.sourceMode !== "external_url"}>
+					<p>Experimental: scripts, sign-in, forms, maps, and live connections may not work through this preview. <a href="/embed/install">Install the widget</a> to review the original site.</p>
 					<div className="form-group">
 						<label htmlFor="externalUrl">URL</label>
 						<input

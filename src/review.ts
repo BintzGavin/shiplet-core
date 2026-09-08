@@ -1741,7 +1741,7 @@ function mcpError(id: unknown, code: number, message: string) {
 function buildPageUrlKey(pageUrl: string) {
 	try {
 		const url = new URL(pageUrl);
-		return `${url.origin}${url.pathname}`;
+		return `${url.origin}${url.pathname}${url.hash.startsWith("#/") ? url.hash.split("?")[0] : ""}`;
 	} catch {
 		return pageUrl;
 	}

@@ -188,16 +188,18 @@ export function injectTrustedArtifactBridge(
   }
   const tag = `<script data-shiplet-kernel-artifact-bridge="v1" src="${scriptPath}" defer></script>`;
   const headEnd = html.search(/<\/head\s*>/i);
-  if (headEnd >= 0) return `${html.slice(0, headEnd)}${tag}${html.slice(headEnd)}`;
+  if (headEnd >= 0)
+    return `${html.slice(0, headEnd)}${tag}${html.slice(headEnd)}`;
   const bodyStart = html.search(/<body(?:\s[^>]*)?>/i);
-  if (bodyStart >= 0) return `${html.slice(0, bodyStart)}${tag}${html.slice(bodyStart)}`;
+  if (bodyStart >= 0)
+    return `${html.slice(0, bodyStart)}${tag}${html.slice(bodyStart)}`;
   return `${tag}${html}`;
 }
 
-export function trustedArtifactBridgeScript() {
-  return String.raw`(() => {
+export function trustedArtifactBridgeScript(embedded = false) {
+  return String.raw`${embedded ? "function attachShipletPageBridge(frame, expectedOrigin) {" : "(() => {"}
 	"use strict";
-	if (window === parent || typeof MessageChannel !== "function") return;
+	${embedded ? "const parent = frame.contentWindow; if (!parent) return () => {};" : 'if (window === parent || typeof MessageChannel !== "function") return;'}
 	let hostOrigin = "";
 	let channelNonce = "";
 	let shipletId = "";
@@ -216,6 +218,12 @@ export function trustedArtifactBridgeScript() {
 	function isIdentifier(value) { return typeof value === "string" && /^[A-Za-z0-9][A-Za-z0-9._:-]{0,255}$/.test(value); }
 	function boundedNumber(value, minimum, maximum) { return typeof value === "number" && Number.isFinite(value) && value >= minimum && value <= maximum; }
 	function safeText(value, maximum) { return String(value || "").replace(/\s+/g, " ").trim().slice(0, maximum); }
+	function publicText(target, maximum) {
+		if (target.closest("shiplet-feedback,[data-shiplet-private]")) return "";
+		const clone = target.cloneNode(true);
+		clone.querySelectorAll("shiplet-feedback,[data-shiplet-private],script,style,input,textarea,select").forEach(node => node.remove());
+		return safeText(clone.textContent, maximum);
+	}
 	function boundedCoordinate(value, minimum, maximum) { return Math.max(minimum, Math.min(maximum, Number(value) || 0)); }
 
 	function viewportState() {
@@ -325,7 +333,7 @@ export function trustedArtifactBridgeScript() {
 
 	function sanitizedClone() {
 		const clone = document.documentElement.cloneNode(true);
-		clone.querySelectorAll("script,noscript,iframe,frame,object,embed,video,audio,canvas,img,picture,source,link,meta,[data-shiplet-artifact-capture-highlight]").forEach((node) => node.remove());
+		clone.querySelectorAll("script,noscript,iframe,frame,object,embed,video,audio,canvas,img,picture,source,link,meta,input,textarea,select,shiplet-feedback,[data-shiplet-private],[data-shiplet-artifact-capture-highlight]").forEach((node) => node.remove());
 		let visited = 0;
 		for (const node of clone.querySelectorAll("*")) {
 			visited += 1;
@@ -378,7 +386,7 @@ export function trustedArtifactBridgeScript() {
 		for (const node of document.querySelectorAll("h1,h2,h3,p,li,button,a,label")) {
 			if (drawn >= 80) break;
 			const rect = node.getBoundingClientRect();
-			const text = safeText(node.textContent, 180);
+			const text = publicText(node, 180);
 			if (!text || rect.bottom < 0 || rect.top > height || rect.right < 0 || rect.left > width) continue;
 			context.fillText(text, Math.max(4, rect.left), Math.max(18, rect.top + 18), Math.max(40, width - Math.max(4, rect.left) - 4));
 			drawn += 1;
@@ -405,7 +413,7 @@ export function trustedArtifactBridgeScript() {
 			screenshotMode: "element",
 			viewport: { width: Math.max(1, innerWidth), height: Math.max(1, innerHeight), devicePixelRatio: Math.max(.1, Math.min(10, devicePixelRatio || 1)) },
 			coordinates: { pageX: event.pageX, pageY: event.pageY, viewportX: event.clientX, viewportY: event.clientY },
-			selectedElement: { selector: selectorFor(target), tagName: target.tagName.slice(0, 64), text: safeText(target.textContent, 500) },
+			selectedElement: { selector: selectorFor(target), tagName: target.tagName.slice(0, 64), text: publicText(target, 500) },
 			captureContext: { documentWidth: Math.max(1, document.documentElement.scrollWidth), documentHeight: Math.max(1, document.documentElement.scrollHeight), scrollX: window.scrollX, scrollY: window.scrollY },
 		};
 	}
@@ -417,9 +425,10 @@ export function trustedArtifactBridgeScript() {
 		document.removeEventListener("click", onCaptureClick, true);
 	}
 
-	function onPointerOver(event) { if (activeRequestId && event.target instanceof Element) showHighlight(event.target); }
+	function onPointerOver(event) { if (activeRequestId && event.target instanceof Element && !event.target.closest("shiplet-feedback,[data-shiplet-private]")) showHighlight(event.target); }
 	async function onCaptureClick(event) {
 		if (!activeRequestId || event.isTrusted !== true || !(event.target instanceof Element)) return;
+		if (event.target.closest("shiplet-feedback,[data-shiplet-private]")) return;
 		event.preventDefault();
 		event.stopImmediatePropagation();
 		const requestId = activeRequestId;
@@ -430,8 +439,10 @@ export function trustedArtifactBridgeScript() {
 		selectedOffsetX = event.clientX - targetRect.left;
 		selectedOffsetY = event.clientY - targetRect.top;
 		cancelCapture();
+		const capturePort = port;
+		const captureNonce = channelNonce;
 		const payload = await captureTarget(target, event);
-		if (!port) return;
+		if (!port || port !== capturePort || channelNonce !== captureNonce || selectedRequestId !== requestId) return;
 		port.postMessage({ protocol: "shiplet.artifact.capture.result.v1", type: "result", channelNonce, shipletId, revisionId, requestId, status: "captured", payload });
 		postArtifactPosition();
 	}
@@ -449,8 +460,9 @@ export function trustedArtifactBridgeScript() {
 		document.addEventListener("click", onCaptureClick, true);
 	}
 
-	window.addEventListener("message", (event) => {
+	function onChannelMessage(event) {
 		if (event.source !== parent || event.origin === "null" || !isRecord(event.data)) return;
+		${embedded ? "if (event.origin !== expectedOrigin) return;" : ""}
 		const data = event.data;
 		if (exactKeys(data, ["protocol", "type", "channelNonce", "shipletId", "revisionId"]) && data.protocol === "shiplet.artifact.channel.v1" && data.type === "offer" && isIdentifier(data.channelNonce) && isIdentifier(data.shipletId) && isIdentifier(data.revisionId)) {
 			if (hostOrigin && event.origin !== hostOrigin) return;
@@ -474,9 +486,21 @@ export function trustedArtifactBridgeScript() {
 		});
 		connectedPort.start();
 		postArtifactPosition();
-	});
+	}
+	window.addEventListener("message", onChannelMessage);
 	window.addEventListener("scroll", scheduleArtifactPosition, true);
 	window.addEventListener("resize", scheduleArtifactPosition);
-	document.addEventListener("scroll", scheduleArtifactPosition, true);
-})();`;
+	 document.addEventListener("scroll", scheduleArtifactPosition, true);
+${
+  embedded
+    ? `return () => {
+  cancelCapture(); releaseSelectedTarget("");
+  if (port) port.close(); port = null;
+  window.removeEventListener("message", onChannelMessage);
+  window.removeEventListener("scroll", scheduleArtifactPosition, true);
+  window.removeEventListener("resize", scheduleArtifactPosition);
+  document.removeEventListener("scroll", scheduleArtifactPosition, true);
+}; }`
+    : "})();"
+}`;
 }

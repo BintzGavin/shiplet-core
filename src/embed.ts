@@ -1,7 +1,7 @@
 import type { Project } from "./types";
 import { newId, timestamps, type ShipletUser } from "./store";
 
-export type EmbedExchangePurpose = "connection";
+export type EmbedExchangePurpose = "connection" | "review";
 
 export type EmbedInstallationRecord = {
   id: string;
@@ -92,6 +92,7 @@ export type EmbedReviewOperationReceiptClaimInput = {
 };
 
 const CONNECTION_CODE_PREFIX = "shiplet_embed_connect_";
+const REVIEW_GRANT_PREFIX = "shiplet_embed_auth_";
 const INSTALLATION_SECRET_PREFIX = "shiplet_embed_install_";
 const MAX_URL_LENGTH = 2_048;
 const MAX_SITE_NAME_LENGTH = 160;
@@ -136,6 +137,7 @@ export async function createEmbedReviewSession(
     user: ShipletUser;
     pageUrl: string;
     now?: Date;
+    expiresOn?: Date;
   },
 ) {
   if (input.installation.revoked_on) {
@@ -157,8 +159,17 @@ export async function createEmbedReviewSession(
   }
   const now = input.now || new Date();
   const expiresOn = new Date(
-    now.getTime() + MAX_REVIEW_SESSION_TTL_SECONDS * 1_000,
+    Math.min(
+      now.getTime() + MAX_REVIEW_SESSION_TTL_SECONDS * 1_000,
+      input.expiresOn?.getTime() ?? Infinity,
+    ),
   );
+  if (
+    !Number.isFinite(expiresOn.getTime()) ||
+    expiresOn.getTime() <= now.getTime()
+  ) {
+    throw new Response("Embedded review session expired", { status: 401 });
+  }
   const sessionHandle = secureToken("shiplet_embed_session_");
   const sessionHash = await hashToken(sessionHandle);
   await db
@@ -489,6 +500,29 @@ export async function createEmbedConnectionCode(
   });
 }
 
+export async function createEmbedReviewGrant(
+  db: D1Database,
+  input: {
+    installation: EmbedInstallationRecord;
+    project: Project;
+    user: ShipletUser;
+    pageUrl: string;
+  },
+) {
+  return createEmbedExchangeCode(db, {
+    purpose: "review",
+    prefix: REVIEW_GRANT_PREFIX,
+    installationId: input.installation.id,
+    project: input.project,
+    user: input.user,
+    siteOrigin: input.installation.site_origin,
+    siteUrl: input.installation.site_url,
+    siteName: input.installation.site_name,
+    returnUrl: input.pageUrl,
+    expiresInSeconds: 60,
+  });
+}
+
 export async function consumeEmbedExchangeCode(
   db: D1Database,
   input: {
@@ -498,7 +532,12 @@ export async function consumeEmbedExchangeCode(
   },
 ) {
   const code = normalizeString(input.code, 512);
-  if (!code.startsWith(CONNECTION_CODE_PREFIX)) return null;
+  if (
+    !code.startsWith(
+      input.purpose === "review" ? REVIEW_GRANT_PREFIX : CONNECTION_CODE_PREFIX,
+    )
+  )
+    return null;
   const codeHash = await hashToken(code);
   const now = timestamps.now();
   const row = await db
@@ -554,9 +593,9 @@ export async function createEmbedInstallation(
       .prepare(
         `UPDATE embed_installations
 				 SET revoked_on = ?
-				 WHERE site_origin = ? AND revoked_on IS NULL`,
+				 WHERE site_origin = ? AND project_id = ? AND revoked_on IS NULL`,
       )
-      .bind(now, installation.site_origin),
+      .bind(now, installation.site_origin, installation.project_id),
     db
       .prepare(
         `INSERT INTO embed_installations
@@ -854,7 +893,15 @@ function isCredentialShapedPageQueryKey(key: string) {
 }
 
 function sanitizeEmbedReviewPageUrl(url: URL, depth: number): URL {
+  const fragment = url.hash;
   url.hash = "";
+  if (fragment.startsWith("#/") && !fragment.startsWith("#//") && depth < 8) {
+    const route = new URL(fragment.slice(1), url.origin);
+    if (route.origin === url.origin) {
+      const sanitized = sanitizeEmbedReviewPageUrl(route, depth + 1);
+      url.hash = `#${sanitized.pathname}${sanitized.search}`;
+    }
+  }
   const entries = Array.from(url.searchParams.entries());
   url.search = "";
   for (const [key, value] of entries) {
