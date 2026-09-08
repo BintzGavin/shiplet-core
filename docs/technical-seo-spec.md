@@ -31,3 +31,18 @@ then its robots meta directive is `noindex,nofollow,noarchive` and it does not c
 Given a crawler requests `/sitemap.xml`,
 when Shiplet builds the sitemap,
 then it lists only canonical, indexable HTML pages and excludes `llms.txt`, `openapi.json`, private application routes, and duplicate documentation URLs.
+
+Given a guide is added to or removed from the public documentation registry,
+when Shiplet builds the sitemap,
+then its canonical URL is added or removed automatically without maintaining a second list.
+The website-widget and browser-capture guides are included; retired WordPress and introduction aliases are excluded.
+
+Given a crawler follows any sitemap entry anonymously,
+when the page responds,
+then it returns HTML with status 200, a self-referencing canonical, and permission to index.
+Capture sessions, downloads, authenticated workspaces, and user artifacts are not discovery entries.
+
+Given a deployment supplies its canonical application URL,
+when it serves `robots.txt` and `sitemap.xml`,
+then both use that URL instead of the request host and sitemap locations are XML-escaped.
+The root sitemap is advertised by `robots.txt`. Dates, update frequencies, and priorities are omitted rather than guessed.

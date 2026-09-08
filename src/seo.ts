@@ -1,4 +1,5 @@
 import { BRAND_ASSETS } from "./generated-brand-assets";
+import { getPublicDocsPaths } from "./docs";
 
 export const DEFAULT_SITE_URL = "https://shiplet.cc";
 export const SITE_NAME = "Shiplet";
@@ -149,29 +150,13 @@ export function robotsResponse(appUrl?: string) {
 }
 
 export function sitemapXml(appUrl?: string) {
-  const urls = [
-    { path: "/", priority: "1.0" },
-    { path: "/docs", priority: "0.9" },
-    { path: "/docs/why-shiplet", priority: "0.8" },
-    { path: "/docs/quickstart", priority: "0.8" },
-    { path: "/docs/access-control", priority: "0.7" },
-    { path: "/docs/api-keys", priority: "0.7" },
-    { path: "/docs/code-mode-mcp", priority: "0.8" },
-    { path: "/docs/api-surface", priority: "0.7" },
-    { path: "/docs/extensions", priority: "0.8" },
-    { path: "/docs/security", priority: "0.8" },
-    { path: "/docs/publishing", priority: "0.8" },
-    { path: "/docs/review-feedback", priority: "0.8" },
-    { path: "/docs/wordpress", priority: "0.8" },
-  ];
+  const paths = ["/", ...getPublicDocsPaths()];
   return `<?xml version="1.0" encoding="UTF-8"?>
 <urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
-${urls
+${paths
   .map(
-    (url) => `  <url>
-    <loc>${absoluteSiteUrl(appUrl, url.path)}</loc>
-    <changefreq>weekly</changefreq>
-    <priority>${url.priority}</priority>
+    (path) => `  <url>
+    <loc>${htmlAttribute(absoluteSiteUrl(appUrl, path))}</loc>
   </url>`,
   )
   .join("\n")}

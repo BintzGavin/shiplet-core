@@ -387,6 +387,12 @@ export function getDocsPage(slug = "introduction") {
   return DOCS_PAGES.find((page) => page.slug === slug) || null;
 }
 
+export function getPublicDocsPaths() {
+  return DOCS_PAGES.map((page) =>
+    page.slug === "introduction" ? "/docs" : `/docs/${page.slug}`,
+  );
+}
+
 export function BuildDocsPage(slug = "introduction") {
   const page = getDocsPage(slug) || getDocsPage("introduction")!;
   return buildDocsPage(page);
