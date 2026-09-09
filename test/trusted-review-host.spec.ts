@@ -156,6 +156,7 @@ async function operateTrustedHostScript(options?: {
         : "https://app.shiplet.cc/embed/review/feedback",
     ],
     ["data-review-page-url", "https://client.example/pricing/"],
+    ["data-review-avatar-url", "https://app.shiplet.cc/brand/avatars/shiplet-avatar-presets-v9.png"],
     [
       "data-review-confirm-url",
       options?.confirmationUrl || "https://app.shiplet.cc/embed/review/confirm",
@@ -830,9 +831,14 @@ describe("trusted review host boundary", () => {
       (element) => element.className === "shiplet-review-presence-avatar",
     );
     expect(avatars).toHaveLength(2);
+    expect(avatars[0]?.textContent).toBe("AR");
+    const images = harness.createdElements.filter(element => element.tagName === "IMG");
+    expect(images).toHaveLength(2);
+    expect(images[0]?.src).toBe("https://app.shiplet.cc/brand/avatars/shiplet-avatar-presets-v9.png");
+    for (const image of images) await image.dispatch("load");
     expect(avatars[0]?.textContent).toBe("");
-    expect(avatars[0]?.style.backgroundImage).toContain(
-      "/brand/avatars/shiplet-avatar-presets-v9.png",
+    expect(avatars[0]?.style.backgroundImage).toBe(
+      "url('https://app.shiplet.cc/brand/avatars/shiplet-avatar-presets-v9.png')",
     );
     expect(avatars[0]?.style.backgroundPosition).toBe("0% 0%");
     expect(avatars[1]?.style.backgroundImage).toBe(
@@ -840,6 +846,56 @@ describe("trusted review host boundary", () => {
     );
     expect(avatars[1]?.style.backgroundPosition).toBe("33.33333333333333% 50%");
     expect(avatars[1]?.style.backgroundSize).toBe("400% 300%");
+  });
+
+  it("keeps readable reviewer initials when preset or uploaded images fail", async () => {
+    const harness = await operateTrustedHostScript({ presenceViewers: [
+      { id: "user_guest", kind: "guest", name: "Guest 020", avatarPreset: "aurora-grid" },
+      { id: "user_upload", kind: "user", name: "Gavin Reviewer", avatarDataUrl: "data:image/png;base64,aW52YWxpZA==" },
+    ] });
+    const avatars = harness.createdElements.filter(element => element.className === "shiplet-review-presence-avatar");
+    const images = harness.createdElements.filter(element => element.tagName === "IMG");
+    expect(images).toHaveLength(2);
+    for (const image of images) await image.dispatch("error");
+    expect(avatars.map(avatar => avatar.textContent)).toEqual(["G0", "GR"]);
+    expect(avatars.map(avatar => avatar.getAttribute("aria-label"))).toEqual(["Guest 020", "Gavin Reviewer"]);
+    expect(avatars.every(avatar => !avatar.style.backgroundImage)).toBe(true);
+  });
+
+  it("loads an uploaded avatar after decoding instead of leaving the initials over it", async () => {
+    const customImage = "data:image/png;base64,aW1hZ2U=";
+    const harness = await operateTrustedHostScript({ presenceViewers: [
+      { id: "user_upload", kind: "user", name: "Gavin Reviewer", avatarDataUrl: customImage },
+    ] });
+    const avatar = harness.createdElements.find(element => element.className === "shiplet-review-presence-avatar");
+    const image = harness.createdElements.find(element => element.tagName === "IMG");
+    expect(avatar?.textContent).toBe("GR");
+    expect(image?.src).toBe(customImage);
+    await image?.dispatch("load");
+    expect(avatar?.textContent).toBe("");
+    expect(avatar?.style.backgroundImage).toBe("url('" + customImage + "')");
+    expect(avatar?.style.backgroundPosition).toBe("center");
+    expect(avatar?.style.backgroundSize).toBe("cover");
+  });
+
+  it("shows the reviewer name on hover, falling back to email when the name is unavailable", async () => {
+    const harness = await operateTrustedHostScript({ presenceViewers: [
+      { id: "user_named", kind: "user", name: "  Gavin Reviewer  ", email: "gavin@example.com" },
+      { id: "user_unnamed", kind: "user", email: "reviewer@example.com" },
+      { id: "user_blank", kind: "user", name: "   ", email: "second@example.com" },
+    ] });
+    const avatars = harness.createdElements.filter(element => element.className === "shiplet-review-presence-avatar");
+    const labels = ["Gavin Reviewer", "reviewer@example.com", "second@example.com"];
+    expect(avatars.map(avatar => avatar.getAttribute("title"))).toEqual(labels);
+    expect(avatars.map(avatar => avatar.getAttribute("aria-label"))).toEqual(labels);
+  });
+
+  it("pins avatar assets and image policy to the trusted platform origin on artifact subdomains", async () => {
+    const response = createTrustedReviewHostResponse(baseInput);
+    const html = await response.text();
+    expect(html).toContain('data-review-avatar-url="https://app.shiplet.cc/brand/avatars/shiplet-avatar-presets-v9.png"');
+    const imgPolicy = response.headers.get("content-security-policy")?.split(";").map(part => part.trim()).find(part => part.startsWith("img-src "));
+    expect(imgPolicy).toBe("img-src 'self' https://app.shiplet.cc data: blob:");
   });
 
   it("places artifact and custom widget code in distinct opaque-origin sandboxed frames", async () => {
