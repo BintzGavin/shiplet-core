@@ -64,6 +64,7 @@ function operateArtifactBridge() {
     },
     scrollX: 0,
     scrollY: 0,
+    scrollTo: undefined as undefined | ((value: unknown) => void),
   };
   const documentListeners = new Map<string, Array<(event: any) => unknown>>();
   const document = {
@@ -117,13 +118,15 @@ function operateArtifactBridge() {
     "parent",
     "Element",
     "MessageChannel",
+    "innerWidth",
+    "innerHeight",
     trustedArtifactBridgeScript(),
   );
-  execute(window, document, parentWindow, class {}, class {});
+  execute(window, document, parentWindow, class {}, class {}, 1280, 720);
   const dispatch = (event: any) => {
     for (const listener of messageListeners) listener(event);
   };
-  return { dispatch, documentListeners, parentMessages, parentWindow, FakePort };
+  return { dispatch, documentListeners, parentMessages, parentWindow, FakePort, window };
 }
 
 describe("trusted artifact capture bridge", () => {
@@ -270,5 +273,59 @@ describe("trusted artifact capture bridge", () => {
       ports: [freshPort],
     });
     expect(freshPort.listeners).toHaveLength(1);
+  });
+
+  it("Given a connected artifact channel, When the reviewer moves their pointer, Then the bridge reports bounded page coordinates to the kernel only", () => {
+    const harness = operateArtifactBridge();
+    const offer = { protocol: "shiplet.artifact.channel.v1", type: "offer", channelNonce: "nonce_pointer", shipletId: "shiplet_a", revisionId: "revision_a1" };
+    const port = new harness.FakePort();
+    const posted: unknown[] = [];
+    (port as unknown as { postMessage: (value: unknown) => void }).postMessage = (value: unknown) => { posted.push(value); };
+    harness.dispatch({ source: harness.parentWindow, origin: "https://app.shiplet.cc", data: offer, ports: [] });
+    harness.dispatch({ source: harness.parentWindow, origin: "https://app.shiplet.cc", data: { ...offer, type: "connect" }, ports: [port] });
+    posted.length = 0;
+    const move = harness.documentListeners.get("pointermove") || [];
+    expect(move).toHaveLength(1);
+    move[0]({ clientX: 120.4, clientY: 80.6 });
+    expect(posted).toEqual([
+      {
+        protocol: "shiplet.artifact.pointer.v1",
+        type: "move",
+        channelNonce: "nonce_pointer",
+        shipletId: "shiplet_a",
+        revisionId: "revision_a1",
+        pointer: { pageX: 120.4, pageY: 80.6, viewportX: 120.4, viewportY: 80.6 },
+      },
+    ]);
+    const out = harness.documentListeners.get("pointerout") || [];
+    out[0]({ relatedTarget: null });
+    expect(posted.at(-1)).toEqual({ protocol: "shiplet.artifact.pointer.v1", type: "leave", channelNonce: "nonce_pointer", shipletId: "shiplet_a", revisionId: "revision_a1" });
+    expect(JSON.stringify(posted)).not.toMatch(/cookie|token|authorization/i);
+  });
+
+  it("Given a follow scroll command from the kernel, When the artifact obeys it and the reviewer then scrolls themselves, Then the bridge mirrors once and reports the interruption", () => {
+    const harness = operateArtifactBridge();
+    const scrolled: unknown[] = [];
+    const offer = { protocol: "shiplet.artifact.channel.v1", type: "offer", channelNonce: "nonce_follow", shipletId: "shiplet_a", revisionId: "revision_a1" };
+    const port = new harness.FakePort();
+    const posted: unknown[] = [];
+    (port as unknown as { postMessage: (value: unknown) => void }).postMessage = (value: unknown) => { posted.push(value); };
+    harness.dispatch({ source: harness.parentWindow, origin: "https://app.shiplet.cc", data: offer, ports: [] });
+    harness.dispatch({ source: harness.parentWindow, origin: "https://app.shiplet.cc", data: { ...offer, type: "connect" }, ports: [port] });
+    harness.window.scrollTo = (value: unknown) => { scrolled.push(value); };
+    port.dispatch({ ...offer, protocol: "shiplet.artifact.follow.command.v1", type: "scroll", scrollX: 0, scrollY: 640 });
+    expect(scrolled).toEqual([{ left: 0, top: 640, behavior: "smooth" }]);
+    port.dispatch({ ...offer, protocol: "shiplet.artifact.follow.command.v1", type: "scroll", scrollX: 0, scrollY: 640, extra: "no" });
+    port.dispatch({ ...offer, channelNonce: "nonce_other", protocol: "shiplet.artifact.follow.command.v1", type: "scroll", scrollX: 0, scrollY: 900 });
+    expect(scrolled).toHaveLength(1);
+    posted.length = 0;
+    const wheel = harness.documentListeners.get("wheel") || [];
+    wheel[0]({});
+    wheel[0]({});
+    expect(posted).toEqual([{ protocol: "shiplet.artifact.follow.v1", type: "interrupt", channelNonce: "nonce_follow", shipletId: "shiplet_a", revisionId: "revision_a1" }]);
+    port.dispatch({ ...offer, protocol: "shiplet.artifact.follow.command.v1", type: "stop" });
+    const keydown = harness.documentListeners.get("keydown") || [];
+    keydown[0]({ key: "ArrowDown" });
+    expect(posted).toHaveLength(1);
   });
 });

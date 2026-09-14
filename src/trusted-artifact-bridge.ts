@@ -212,6 +212,10 @@ export function trustedArtifactBridgeScript(embedded = false) {
 	let selectedOffsetX = 0;
 	let selectedOffsetY = 0;
 	let positionUpdatePending = false;
+	let pointerSendTimer = 0;
+	let pointerLastSentAt = 0;
+	let pointerPending = null;
+	let followActive = false;
 
 	function isRecord(value) { return typeof value === "object" && value !== null && !Array.isArray(value); }
 	function exactKeys(value, keys) { const actual = Object.keys(value); return actual.length === keys.length && actual.every((key) => keys.includes(key)); }
@@ -240,6 +244,65 @@ export function trustedArtifactBridgeScript(embedded = false) {
 	function postViewportState() {
 		if (!port || typeof port.postMessage !== "function") return;
 		port.postMessage({ protocol: "shiplet.artifact.viewport.v1", type: "change", channelNonce, shipletId, revisionId, viewport: viewportState() });
+	}
+
+	function postPointer(payload) {
+		if (!port || typeof port.postMessage !== "function") return;
+		port.postMessage(Object.assign({ protocol: "shiplet.artifact.pointer.v1", channelNonce, shipletId, revisionId }, payload));
+	}
+
+	function flushPointer() {
+		pointerSendTimer = 0;
+		if (!pointerPending) return;
+		const pointer = pointerPending;
+		pointerPending = null;
+		pointerLastSentAt = Date.now();
+		postPointer({ type: "move", pointer });
+	}
+
+	function onPointerMove(event) {
+		if (!port || !event || typeof event.clientX !== "number" || typeof event.clientY !== "number") return;
+		const viewportX = boundedCoordinate(event.clientX, -100000, 100000);
+		const viewportY = boundedCoordinate(event.clientY, -100000, 100000);
+		pointerPending = {
+			pageX: boundedCoordinate(viewportX + (Number(window.scrollX) || 0), -10000000, 10000000),
+			pageY: boundedCoordinate(viewportY + (Number(window.scrollY) || 0), -10000000, 10000000),
+			viewportX,
+			viewportY,
+		};
+		const elapsed = Date.now() - pointerLastSentAt;
+		if (elapsed >= 40) { flushPointer(); return; }
+		if (!pointerSendTimer && typeof setTimeout === "function") pointerSendTimer = setTimeout(flushPointer, 40 - elapsed);
+	}
+
+	function onPointerLeave(event) {
+		if (event && event.relatedTarget) return;
+		pointerPending = null;
+		if (pointerSendTimer && typeof clearTimeout === "function") clearTimeout(pointerSendTimer);
+		pointerSendTimer = 0;
+		postPointer({ type: "leave" });
+	}
+
+	function postFollowInterrupt() {
+		if (!followActive) return;
+		followActive = false;
+		if (!port || typeof port.postMessage !== "function") return;
+		port.postMessage({ protocol: "shiplet.artifact.follow.v1", type: "interrupt", channelNonce, shipletId, revisionId });
+	}
+
+	function onFollowKeydown(event) {
+		if (!followActive || !event || typeof event.key !== "string") return;
+		if (/^(?:Arrow(?:Up|Down|Left|Right)|Page(?:Up|Down)|Home|End|Escape| )$/.test(event.key)) postFollowInterrupt();
+	}
+
+	function handleFollowCommand(data) {
+		if (data.type === "stop" && exactKeys(data, ["protocol", "type", "channelNonce", "shipletId", "revisionId"])) { followActive = false; return; }
+		if (data.type !== "scroll" || !exactKeys(data, ["protocol", "type", "channelNonce", "shipletId", "revisionId", "scrollX", "scrollY"])) return;
+		if (!boundedNumber(data.scrollX, -10000000, 10000000) || !boundedNumber(data.scrollY, -10000000, 10000000)) return;
+		followActive = true;
+		if (typeof window.scrollTo !== "function") return;
+		const reduced = typeof window.matchMedia === "function" && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+		try { window.scrollTo({ left: data.scrollX, top: data.scrollY, behavior: reduced ? "auto" : "smooth" }); } catch { window.scrollTo(data.scrollX, data.scrollY); }
 	}
 
 	function postSelectedAnchor() {
@@ -462,8 +525,10 @@ export function trustedArtifactBridgeScript(embedded = false) {
 
 	function handlePortMessage(event) {
 		const data = event.data;
-		if (!isRecord(data) || !exactKeys(data, ["protocol", "type", "channelNonce", "shipletId", "revisionId", "requestId"])) return;
-		if (data.protocol !== "shiplet.artifact.capture.command.v1" || data.channelNonce !== channelNonce || data.shipletId !== shipletId || data.revisionId !== revisionId || !isIdentifier(data.requestId)) return;
+		if (!isRecord(data) || data.channelNonce !== channelNonce || data.shipletId !== shipletId || data.revisionId !== revisionId) return;
+		if (data.protocol === "shiplet.artifact.follow.command.v1") { handleFollowCommand(data); return; }
+		if (!exactKeys(data, ["protocol", "type", "channelNonce", "shipletId", "revisionId", "requestId"])) return;
+		if (data.protocol !== "shiplet.artifact.capture.command.v1" || !isIdentifier(data.requestId)) return;
 		if (data.type === "cancel") { if (data.requestId === activeRequestId) cancelCapture(); return; }
 		if (data.type === "release") { releaseSelectedTarget(data.requestId); return; }
 		if (data.type !== "start" || activeRequestId) return;
@@ -483,6 +548,8 @@ export function trustedArtifactBridgeScript(embedded = false) {
 			cancelCapture();
 			try { if (port && typeof port.close === "function") port.close(); } catch {}
 			port = null;
+			followActive = false;
+			pointerPending = null;
 			channelNonce = data.channelNonce;
 			shipletId = data.shipletId;
 			revisionId = data.revisionId;
@@ -503,7 +570,13 @@ export function trustedArtifactBridgeScript(embedded = false) {
 	window.addEventListener("message", onChannelMessage);
 	window.addEventListener("scroll", scheduleArtifactPosition, true);
 	window.addEventListener("resize", scheduleArtifactPosition);
-	 document.addEventListener("scroll", scheduleArtifactPosition, true);
+	document.addEventListener("scroll", scheduleArtifactPosition, true);
+	document.addEventListener("pointermove", onPointerMove, true);
+	document.addEventListener("pointerout", onPointerLeave, true);
+	document.addEventListener("wheel", postFollowInterrupt, true);
+	document.addEventListener("touchmove", postFollowInterrupt, true);
+	document.addEventListener("pointerdown", postFollowInterrupt, true);
+	document.addEventListener("keydown", onFollowKeydown, true);
 ${
   embedded
     ? `return () => {
@@ -513,6 +586,12 @@ ${
   window.removeEventListener("scroll", scheduleArtifactPosition, true);
   window.removeEventListener("resize", scheduleArtifactPosition);
   document.removeEventListener("scroll", scheduleArtifactPosition, true);
+  document.removeEventListener("pointermove", onPointerMove, true);
+  document.removeEventListener("pointerout", onPointerLeave, true);
+  document.removeEventListener("wheel", postFollowInterrupt, true);
+  document.removeEventListener("touchmove", postFollowInterrupt, true);
+  document.removeEventListener("pointerdown", postFollowInterrupt, true);
+  document.removeEventListener("keydown", onFollowKeydown, true);
 }; }`
     : "})();"
 }`;

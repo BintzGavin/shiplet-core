@@ -11391,6 +11391,93 @@ describe("Shiplet", () => {
       pageTwo.close(1000, "done");
     });
 
+    it("should assign each live reviewer a distinct color and relay viewports to the same page", async () => {
+      const { project } = await createPublicPresenceShiplet();
+      const alpha = await websocketHelper(
+        `/api/projects/${project.id}/review-presence/ws?path=%2Fone`,
+      );
+      const bravo = await websocketHelper(
+        `/api/projects/${project.id}/review-presence/ws?path=%2Fone`,
+      );
+      const charlie = await websocketHelper(
+        `/api/projects/${project.id}/review-presence/ws?path=%2Ftwo`,
+      );
+
+      sendJson(alpha, {
+        type: "hello",
+        viewer: { id: "guest_alpha", name: "Guest Alpha", kind: "guest", color: "#000000" },
+        page: { pathname: "/one", href: "https://presence.shiplet.cc/one" },
+      });
+      sendJson(bravo, {
+        type: "hello",
+        viewer: { id: "guest_bravo", name: "Guest Bravo", kind: "guest", color: "#000000" },
+        page: { pathname: "/one", href: "https://presence.shiplet.cc/one" },
+      });
+      sendJson(charlie, {
+        type: "hello",
+        viewer: { id: "guest_charlie", name: "Guest Charlie", kind: "guest" },
+        page: { pathname: "/two", href: "https://presence.shiplet.cc/two" },
+      });
+
+      const roster = await waitForSocketMessage(
+        bravo,
+        (candidate) =>
+          candidate.type === "presence:update" &&
+          Array.isArray(candidate.viewers) &&
+          ["guest_alpha", "guest_bravo", "guest_charlie"].every((id) =>
+            (candidate.viewers as Array<{ id: string }>).some((viewer) => viewer.id === id),
+          ),
+      );
+      const viewers = roster.viewers as Array<{ id: string; color: string }>;
+      const colors = viewers.map((viewer) => viewer.color);
+      expect(colors.every((color) => /^#[0-9a-f]{6}$/.test(color))).toBe(true);
+      expect(colors).not.toContain("#000000");
+      expect(new Set(colors).size).toBe(3);
+
+      sendJson(alpha, {
+        type: "viewport:update",
+        page: { pathname: "/one", href: "https://presence.shiplet.cc/one" },
+        viewport: { width: 1200, height: 800, scrollX: 0, scrollY: 640 },
+      });
+      const viewportMessage = await waitForSocketMessage(
+        bravo,
+        (candidate) =>
+          candidate.type === "viewport:update" &&
+          (candidate.viewer as { id?: string } | undefined)?.id === "guest_alpha",
+      );
+      expect(viewportMessage.viewport).toEqual({ width: 1200, height: 800, scrollX: 0, scrollY: 640 });
+      expect((viewportMessage.viewer as { color: string }).color).toBe(
+        viewers.find((viewer) => viewer.id === "guest_alpha")?.color,
+      );
+
+      sendJson(alpha, {
+        type: "cursor:leave",
+        page: { pathname: "/one", href: "https://presence.shiplet.cc/one" },
+      });
+      await waitForSocketMessage(
+        bravo,
+        (candidate) =>
+          candidate.type === "cursor:leave" &&
+          (candidate.viewer as { id?: string } | undefined)?.id === "guest_alpha",
+      );
+
+      let isolated = true;
+      try {
+        await waitForSocketMessage(
+          charlie,
+          (candidate) => candidate.type === "viewport:update" || candidate.type === "cursor:leave",
+        );
+        isolated = false;
+      } catch {
+        isolated = true;
+      }
+      expect(isolated).toBe(true);
+
+      alpha.close(1000, "done");
+      bravo.close(1000, "done");
+      charlie.close(1000, "done");
+    });
+
     it("should reject anonymous review feedback submissions", async () => {
       const { project } = await createReviewShiplet();
       const response = await requestHelper(
