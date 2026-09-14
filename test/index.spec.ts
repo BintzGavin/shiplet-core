@@ -7985,6 +7985,75 @@ describe("Shiplet", () => {
       );
     });
 
+    it.each(["audit report.html", "report.htm", "REPORT.HTML", "INDEX.HTML"])(
+      "Given an uploaded %s, when its Shiplet opens, then it serves the complete HTML page in the existing review sandbox",
+      async (fileName) => {
+        const organization = await createTestOrganization(makeRequest);
+        const subdomain = `html-upload-${crypto.randomUUID().slice(0, 8)}`;
+        const source = `<!doctype html><html><head><style>h1 { color: teal; }</style></head><body><!--${"x".repeat(512 * 1024)}--><h1>Rendered audit</h1><script>document.body.dataset.ready = 'yes';</script></body></html>`;
+        const response = await makeRequest("/projects", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            name: "HTML upload",
+            organization_id: organization.id,
+            subdomain,
+            assets: [
+              { path: fileName, content: btoa(source), size: source.length },
+            ],
+          }),
+        });
+        expect(response.status).toBe(201);
+        const body = (await response.json()) as { project: { id: string } };
+
+        for (const path of [
+          `/shiplets/${body.project.id}/artifact-frame/`,
+          `/${subdomain}/__shiplet/artifact-frame/`,
+          `/shiplets/${body.project.id}/artifact-frame/${encodeURIComponent(fileName)}`,
+        ]) {
+          const artifact = await makeRequest(path);
+          expect(artifact.status).toBe(200);
+          expect(artifact.headers.get("content-type")).toContain("text/html");
+          const policy = artifact.headers.get("content-security-policy");
+          expect(policy).toContain("sandbox allow-scripts allow-forms");
+          expect(policy).not.toContain("allow-same-origin");
+          expect(policy).not.toContain("allow-downloads");
+          const html = await artifact.text();
+          expect(html).toContain("<h1>Rendered audit</h1>");
+          expect(html).toContain("h1 { color: teal; }");
+          expect(html).toContain("document.body.dataset.ready = 'yes';");
+          expect(html).not.toContain('class="asset-text-preview"');
+          expect(html).not.toContain("Showing the first");
+        }
+      },
+    );
+
+    it("Given index.html and another HTML file, when publishing, then index.html remains the entry page regardless of upload order", async () => {
+      const organization = await createTestOrganization(makeRequest);
+      const response = await makeRequest("/projects", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          name: "HTML site",
+          organization_id: organization.id,
+          subdomain: `html-site-${crypto.randomUUID().slice(0, 8)}`,
+          assets: [
+            { path: "about.html", content: btoa("<h1>About page</h1>") },
+            { path: "index.html", content: btoa("<h1>Home page</h1>") },
+          ],
+        }),
+      });
+      expect(response.status).toBe(201);
+      const body = (await response.json()) as { project: { id: string } };
+      const artifact = await makeRequest(
+        `/shiplets/${body.project.id}/artifact-frame/`,
+      );
+      expect(artifact.status).toBe(200);
+      const html = await artifact.text();
+      expect(html).toContain("<h1>Home page</h1>");
+      expect(html).not.toContain("<h1>About page</h1>");
+    });
+
     it("should reject static uploads with unsafe asset paths", async () => {
       const organization = await createTestOrganization(makeRequest);
       const response = await makeRequest("/projects", {

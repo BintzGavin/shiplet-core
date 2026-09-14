@@ -5971,16 +5971,16 @@ async function publishShipletForOrganization(
       );
     }
 
-    const hasIndex = validAssets.some((asset) => {
+    const hasHtmlEntry = validAssets.some((asset) => {
       const path = asset.path.toLowerCase();
-      return path === "index.html" || path.endsWith("/index.html");
+      return /^[^/]+\.html?$/.test(path) || path.endsWith("/index.html");
     });
 
-    staticAssetsToStore = hasIndex
+    staticAssetsToStore = hasHtmlEntry
       ? validAssets
       : [createStandaloneAssetPreviewIndex(name, validAssets), ...validAssets];
 
-    scriptPlaceholder = hasIndex
+    scriptPlaceholder = hasHtmlEntry
       ? `/* Static site with ${staticAssetsToStore.length} assets stored in D1/R2 */`
       : `${STANDALONE_ASSET_PREVIEW_MARKER} /* ${staticAssetsToStore.length} assets stored in D1/R2 */`;
   } else {
