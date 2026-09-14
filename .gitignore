@@ -9,5 +9,6 @@ src/start/routeTree.gen.ts
 .env.*
 !.env.example
 .env.external-setup
+.shiplet-self-host/
 test-results/
 playwright-report/
