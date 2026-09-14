@@ -1,5 +1,6 @@
 import { BROWSER_CAPTURE_DOCS_HTML } from "./browser-capture-docs";
 import { EMBED_DOCS_HTML } from "./embed-docs";
+import { SELF_HOSTING_DOCS_HTML } from "./self-hosting-docs";
 interface DocsPage {
   slug: string;
   title: string;
@@ -10,6 +11,7 @@ interface DocsPage {
 
 // prettier-ignore
 const DOCS_PUBLIC_CONTENT_SHA256: Record<string, string> = {
+  "self-hosting": "03dd91928c89a6911867c9c4f4625aa4455306c420af821408540ffb7eac1f38",
   "browser-capture": "1b6542d6a598b88c6dacda840930f1ff5095d9c0952778bb3a26672603a61643",
   "introduction": "85ada0b46d8b7b9285ea49ab385534abfda44ee3b6e09a89bcd0e84e3aec5042",
   "why-shiplet":
@@ -358,6 +360,14 @@ const DOCS_PAGES: DocsPage[] = [
       "Install contextual Shiplet feedback on your website with two HTML tags.",
     group: "Start",
     body: EMBED_DOCS_HTML,
+  },
+  {
+    slug: "self-hosting",
+    title: "Self-host Shiplet",
+    description:
+      "Install the supported static review product in your own Cloudflare account and understand the optional advanced upgrade path.",
+    group: "Integrations and safety",
+    body: SELF_HOSTING_DOCS_HTML,
   },
   {
     slug: "security",

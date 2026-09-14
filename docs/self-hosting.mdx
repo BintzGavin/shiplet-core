@@ -1,0 +1,197 @@
+---
+title: "Self-host Shiplet"
+description: "Install the supported static review product in your own Cloudflare account and understand the optional advanced upgrade path."
+---
+
+Static-first is the supported default. It gives you the Shiplet application,
+trusted review host, identity and access, static and public-URL reviews,
+feedback, revisions, and REST API without Workers for Platforms.
+
+## What the wizard installs
+
+```text
+Your Cloudflare account
+└── Shiplet main Worker
+    ├── D1: application and review state
+    ├── R2: artifact assets
+    ├── R2: trusted review assets
+    ├── Durable Object: sandbox sessions
+    └── Durable Object: per-Shiplet coordination
+
+Optional and absent by default
+├── Worker Loader / Code Mode execution
+├── control-plane support Worker
+├── managed-runtime support Worker
+├── deny-egress support Worker
+└── Workers for Platforms dispatch namespaces
+```
+
+The application detects those optional bindings and keeps static reviews
+working when advanced infrastructure is absent.
+
+## Prerequisites
+
+- Node.js 22.12.0 or newer.
+- A Cloudflare account that can create Workers, D1 databases, R2 buckets, and
+  Durable Objects.
+- A WorkOS AuthKit application for this deployment.
+- An HTTPS application origin. The first run can use the `workers.dev` URL
+  printed by Wrangler. Attach a custom domain later if needed.
+
+WorkOS production applications require an HTTPS redirect URI. In the WorkOS
+Dashboard, add `<your-origin>/auth/callback` to the application's Redirects
+tab. Each WorkOS application has its own client ID, redirect URIs, and API
+credentials. See [WorkOS Applications](https://workos.com/docs/authkit/applications)
+and the [redirect URI requirements](https://workos.com/docs/reference/authkit/authentication/get-authorization-url#redirect-uri).
+
+## Run the setup
+
+From a clean checkout:
+
+```bash
+npm ci
+npm run setup:self-host
+```
+
+The eight stages are:
+
+1. Check local tools and choose a deployment name.
+2. Authenticate Wrangler to the Cloudflare account that will own the resources.
+3. Confirm and create one D1 database and two private R2 buckets.
+4. Dry-run and deploy the bootstrap Worker, then capture its HTTPS origin.
+5. Configure the WorkOS redirect and capture the public client ID and AuthKit
+   issuer.
+6. Enter the WorkOS API key through hidden input and install all three Worker
+   secrets directly in Cloudflare.
+7. Dry-run and deploy the final configuration.
+8. Check the application shell and OpenAPI document, write the capability
+   report, and ask you to complete a browser sign-in smoke test.
+
+The wizard asks before every remote provisioning or deployment action. It does
+not delete resources after a partial run. Re-run it with the same deployment
+name to reuse an existing generated config.
+
+## Values and destinations
+
+| Value | Obtained from | Destination | Classification |
+| --- | --- | --- | --- |
+| Deployment name | You choose it | Generated Wrangler config | Public |
+| D1 database ID | Wrangler create output | Generated Wrangler config | Public resource identifier |
+| R2 bucket names | Derived from the deployment name | Generated Wrangler config | Public resource identifiers |
+| Application origin | First deploy or an attached custom domain | Generated Wrangler config | Public |
+| AuthKit issuer | WorkOS environment | Generated Wrangler config | Public |
+| WorkOS client ID | WorkOS application | Cloudflare Worker secret store | Public identifier stored privately |
+| WorkOS API key | WorkOS application credentials | Cloudflare Worker secret store | Secret |
+| Review signing key | Generated in memory | Cloudflare Worker secret store | Secret |
+
+Generated public state is written to:
+
+```text
+.shiplet-self-host/<deployment-name>/
+├── wrangler.jsonc       # operator-owned config and live resource identifiers
+└── capabilities.json    # configured and optional-unavailable capabilities
+```
+
+The directory is ignored by Git. No WorkOS key or review signing key is written
+to it, to `.env`, or to a command argument. Secrets travel over standard input
+to `wrangler secret put`.
+
+## Verify and operate it
+
+The wizard verifies `/` and `/openapi.json`. Finish the human smoke test by
+signing in through WorkOS, creating one static Shiplet, opening the review link,
+and leaving feedback.
+
+The main D1 schema initializes on the first request, so the static profile has
+no separate SQL migration command. Durable Object migrations remain part of
+the generated Wrangler config.
+
+Useful operator commands:
+
+```bash
+# Recheck the generated config without contacting Cloudflare
+npm run self-host:capabilities -- \
+  --main-config .shiplet-self-host/<name>/wrangler.jsonc
+
+# Validate and bundle without uploading
+npx wrangler deploy --dry-run \
+  --config .shiplet-self-host/<name>/wrangler.jsonc
+
+# Roll back the main Worker to a prior Cloudflare version
+npx wrangler rollback \
+  --config .shiplet-self-host/<name>/wrangler.jsonc
+```
+
+Back up D1 and the two R2 buckets according to your recovery requirements. The
+wizard does not create backups or delete a partially provisioned deployment.
+
+## Understand the capability report
+
+| Capability | Static profile | Becomes configured when |
+| --- | --- | --- |
+| Static review | Available | Main D1, both R2 bindings, and both Durable Objects are present |
+| Code Mode MCP execution | Optional unavailable | The main Worker has `CODE_MODE_LOADER` |
+| Managed Workers for Platforms | Optional unavailable | All three support Workers, support D1 databases, Worker Loaders, service bindings, dispatch namespaces, and enabled post-smoke readiness are present |
+| Customer-owned artifact deployment | Optional unavailable | The control and runtime support contracts, required main service bindings, and enabled post-smoke OAuth readiness are present |
+| Temporary preview and claim | Optional unavailable | The control and runtime support contracts, required main service bindings, and enabled post-smoke temporary-account readiness are present |
+
+“Configured” is not a remote health claim. The inspector reads the supplied
+configs and readiness values without accessing your Cloudflare account. At
+runtime, Shiplet also verifies support-service contracts and health before an
+advanced operation. An incomplete or stale topology still fails closed.
+
+## Upgrade to Workers for Platforms
+
+Stay on the static profile unless you need to execute artifact-owned Worker
+code or custom MCP handlers. Workers for Platforms is a separate paid Cloudflare
+product. Check [current pricing](https://developers.cloudflare.com/cloudflare-for-platforms/workers-for-platforms/reference/pricing/)
+before provisioning it.
+
+The public source includes the advanced implementation and example topology:
+
+```text
+workers/
+├── cloudflare-control-plane/   # OAuth grants, vault, recovery, broker
+├── deny-egress/                # fail-closed outbound boundary
+└── managed-runtime-gateway/    # Worker Loader and dispatch namespaces
+```
+
+An operator-owned upgrade must provide real configs and resources, apply the
+control and runtime D1 migrations, and deploy dependencies before consumers:
+
+```text
+control plane → deny egress → runtime gateway → main Worker
+```
+
+Rollback uses the reverse order. The runtime gateway needs staging and
+production dispatch namespaces plus a dynamic outbound contract. Cloudflare's
+[dynamic dispatch documentation](https://developers.cloudflare.com/cloudflare-for-platforms/workers-for-platforms/configuration/dynamic-dispatch/)
+describes that provider boundary.
+
+Keep every advanced readiness variable `disabled` until the deployed support
+versions, service bindings, migrations, egress policy, and operator smoke tests
+match. After creating operator-owned configs, inspect their shape with:
+
+```bash
+npm run self-host:capabilities -- \
+  --main-config /path/to/main.wrangler.jsonc \
+  --control-config /path/to/control.wrangler.jsonc \
+  --runtime-config /path/to/runtime.wrangler.jsonc \
+  --deny-config /path/to/deny.wrangler.jsonc
+```
+
+The static wizard intentionally stops at this boundary. It neither purchases
+Workers for Platforms nor mutates dispatch namespaces, advanced readiness, or
+support-service release state.
+
+## Source and operations boundary
+
+This repository contains the application and support Worker implementations,
+tests, public-safe examples, and the static self-host setup. It does not contain
+Shiplet.cc credentials, production routes, resource identifiers, release
+records, or generated deployment state.
+
+Shiplet.cc's private operations repository pins the protected source revision
+and owns its production/rehearsal configs, release sequencing, migrations,
+smoke evidence, and rollback records. Those private identifiers are not needed
+to run the static-first wizard in your own account.

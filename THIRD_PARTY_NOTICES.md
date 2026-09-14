@@ -57,6 +57,13 @@ The raster generator uses `@resvg/resvg-js` 2.6.2 under MPL-2.0. That build
 dependency and its platform packages are installed from npm with their license
 files; their source is not copied into this repository's generated assets.
 
+## Wizard interaction library
+
+`scripts/self-host-setup.sh` includes an adapted copy of the interaction
+library from [mattpocock/skills](https://github.com/mattpocock/skills),
+Copyright (c) 2026 Matt Pocock, distributed under the MIT License reproduced
+above.
+
 ## Other dependencies
 
 The source depends on additional packages under MIT, Apache-2.0, ISC, BSD,

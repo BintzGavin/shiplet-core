@@ -4,6 +4,7 @@
 SHIPLET_AUTH_MODE="workos"
 SHIPLET_APP_URL="http://localhost:8787"
 WORKOS_REDIRECT_URI="http://localhost:8787/auth/callback"
+WORKOS_AUTHKIT_ISSUER="https://your-app.authkit.app"
 
 # WorkOS AuthKit
 WORKOS_CLIENT_ID="client_..."

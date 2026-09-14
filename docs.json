@@ -47,7 +47,7 @@
       },
       {
         "group": "Integrations and safety",
-        "pages": ["docs/security"]
+        "pages": ["docs/self-hosting", "docs/security"]
       },
       {
         "group": "API reference",

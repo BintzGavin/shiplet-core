@@ -7,6 +7,13 @@ test("public guidance keeps source preview, participation, and security routes d
 	const contributing = readFileSync("CONTRIBUTING.md", "utf8");
 	const security = readFileSync("SECURITY.md", "utf8");
 	assert.match(readme, /source-preview/i);
+	assert.match(readme, /Shiplet is the review layer for agent-first teams/i);
+	assert.match(readme, /https:\/\/shiplet\.cc\/docs\/quickstart/i);
+	assert.match(readme, /https:\/\/shiplet\.cc\/api\/mcp/i);
+	assert.match(readme, /npm run setup:self-host/i);
+	assert.match(readme, /static-first self-hosting/i);
+	assert.match(readme, /production operations are intentionally separate/i);
+	assert.doesNotMatch(readme, /npm run deploy\s+--\s+--config/i);
 	assert.match(contributing, /pull requests are not an accepted/i);
 	assert.match(contributing, /GitHub Issues are\s+not an accepted/i);
 	assert.match(contributing, /GitHub Discussions are\s+not an accepted/i);

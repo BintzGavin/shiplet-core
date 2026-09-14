@@ -26,9 +26,21 @@ describe("public sitemap", () => {
     const guidePaths = [...nav!.matchAll(/href="(\/docs(?:\/[^"?#]+)?)"/g)].map((match) => match[1]);
     expect(guidePaths).toContain("/docs/embed");
     expect(guidePaths).toContain("/docs/browser-capture");
+    expect(guidePaths).toContain("/docs/self-hosting");
     const urls = locations(await (await request("/sitemap.xml")).text());
     expect(urls).toHaveLength(new Set(urls).size);
     expect(urls.sort()).toEqual(["/", ...guidePaths].map((path) => `https://shiplet.cc${path}`).sort());
+  });
+
+  it("serves the linked self-hosting guide with setup, recovery, and optional upgrade instructions", async () => {
+    const response = await request("/docs/self-hosting");
+    expect(response.status).toBe(200);
+    const html = await response.text();
+    expect(html).toContain("npm run setup:self-host");
+    expect(html).toContain("npm run self-host:capabilities");
+    expect(html).toContain("wrangler rollback");
+    expect(html).toContain("Workers for Platforms");
+    expect(html).toContain('href="https://shiplet.cc/docs/self-hosting"');
   });
 
   it("lists only successful, indexable HTML pages with matching canonical URLs", async () => {
