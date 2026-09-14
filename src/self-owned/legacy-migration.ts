@@ -121,6 +121,7 @@ function generatedLegacyIndex(project: LegacyProject) {
 
 async function generatedContractFiles(
 	project: LegacyProject,
+	artifactEntrypoint: string,
 ): Promise<ShipletPackageFile[]> {
 	return Promise.all([
 		textFile(
@@ -161,7 +162,7 @@ async function generatedContractFiles(
 					{
 						id: "legacy-artifact-entrypoint",
 						kind: "file-exists",
-						path: "artifact/index.html",
+						path: artifactEntrypoint,
 					},
 				],
 			})}\n`,
@@ -207,7 +208,14 @@ export async function buildLegacyCompatibilityPackage(
 	const files = await Promise.all(
 		(assetRows.results || []).map((asset) => assetFile(asset, bucket)),
 	);
-	if (!files.some((file) => file.path === "artifact/index.html")) {
+	// A dashboard upload can be a complete page with any HTML filename.
+	// Keep its original path so links and revision exports retain that filename.
+	const htmlEntry =
+		files.find((file) => file.path === "artifact/index.html") ||
+		files.find((file) => /^artifact\/index\.html?$/i.test(file.path)) ||
+		files.find((file) => /^artifact\/[^/]+\.html?$/i.test(file.path));
+	const artifactEntrypoint = htmlEntry?.path || "artifact/index.html";
+	if (!htmlEntry) {
 		files.push(
 			await textFile(
 				"artifact/index.html",
@@ -237,7 +245,7 @@ export async function buildLegacyCompatibilityPackage(
 			),
 		);
 	}
-	files.push(...(await generatedContractFiles(project)));
+	files.push(...(await generatedContractFiles(project, artifactEntrypoint)));
 
 	return parseShipletPackage({
 		mediaType: SHIPLET_PACKAGE_MEDIA_TYPE,
@@ -245,7 +253,7 @@ export async function buildLegacyCompatibilityPackage(
 			schemaVersion: "shiplet.package/v1",
 			runtimeCompatibility: "shiplet.runtime/v1",
 			entrypoints: {
-				artifact: "artifact/index.html",
+				artifact: artifactEntrypoint,
 				widget: "widget/index.html",
 				workflow: "workflow/schema.json",
 				mcp: "mcp/manifest.json",

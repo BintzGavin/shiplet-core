@@ -23,9 +23,11 @@ test.describe("publish and shiplets lifecycle", () => {
 		const subdomain = `e2e-uploaded-${Math.random().toString(16).slice(2, 8)}`;
 		await page.goto("/", { waitUntil: "networkidle" });
 		await page.setInputFiles("#fileInput", {
-			name: "index.html",
+			name: "uploaded-audit.html",
 			mimeType: "text/html",
-			buffer: Buffer.from(`<!doctype html><h1>${name}</h1>`),
+			buffer: Buffer.from(
+				`<!doctype html><html><head><style>h1 { color: rgb(0, 128, 128); }</style></head><body><!--${"x".repeat(512 * 1024)}--><h1>${name}</h1><button onclick="this.textContent='Clicked'">Try the page</button></body></html>`,
+			),
 		});
 		await page.locator("#projectName").fill(name);
 		await page.locator("#subdomain").fill(subdomain);
@@ -40,6 +42,17 @@ test.describe("publish and shiplets lifecycle", () => {
 		).toBeVisible();
 		await expect(page.locator(".shiplet-detail-hero")).toContainText(name);
 		await expect(page.locator("#artifactPreviewFrame")).toBeVisible();
+		const artifact = page
+			.frameLocator("#artifactPreviewFrame")
+			.frameLocator("[data-shiplet-artifact-frame]");
+		await expect(artifact.getByRole("heading", { name })).toBeVisible();
+		await expect(artifact.getByRole("heading", { name })).toHaveCSS(
+			"color",
+			"rgb(0, 128, 128)",
+		);
+		await artifact.getByRole("button", { name: "Try the page" }).click();
+		await expect(artifact.getByRole("button", { name: "Clicked" })).toBeVisible();
+		await expect(artifact.locator(".asset-text-preview")).toHaveCount(0);
 
 		await page.goto("/shiplets", { waitUntil: "networkidle" });
 		await expect(page.getByRole("link", { name })).toBeVisible();
