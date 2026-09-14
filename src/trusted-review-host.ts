@@ -958,6 +958,31 @@ export function trustedReviewHostScript(): string {
 	presenceRoot.setAttribute("aria-live", "polite");
 	presenceRoot.hidden = true;
 	document.body.appendChild(presenceRoot);
+	const cursorLayer = document.createElement("section");
+	cursorLayer.className = "shiplet-review-cursor-layer";
+	cursorLayer.setAttribute("aria-hidden", "true");
+	document.body.appendChild(cursorLayer);
+	const followBar = document.createElement("div");
+	followBar.className = "shiplet-review-follow";
+	followBar.setAttribute("role", "status");
+	followBar.setAttribute("data-shiplet-follow-bar", "v1");
+	followBar.hidden = true;
+	const followAvatar = document.createElement("span");
+	followAvatar.className = "shiplet-review-follow-avatar";
+	followAvatar.setAttribute("aria-hidden", "true");
+	const followText = document.createElement("span");
+	followText.className = "shiplet-review-follow-text";
+	const followStop = document.createElement("button");
+	followStop.type = "button";
+	followStop.className = "shiplet-review-follow-stop";
+	followStop.setAttribute("data-shiplet-follow-stop", "v1");
+	followStop.textContent = "Stop following";
+	followStop.addEventListener("click", (event) => {
+		if (!event || event.isTrusted !== true) return;
+		stopFollowing();
+	});
+	followBar.append(followAvatar, followText, followStop);
+	document.body.appendChild(followBar);
 	let pendingWidgetRequest = null;
 	let artifactPort = null;
 	let artifactSourceWindow = null;
@@ -991,6 +1016,18 @@ export function trustedReviewHostScript(): string {
 	let presenceReconnectTimer = 0;
 	let presenceReconnectAttempt = 0;
 	let presenceStopped = false;
+	let presenceOpen = false;
+	let presenceSelfId = "";
+	let presenceViewers = [];
+	let followingId = "";
+	let followingName = "";
+	let cursorSendTimer = 0;
+	let cursorLastSentAt = 0;
+	let cursorPending = null;
+	let viewportSendTimer = 0;
+	let viewportLastSentAt = 0;
+	let viewportPending = false;
+	const remoteCursors = new Map();
 	let widgetPort = null;
 	let sourceWindow = null;
 	let channelNonce = "";
@@ -1050,21 +1087,279 @@ export function trustedReviewHostScript(): string {
 		}
 	}
 
+	function parsePresenceColor(value) {
+		return typeof value === "string" && /^#[0-9a-f]{6}$/i.test(value) ? value.toLowerCase() : "";
+	}
+
+	function parsePresencePoint(value) {
+		if (!isRecord(value) || !finiteNumber(value.x, -10000000, 10000000) || !finiteNumber(value.y, -10000000, 10000000)) return null;
+		return { x: value.x, y: value.y };
+	}
+
+	function parsePresenceViewport(value) {
+		if (!isRecord(value) || !finiteNumber(value.scrollX, -10000000, 10000000) || !finiteNumber(value.scrollY, -10000000, 10000000)) return null;
+		return {
+			scrollX: value.scrollX,
+			scrollY: value.scrollY,
+			width: finiteNumber(value.width, 0, 100000) ? value.width : 0,
+			height: finiteNumber(value.height, 0, 100000) ? value.height : 0,
+		};
+	}
+
+	function parsePresencePathname(value) {
+		if (!isRecord(value) || !boundedString(value.pathname, 2048) || !value.pathname.startsWith("/")) return "";
+		return value.pathname;
+	}
+
+	function parsePresenceViewer(viewer) {
+		if (!isRecord(viewer) || !isIdentifier(viewer.id)) return null;
+		if (viewer.kind !== "user" && viewer.kind !== "guest" && viewer.kind !== "sandbox") return null;
+		return {
+			id: viewer.id,
+			kind: viewer.kind,
+			name: (boundedString(viewer.name, 200) && viewer.name.trim()) || (boundedString(viewer.email, 254) && viewer.email.trim()) || "Reviewer",
+			avatarPreset: boundedString(viewer.avatarPreset, 64) ? viewer.avatarPreset : null,
+			avatarDataUrl: typeof viewer.avatarDataUrl === "string" && viewer.avatarDataUrl.length <= 65536 && /^data:image\/(?:png|jpeg|webp);base64,[A-Za-z0-9+/=]+$/.test(viewer.avatarDataUrl) ? viewer.avatarDataUrl : null,
+			color: parsePresenceColor(viewer.color),
+			pathname: parsePresencePathname(viewer.page),
+			cursor: parsePresencePoint(viewer.cursor),
+			viewport: parsePresenceViewport(viewer.viewport),
+		};
+	}
+
 	function parsePresenceViewers(message) {
 		if (!isRecord(message) || (message.type !== "presence:ready" && message.type !== "presence:update") || !Array.isArray(message.viewers)) return null;
 		const viewers = [];
 		for (const viewer of message.viewers.slice(0, 32)) {
-			if (!isRecord(viewer) || !isIdentifier(viewer.id)) continue;
-			if (viewer.kind !== "user" && viewer.kind !== "guest" && viewer.kind !== "sandbox") continue;
-			viewers.push({
-				id: viewer.id,
-				kind: viewer.kind,
-				name: (boundedString(viewer.name, 200) && viewer.name.trim()) || (boundedString(viewer.email, 254) && viewer.email.trim()) || "Reviewer",
-				avatarPreset: boundedString(viewer.avatarPreset, 64) ? viewer.avatarPreset : null,
-				avatarDataUrl: typeof viewer.avatarDataUrl === "string" && viewer.avatarDataUrl.length <= 65536 && /^data:image\/(?:png|jpeg|webp);base64,[A-Za-z0-9+/=]+$/.test(viewer.avatarDataUrl) ? viewer.avatarDataUrl : null,
-			});
+			const parsed = parsePresenceViewer(viewer);
+			if (parsed) viewers.push(parsed);
 		}
 		return viewers;
+	}
+
+	function reviewedPathname() {
+		try { return new URL(reviewPageUrl).pathname || "/"; } catch { return "/"; }
+	}
+
+	function sendPresence(payload) {
+		if (!presenceSocket || !presenceOpen) return;
+		try { presenceSocket.send(JSON.stringify(payload)); } catch {}
+	}
+
+	function presencePage() {
+		return { pathname: reviewedPathname(), href: reviewPageUrl, title: String(document.title || "").slice(0, 200) };
+	}
+
+	function presenceViewport() {
+		if (!artifactViewport) return null;
+		return { width: artifactViewport.width, height: artifactViewport.height, scrollX: artifactViewport.scrollX, scrollY: artifactViewport.scrollY };
+	}
+
+	function flushCursorPresence() {
+		cursorSendTimer = 0;
+		if (!cursorPending) return;
+		const cursor = cursorPending;
+		cursorPending = null;
+		cursorLastSentAt = Date.now();
+		sendPresence({ type: "cursor:update", page: presencePage(), cursor });
+	}
+
+	function queueCursorPresence(pointer) {
+		const scrollX = artifactViewport ? artifactViewport.scrollX : pointer.pageX - pointer.viewportX;
+		const scrollY = artifactViewport ? artifactViewport.scrollY : pointer.pageY - pointer.viewportY;
+		cursorPending = { x: pointer.pageX, y: pointer.pageY, viewportX: pointer.viewportX, viewportY: pointer.viewportY, scrollX, scrollY };
+		const elapsed = Date.now() - cursorLastSentAt;
+		if (elapsed >= 50) { flushCursorPresence(); return; }
+		if (!cursorSendTimer && typeof window.setTimeout === "function") cursorSendTimer = window.setTimeout(flushCursorPresence, 50 - elapsed);
+	}
+
+	function sendCursorLeave() {
+		cursorPending = null;
+		if (cursorSendTimer && typeof window.clearTimeout === "function") window.clearTimeout(cursorSendTimer);
+		cursorSendTimer = 0;
+		sendPresence({ type: "cursor:leave", page: presencePage() });
+	}
+
+	function flushViewportPresence() {
+		viewportSendTimer = 0;
+		if (!viewportPending) return;
+		viewportPending = false;
+		const viewport = presenceViewport();
+		if (!viewport) return;
+		viewportLastSentAt = Date.now();
+		sendPresence({ type: "viewport:update", page: presencePage(), viewport });
+	}
+
+	function queueViewportPresence() {
+		viewportPending = true;
+		const elapsed = Date.now() - viewportLastSentAt;
+		if (elapsed >= 80) { flushViewportPresence(); return; }
+		if (!viewportSendTimer && typeof window.setTimeout === "function") viewportSendTimer = window.setTimeout(flushViewportPresence, 80 - elapsed);
+	}
+
+	function handlePresenceMessage(message) {
+		if (!isRecord(message) || typeof message.type !== "string") return;
+		if (message.type === "presence:ready") {
+			const self = parsePresenceViewer(message.viewer);
+			if (self) presenceSelfId = self.id;
+		}
+		const viewers = parsePresenceViewers(message);
+		if (viewers) {
+			presenceViewers = viewers;
+			reconcileRemoteCursors();
+			renderPresence(viewers);
+			if (followingId) {
+				const followed = viewers.find((viewer) => viewer.id === followingId);
+				if (!followed) stopFollowing();
+				else if (followed.viewport) applyFollowViewport(followed.viewport);
+			}
+			return;
+		}
+		const viewer = parsePresenceViewer(message.viewer);
+		if (!viewer || viewer.id === presenceSelfId) return;
+		const pathname = parsePresencePathname(message.page);
+		if (message.type === "cursor:update") {
+			const cursor = parsePresencePoint(message.cursor);
+			if (!cursor || pathname !== reviewedPathname()) return;
+			updateRemoteCursor(viewer, cursor);
+			return;
+		}
+		if (message.type === "cursor:leave") {
+			removeRemoteCursor(viewer.id);
+			return;
+		}
+		if (message.type === "viewport:update") {
+			const viewport = parsePresenceViewport(message.viewport);
+			if (!viewport) return;
+			const known = presenceViewers.find((candidate) => candidate.id === viewer.id);
+			if (known) known.viewport = viewport;
+			if (followingId === viewer.id && pathname === reviewedPathname()) applyFollowViewport(viewport);
+		}
+	}
+
+	function remoteCursorEntry(viewer) {
+		let entry = remoteCursors.get(viewer.id);
+		if (entry) {
+			entry.viewer = viewer;
+			return entry;
+		}
+		const node = document.createElement("div");
+		node.className = "shiplet-review-remote-cursor";
+		node.setAttribute("data-shiplet-remote-cursor", viewer.id);
+		const arrow = document.createElement("span");
+		arrow.className = "shiplet-review-remote-cursor-arrow";
+		const label = document.createElement("span");
+		label.className = "shiplet-review-remote-cursor-label";
+		const avatar = document.createElement("span");
+		avatar.className = "shiplet-review-remote-cursor-avatar";
+		const name = document.createElement("span");
+		name.className = "shiplet-review-remote-cursor-name";
+		label.append(avatar, name);
+		node.append(arrow, label);
+		cursorLayer.appendChild(node);
+		entry = { viewer, cursor: null, node, arrow, label, avatar, name, styledFor: "", at: 0 };
+		remoteCursors.set(viewer.id, entry);
+		return entry;
+	}
+
+	function updateRemoteCursor(viewer, cursor) {
+		const entry = remoteCursorEntry(viewer);
+		entry.cursor = cursor;
+		entry.at = Date.now();
+		const color = viewer.color || "#20293a";
+		entry.arrow.style.color = color;
+		entry.label.style.backgroundColor = color;
+		entry.name.textContent = viewer.name;
+		const avatarKey = String(viewer.avatarPreset || "") + "|" + String(viewer.avatarDataUrl || "") + "|" + viewer.name;
+		if (entry.styledFor !== avatarKey) {
+			entry.styledFor = avatarKey;
+			entry.avatar.style.backgroundImage = "";
+			stylePresenceAvatar(entry.avatar, viewer);
+		}
+		positionRemoteCursor(entry);
+	}
+
+	function positionRemoteCursor(entry) {
+		if (!entry.cursor) { entry.node.hidden = true; return; }
+		const scrollX = artifactViewport ? artifactViewport.scrollX : 0;
+		const scrollY = artifactViewport ? artifactViewport.scrollY : 0;
+		const x = entry.cursor.x - scrollX;
+		const y = entry.cursor.y - scrollY;
+		const width = Number(window.innerWidth) || 0;
+		const height = Number(window.innerHeight) || 0;
+		const margin = 48;
+		const offscreen = width > 0 && height > 0 && (x < -margin || y < -margin || x > width + margin || y > height + margin);
+		entry.node.hidden = offscreen;
+		entry.node.style.transform = "translate(" + Math.round(x) + "px, " + Math.round(y) + "px)";
+	}
+
+	function renderRemoteCursors() {
+		for (const entry of remoteCursors.values()) positionRemoteCursor(entry);
+	}
+
+	function removeRemoteCursor(viewerId) {
+		const entry = remoteCursors.get(viewerId);
+		if (!entry) return;
+		remoteCursors.delete(viewerId);
+		try { entry.node.remove(); } catch {}
+	}
+
+	function reconcileRemoteCursors() {
+		const live = new Set(presenceViewers.map((viewer) => viewer.id));
+		for (const id of Array.from(remoteCursors.keys())) {
+			if (!live.has(id) || id === presenceSelfId) removeRemoteCursor(id);
+		}
+	}
+
+	function sendFollowCommand(payload) {
+		if (!artifactPort) return;
+		try { artifactPort.postMessage(Object.assign({ protocol: "shiplet.artifact.follow.command.v1", channelNonce: artifactChannelNonce, shipletId, revisionId }, payload)); } catch {}
+	}
+
+	function applyFollowViewport(viewport) {
+		if (!followingId || !viewport) return;
+		if (artifactViewport && artifactViewport.scrollX === viewport.scrollX && artifactViewport.scrollY === viewport.scrollY) return;
+		sendFollowCommand({ type: "scroll", scrollX: viewport.scrollX, scrollY: viewport.scrollY });
+	}
+
+	function startFollowing(viewerId) {
+		const viewer = presenceViewers.find((candidate) => candidate.id === viewerId);
+		if (!viewer || viewer.id === presenceSelfId) return;
+		followingId = viewer.id;
+		followingName = viewer.name;
+		followText.textContent = "Following " + viewer.name;
+		followBar.hidden = false;
+		followBar.setAttribute("data-shiplet-following", viewer.id);
+		followBar.style.borderColor = viewer.color || "";
+		followAvatar.style.borderColor = viewer.color || "";
+		followAvatar.style.backgroundImage = "";
+		stylePresenceAvatar(followAvatar, viewer);
+		renderPresence(presenceViewers);
+		if (viewer.viewport) applyFollowViewport(viewer.viewport);
+	}
+
+	function stopFollowing() {
+		if (!followingId) return;
+		followingId = "";
+		followingName = "";
+		followBar.hidden = true;
+		followBar.removeAttribute("data-shiplet-following");
+		followText.textContent = "";
+		sendFollowCommand({ type: "stop" });
+		renderPresence(presenceViewers);
+	}
+
+	function parseArtifactPointer(data) {
+		if (!isRecord(data) || data.protocol !== "shiplet.artifact.pointer.v1" || data.channelNonce !== artifactChannelNonce || data.shipletId !== shipletId || data.revisionId !== revisionId) return null;
+		if (data.type === "leave" && hasExactKeys(data, ["protocol", "type", "channelNonce", "shipletId", "revisionId"])) return { type: "leave" };
+		if (data.type !== "move" || !hasExactKeys(data, ["protocol", "type", "channelNonce", "shipletId", "revisionId", "pointer"]) || !isRecord(data.pointer)) return null;
+		const pointer = data.pointer;
+		if (!hasExactKeys(pointer, ["pageX", "pageY", "viewportX", "viewportY"]) || !finiteNumber(pointer.pageX, -10000000, 10000000) || !finiteNumber(pointer.pageY, -10000000, 10000000) || !finiteNumber(pointer.viewportX, -100000, 100000) || !finiteNumber(pointer.viewportY, -100000, 100000)) return null;
+		return { type: "move", pointer };
+	}
+
+	function parseArtifactFollowInterrupt(data) {
+		return isRecord(data) && hasExactKeys(data, ["protocol", "type", "channelNonce", "shipletId", "revisionId"]) && data.protocol === "shiplet.artifact.follow.v1" && data.type === "interrupt" && data.channelNonce === artifactChannelNonce && data.shipletId === shipletId && data.revisionId === revisionId;
 	}
 
 	function avatarPresetFor(id) {
@@ -1114,8 +1409,34 @@ export function trustedReviewHostScript(): string {
 			avatar.setAttribute("aria-label", viewer.name);
 			avatar.setAttribute("title", viewer.name);
 			avatar.setAttribute("data-shiplet-presence-viewer", viewer.id);
+			if (viewer.color) avatar.style.borderColor = viewer.color;
 			stylePresenceAvatar(avatar, viewer);
-			presenceRoot.appendChild(avatar);
+			const isSelf = Boolean(presenceSelfId) && viewer.id === presenceSelfId;
+			if (isSelf) {
+				const self = document.createElement("span");
+				self.className = "shiplet-review-presence-viewer";
+				self.setAttribute("data-shiplet-presence-self", "v1");
+				self.setAttribute("data-shiplet-presence-name", viewer.name + " (you)");
+				self.appendChild(avatar);
+				presenceRoot.appendChild(self);
+				continue;
+			}
+			const following = viewer.id === followingId;
+			const button = document.createElement("button");
+			button.type = "button";
+			button.className = "shiplet-review-presence-viewer";
+			button.setAttribute("data-shiplet-presence-follow", viewer.id);
+			button.setAttribute("aria-pressed", following ? "true" : "false");
+			button.setAttribute("aria-label", (following ? "Stop following " : "Follow ") + viewer.name);
+			button.setAttribute("data-shiplet-presence-name", viewer.name + (following ? " · Following" : " · Click to follow"));
+			if (viewer.color) button.style.color = viewer.color;
+			button.addEventListener("click", (event) => {
+				if (!event || event.isTrusted !== true) return;
+				if (followingId === viewer.id) stopFollowing();
+				else startFollowing(viewer.id);
+			});
+			button.appendChild(avatar);
+			presenceRoot.appendChild(button);
 		}
 	}
 
@@ -1137,24 +1458,28 @@ export function trustedReviewHostScript(): string {
 			schedulePresenceReconnect();
 			return;
 		}
+		const socket = presenceSocket;
 		presenceSocket.addEventListener("open", () => {
+			if (presenceSocket !== socket) return;
 			presenceReconnectAttempt = 0;
-			try {
-				presenceSocket.send(JSON.stringify({
-					type: "hello",
-					page: { pathname: new URL(reviewPageUrl).pathname || "/", href: reviewPageUrl, title: String(document.title || "").slice(0, 200) },
-				}));
-			} catch {}
+			presenceOpen = true;
+			const hello = { type: "hello", page: presencePage() };
+			const viewport = presenceViewport();
+			if (viewport) hello.viewport = viewport;
+			sendPresence(hello);
 		});
 		presenceSocket.addEventListener("message", (event) => {
+			if (presenceSocket !== socket) return;
 			const raw = typeof event.data === "string" ? event.data : "";
-			if (!raw || raw.length > 65536) return;
+			if (!raw || raw.length > 262144) return;
 			try {
-				const viewers = parsePresenceViewers(JSON.parse(raw));
-				if (viewers) renderPresence(viewers);
+				handlePresenceMessage(JSON.parse(raw));
 			} catch {}
 		});
-		presenceSocket.addEventListener("close", schedulePresenceReconnect);
+		presenceSocket.addEventListener("close", () => {
+			if (presenceSocket === socket) presenceOpen = false;
+			schedulePresenceReconnect();
+		});
 		presenceSocket.addEventListener("error", () => {});
 	}
 
@@ -2207,6 +2532,7 @@ export function trustedReviewHostScript(): string {
 		artifactPort = null;
 		artifactSourceWindow = null;
 		artifactChannelConnected = false;
+		if (followingId) stopFollowing();
 		closeAnnotationEditor();
 		form.hidden = true;
 		setAnnotationExpanded(false);
@@ -2234,8 +2560,20 @@ export function trustedReviewHostScript(): string {
 			if (viewportValue) {
 				artifactViewport = viewportValue;
 				updateReviewPinPositions();
+				renderRemoteCursors();
 				renderAnnotationCanvas();
 				if (artifactCapture && !form.hidden) anchorAnnotationComposer(artifactCapture, false);
+				queueViewportPresence();
+				return;
+			}
+			const pointerValue = parseArtifactPointer(portEvent.data);
+			if (pointerValue) {
+				if (pointerValue.type === "move") queueCursorPresence(pointerValue.pointer);
+				else sendCursorLeave();
+				return;
+			}
+			if (parseArtifactFollowInterrupt(portEvent.data)) {
+				stopFollowing();
 				return;
 			}
 			const anchorValue = parseArtifactAnchor(portEvent.data);
@@ -2504,6 +2842,9 @@ export function trustedReviewHostScript(): string {
 	closeButton.addEventListener("click", (event) => { if (event && event.isTrusted === true) setPanelOpen(false); });
 	commentsLauncher.addEventListener("click", (event) => { if (event && event.isTrusted === true) setPanelOpen(panel.hidden); });
 	launcher.addEventListener("click", (event) => { if (event && event.isTrusted === true) startTargetSelection(); });
+	window.addEventListener("keydown", (event) => {
+		if (event && event.key === "Escape" && followingId) stopFollowing();
+	});
 	window.addEventListener("keydown", async (event) => {
 		if (!event || event.isTrusted !== true) return;
 		const target = event.target;
@@ -2577,6 +2918,9 @@ export function trustedReviewHostStyles(): string {
 iframe[data-shiplet-artifact-frame][data-shiplet-selecting="true"]{outline:3px solid #1677ff;outline-offset:-3px;filter:saturate(.96) brightness(.94)}
 .shiplet-review-pin-layer{position:fixed;inset:0;z-index:28;pointer-events:none}.shiplet-review-pin{position:absolute;transform:translate(-50%,-50%);display:grid;place-items:center;width:28px;height:28px;padding:0;border:2px solid #fff;border-radius:999px;background:#fff;box-shadow:0 0 0 2px #20293a,0 3px 10px rgba(0,0,0,.32);color:var(--shiplet-ink);font:800 11px/1 ui-sans-serif,system-ui,sans-serif;cursor:pointer;pointer-events:auto;transition:background .14s ease,color .14s ease,box-shadow .14s ease,transform .14s ease}.shiplet-review-pin[data-active="true"]{transform:translate(-50%,-50%) scale(1.12);background:var(--shiplet-action);box-shadow:0 0 0 3px #20293a,0 5px 14px rgba(0,0,0,.36);color:#fff}
 .shiplet-review-presence{position:fixed;top:16px;left:16px;z-index:30;display:flex;align-items:center;gap:6px;min-height:38px;padding:4px 7px 4px 10px;border:1px solid var(--shiplet-line);border-radius:999px;background:var(--shiplet-surface);box-shadow:0 3px 12px rgba(32,41,58,.18)}.shiplet-review-presence[hidden]{display:none}.shiplet-review-presence-summary{margin-right:3px;color:var(--shiplet-muted);font-size:11px;font-weight:700}.shiplet-review-presence-avatar{display:inline-grid;place-items:center;width:28px;height:28px;border:2px solid var(--shiplet-ink);border-radius:999px;background:#fff;color:var(--shiplet-ink);font:800 10px/1 ui-monospace,SFMono-Regular,Menlo,monospace}
+.shiplet-review-presence-viewer{appearance:none;position:relative;display:inline-grid;place-items:center;padding:0;border:0;border-radius:999px;background:transparent;color:var(--shiplet-ink);font:inherit}.shiplet-review-presence-viewer::after{content:attr(data-shiplet-presence-name);position:absolute;top:calc(100% + 9px);left:50%;z-index:1;padding:6px 9px;border-radius:7px;background:var(--shiplet-ink);color:#fff;font:700 11px/1 ui-sans-serif,system-ui,sans-serif;white-space:nowrap;box-shadow:0 4px 12px rgba(32,41,58,.24);opacity:0;transform:translate(-50%,-3px);pointer-events:none;transition:opacity .12s ease,transform .12s ease}.shiplet-review-presence-viewer:first-of-type::after,.shiplet-review-presence-viewer:nth-of-type(2)::after{left:0;transform:translate(0,-3px)}.shiplet-review-presence-viewer:hover::after,.shiplet-review-presence-viewer:focus-visible::after{opacity:1;transform:translate(-50%,0)}.shiplet-review-presence-viewer:first-of-type:hover::after,.shiplet-review-presence-viewer:nth-of-type(2):hover::after,.shiplet-review-presence-viewer:first-of-type:focus-visible::after,.shiplet-review-presence-viewer:nth-of-type(2):focus-visible::after{transform:translate(0,0)}button.shiplet-review-presence-viewer{cursor:pointer;transition:transform .14s ease,box-shadow .14s ease}button.shiplet-review-presence-viewer:hover,button.shiplet-review-presence-viewer:focus-visible{transform:translateY(-1px);box-shadow:0 0 0 3px color-mix(in srgb,currentColor 28%,transparent);outline:0}button.shiplet-review-presence-viewer[aria-pressed="true"]{box-shadow:0 0 0 3px currentColor}button.shiplet-review-presence-viewer[aria-pressed="true"] .shiplet-review-presence-avatar{border-color:#fff}.shiplet-review-presence-viewer[data-shiplet-presence-self]{opacity:.82}
+.shiplet-review-cursor-layer{position:fixed;inset:0;z-index:29;overflow:hidden;pointer-events:none}.shiplet-review-remote-cursor{position:absolute;left:0;top:0;display:flex;align-items:flex-start;gap:0;will-change:transform;transition:transform .09s linear}.shiplet-review-remote-cursor[hidden]{display:none}.shiplet-review-remote-cursor-arrow{position:relative;display:block;width:20px;height:22px;filter:drop-shadow(0 0 1px #fff) drop-shadow(0 0 1px #fff) drop-shadow(0 2px 3px rgba(0,0,0,.35))}.shiplet-review-remote-cursor-arrow::before{content:"";position:absolute;inset:0;background:currentColor;clip-path:polygon(0 0,100% 58%,56% 64%,38% 100%)}.shiplet-review-remote-cursor-label{display:inline-flex;align-items:center;gap:6px;max-width:220px;margin:14px 0 0 -4px;padding:3px 9px 3px 3px;border-radius:999px;background:#20293a;color:#fff;font:750 11px/1 ui-sans-serif,system-ui,sans-serif;white-space:nowrap;box-shadow:0 2px 8px rgba(0,0,0,.3)}.shiplet-review-remote-cursor-avatar{display:inline-grid;place-items:center;flex:0 0 auto;width:18px;height:18px;border:1.5px solid #fff;border-radius:999px;background:#fff;background-repeat:no-repeat;color:var(--shiplet-ink);font:800 8px/1 ui-monospace,SFMono-Regular,Menlo,monospace;overflow:hidden}.shiplet-review-remote-cursor-name{overflow:hidden;text-overflow:ellipsis}
+.shiplet-review-follow{position:fixed;top:16px;left:50%;z-index:30;display:flex;align-items:center;gap:8px;max-width:calc(100vw - 32px);min-height:38px;padding:4px 5px 4px 5px;transform:translateX(-50%);border:2px solid var(--shiplet-ink);border-radius:999px;background:var(--shiplet-surface);box-shadow:0 3px 12px rgba(32,41,58,.18);color:var(--shiplet-ink);font:750 12px/1 ui-sans-serif,system-ui,sans-serif;white-space:nowrap}.shiplet-review-follow[hidden]{display:none}.shiplet-review-follow-avatar{display:inline-grid;place-items:center;width:26px;height:26px;border:2px solid var(--shiplet-ink);border-radius:999px;background:#fff;background-repeat:no-repeat;color:var(--shiplet-ink);font:800 9px/1 ui-monospace,SFMono-Regular,Menlo,monospace;overflow:hidden}.shiplet-review-follow-text{overflow:hidden;text-overflow:ellipsis}.shiplet-review-follow-stop{appearance:none;min-height:28px;padding:0 10px;border:1px solid var(--shiplet-line);border-radius:999px;background:#fff;color:var(--shiplet-ink);font:750 11px/1 ui-sans-serif,system-ui,sans-serif;cursor:pointer}.shiplet-review-follow-stop:hover{border-color:var(--shiplet-ink)}
 #shiplet-kernel-review-panel{position:fixed;right:12px;bottom:12px;z-index:30;display:grid;align-content:start;width:min(312px,calc(100vw - 24px));max-height:min(520px,calc(100dvh - 24px));overflow-x:hidden;overflow-y:auto;overscroll-behavior:contain;border:1px solid var(--shiplet-line);border-radius:11px;background:var(--shiplet-surface);box-shadow:0 10px 32px rgba(32,41,58,.2)}#shiplet-kernel-review-panel[hidden]{display:none}[data-shiplet-kernel-review-controls]{display:grid;min-width:0;grid-template-columns:minmax(0,1fr)}
 .shiplet-review-head{position:sticky;top:0;z-index:2;display:flex;align-items:flex-start;justify-content:space-between;gap:8px;padding:9px 9px 8px 11px;border-bottom:1px solid #d7dbe3;background:rgba(251,249,244,.97);backdrop-filter:blur(8px)}.shiplet-review-heading{min-width:0}.shiplet-review-head h2{margin:0;font-size:14px;line-height:1.2}.shiplet-review-context-disclosure{position:relative;max-width:100%;margin-top:2px}.shiplet-review-context-disclosure summary{display:block;max-width:100%;overflow:hidden;color:var(--shiplet-muted);font:700 10px/1.3 ui-sans-serif,system-ui,sans-serif;text-overflow:ellipsis;white-space:nowrap;cursor:pointer;list-style:none}.shiplet-review-context-disclosure summary::-webkit-details-marker{display:none}.shiplet-review-context-disclosure summary::before{content:"↳ ";color:var(--shiplet-action)}.shiplet-review-context{position:absolute;top:18px;left:0;z-index:4;width:min(294px,calc(100vw - 44px));margin:0;padding:7px 8px;border:1px solid var(--shiplet-line);border-radius:7px;background:#fff;box-shadow:0 6px 18px rgba(32,41,58,.18);color:var(--shiplet-muted);font:650 10px/1.35 ui-monospace,SFMono-Regular,Menlo,monospace;overflow-wrap:anywhere}.shiplet-review-composer-context{margin:3px 0 0;color:var(--shiplet-muted);font:650 10px/1.3 ui-monospace,SFMono-Regular,Menlo,monospace;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.shiplet-review-actions{display:flex;align-items:center;gap:4px;flex:0 0 auto}
 .shiplet-review-secondary,.shiplet-review-icon,.shiplet-review-primary,.shiplet-review-thread-action,.shiplet-review-status-more summary,.shiplet-review-options summary,.shiplet-review-reply-form button{min-height:32px;padding:0 8px;border:1px solid var(--shiplet-line);border-radius:7px;background:var(--shiplet-raised);color:var(--shiplet-ink);font:700 11px/1 ui-sans-serif,system-ui,sans-serif;cursor:pointer}.shiplet-review-primary{border-color:#8f321c;background:var(--shiplet-action);color:#fff}.shiplet-review-icon{font-size:0;width:32px;padding:0}.shiplet-review-icon::before{content:"×";font-size:20px;font-weight:400}.shiplet-review-nav{width:30px;font-size:13px}.shiplet-review-nav::before{content:none}.shiplet-review-compose{width:32px;padding:0;font-size:17px;color:var(--shiplet-muted)}.shiplet-review-options,.shiplet-review-status-more{position:relative}.shiplet-review-options summary,.shiplet-review-status-more summary{display:grid;place-items:center;padding:0;list-style:none}.shiplet-review-options summary{width:30px}.shiplet-review-status-more summary{width:auto;padding:0 7px;color:var(--shiplet-muted)}.shiplet-review-options summary::-webkit-details-marker,.shiplet-review-status-more summary::-webkit-details-marker{display:none}.shiplet-review-options>div{position:absolute;top:36px;right:0;display:grid;gap:5px;min-width:126px;padding:6px;border:1px solid var(--shiplet-line);border-radius:8px;background:#fff;box-shadow:0 8px 22px rgba(32,41,58,.2)}

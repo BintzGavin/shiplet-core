@@ -35,8 +35,13 @@ capabilities, malformed frame messages, and review-session mismatches fail close
    [Inbox](https://shiplet.cc/inbox) for canonical notifications.
 
 Presence and live updates show current collaborators when the browser and
-runtime support them. If the live channel is interrupted, reload the trusted
-review host; persisted feedback remains canonical.
+runtime support them. Every live reviewer is assigned a distinct signal-flag
+color, and their cursor moves across the artifact with their avatar and name
+attached. Click another reviewer's avatar in the top-left roster to follow
+them: your view mirrors their scroll position until you press Stop following,
+press Escape, or scroll the artifact yourself. If the live channel is
+interrupted, reload the trusted review host; persisted feedback remains
+canonical.
 
 Mentions notify only collaborators who can already access the Shiplet. Watching
 a Shiplet subscribes the current account to its future review activity; use the

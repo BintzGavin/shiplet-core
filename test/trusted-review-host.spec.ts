@@ -146,6 +146,7 @@ async function operateTrustedHostScript(options?: {
   feedback?: unknown[];
   online?: boolean;
   presenceViewers?: unknown[];
+  presenceSelf?: unknown;
   viewport?: { width: number; height: number };
 }) {
   const pageAttributes = new Map([
@@ -238,17 +239,27 @@ async function operateTrustedHostScript(options?: {
     },
   };
   const windowListeners = new Map<string, Array<(event: unknown) => unknown>>();
+  const sockets: FakeWebSocket[] = [];
   class FakeWebSocket {
     listeners = new Map<string, Array<(event: unknown) => unknown>>();
     sent: string[] = [];
     constructor(_url: string) {
+      sockets.push(this);
       Promise.resolve().then(async () => {
         await this.dispatch("open", {});
         await this.dispatch("message", {
-          data: JSON.stringify({
-            type: "presence:update",
-            viewers: options?.presenceViewers || [],
-          }),
+          data: JSON.stringify(
+            options?.presenceSelf
+              ? {
+                  type: "presence:ready",
+                  viewer: options.presenceSelf,
+                  viewers: options?.presenceViewers || [],
+                }
+              : {
+                  type: "presence:update",
+                  viewers: options?.presenceViewers || [],
+                },
+          ),
         });
       });
     }
@@ -448,6 +459,7 @@ async function operateTrustedHostScript(options?: {
     setTopLevelSubmissionFailure(value: boolean) {
       failTopLevelSubmission = value;
     },
+    sockets,
     status,
     submit,
     submittedForms,
@@ -455,6 +467,26 @@ async function operateTrustedHostScript(options?: {
     widget,
     window,
   };
+}
+
+function presenceButtons(harness: Awaited<ReturnType<typeof operateTrustedHostScript>>) {
+  const roster = harness.createdElements.find((element) => element.className === "shiplet-review-presence");
+  return (roster?.children || []).filter(
+    (element) => element.className === "shiplet-review-presence-viewer" && element.tagName === "BUTTON",
+  );
+}
+
+function artifactPortMessages(harness: Awaited<ReturnType<typeof operateTrustedHostScript>>) {
+  return harness.channels[0]?.port1.messages as Array<Record<string, unknown>>;
+}
+
+async function pushSocketMessage(harness: Awaited<ReturnType<typeof operateTrustedHostScript>>, payload: unknown) {
+  await harness.sockets[0]?.dispatch("message", { data: JSON.stringify(payload) });
+  for (let index = 0; index < 4; index += 1) await Promise.resolve();
+}
+
+function socketSent(harness: Awaited<ReturnType<typeof operateTrustedHostScript>>) {
+  return (harness.sockets[0]?.sent || []).map((raw) => JSON.parse(raw) as Record<string, unknown>);
 }
 
 function operatedFormFields(form: OperatedElement) {
@@ -888,6 +920,157 @@ describe("trusted review host boundary", () => {
     const labels = ["Gavin Reviewer", "reviewer@example.com", "second@example.com"];
     expect(avatars.map(avatar => avatar.getAttribute("title"))).toEqual(labels);
     expect(avatars.map(avatar => avatar.getAttribute("aria-label"))).toEqual(labels);
+  });
+
+  it("Given other live reviewers, When the roster renders, Then their avatars are follow buttons wearing their assigned colors while the reviewer's own avatar is not", async () => {
+    const harness = await operateTrustedHostScript({
+      connectWidget: false,
+      presenceSelf: { id: "user_me", kind: "user", name: "Me Reviewer", color: "#2f6e88" },
+      presenceViewers: [
+        { id: "user_me", kind: "user", name: "Me Reviewer", color: "#2f6e88" },
+        { id: "user_alfa", kind: "user", name: "Alfa Reviewer", color: "#c2502f", avatarPreset: "aurora-grid" },
+      ],
+    });
+    const avatars = harness.createdElements.filter((element) => element.className === "shiplet-review-presence-avatar");
+    expect(avatars.map((avatar) => avatar.style.borderColor)).toEqual(["#2f6e88", "#c2502f"]);
+    const buttons = presenceButtons(harness);
+    expect(buttons).toHaveLength(1);
+    expect(buttons[0]?.getAttribute("data-shiplet-presence-follow")).toBe("user_alfa");
+    expect(buttons[0]?.getAttribute("aria-label")).toBe("Follow Alfa Reviewer");
+    expect(buttons[0]?.getAttribute("aria-pressed")).toBe("false");
+    expect(buttons[0]?.style.color).toBe("#c2502f");
+    expect(buttons[0]?.getAttribute("data-shiplet-presence-name")).toBe("Alfa Reviewer · Click to follow");
+    const self = harness.createdElements.find((element) => element.getAttribute("data-shiplet-presence-self") === "v1");
+    expect(self?.tagName).toBe("SPAN");
+    expect(self?.getAttribute("data-shiplet-presence-name")).toBe("Me Reviewer (you)");
+    expect(self?.children[0]).toBe(avatars[0]);
+  });
+
+  it("Given a reviewer clicks another avatar, When follow mode starts, Then the artifact mirrors that reviewer's scroll until they stop, interrupt, or leave", async () => {
+    const harness = await operateTrustedHostScript({
+      connectWidget: false,
+      presenceSelf: { id: "user_me", kind: "user", name: "Me Reviewer", color: "#2f6e88" },
+      presenceViewers: [
+        { id: "user_me", kind: "user", name: "Me Reviewer", color: "#2f6e88" },
+        { id: "user_alfa", kind: "user", name: "Alfa Reviewer", color: "#c2502f", page: { pathname: "/pricing/" }, viewport: { width: 1200, height: 800, scrollX: 0, scrollY: 640 } },
+      ],
+    });
+    const nonce = harness.artifactOffer?.channelNonce;
+    const followBar = harness.createdElements.find((element) => element.getAttribute("data-shiplet-follow-bar") === "v1");
+    expect(followBar?.hidden).toBe(true);
+
+    await presenceButtons(harness)[0]?.dispatch("click", { isTrusted: true });
+    expect(followBar?.hidden).toBe(false);
+    expect(followBar?.getAttribute("data-shiplet-following")).toBe("user_alfa");
+    const followText = harness.createdElements.find((element) => element.className === "shiplet-review-follow-text");
+    expect(followText?.textContent).toBe("Following Alfa Reviewer");
+    expect(presenceButtons(harness)[0]?.getAttribute("aria-pressed")).toBe("true");
+    expect(presenceButtons(harness)[0]?.getAttribute("aria-label")).toBe("Stop following Alfa Reviewer");
+    expect(presenceButtons(harness)[0]?.getAttribute("data-shiplet-presence-name")).toBe("Alfa Reviewer · Following");
+    expect(artifactPortMessages(harness).at(-1)).toEqual({
+      protocol: "shiplet.artifact.follow.command.v1",
+      type: "scroll",
+      channelNonce: nonce,
+      shipletId: "shiplet_a",
+      revisionId: "revision_a1",
+      scrollX: 0,
+      scrollY: 640,
+    });
+
+    await pushSocketMessage(harness, {
+      type: "viewport:update",
+      viewer: { id: "user_alfa", kind: "user", name: "Alfa Reviewer", color: "#c2502f" },
+      page: { pathname: "/pricing/" },
+      viewport: { width: 1200, height: 800, scrollX: 40, scrollY: 1280 },
+    });
+    expect(artifactPortMessages(harness).at(-1)).toMatchObject({ type: "scroll", scrollX: 40, scrollY: 1280 });
+
+    await pushSocketMessage(harness, {
+      type: "viewport:update",
+      viewer: { id: "user_bravo", kind: "user", name: "Bravo", color: "#3f7d50" },
+      page: { pathname: "/pricing/" },
+      viewport: { width: 1200, height: 800, scrollX: 0, scrollY: 9000 },
+    });
+    expect(artifactPortMessages(harness).at(-1)).toMatchObject({ scrollY: 1280 });
+
+    await harness.channels[0]?.port1.dispatch({ protocol: "shiplet.artifact.follow.v1", type: "interrupt", channelNonce: nonce, shipletId: "shiplet_a", revisionId: "revision_a1" });
+    expect(followBar?.hidden).toBe(true);
+    expect(artifactPortMessages(harness).at(-1)).toMatchObject({ protocol: "shiplet.artifact.follow.command.v1", type: "stop" });
+    expect(presenceButtons(harness)[0]?.getAttribute("aria-pressed")).toBe("false");
+
+    await presenceButtons(harness)[0]?.dispatch("click", { isTrusted: true });
+    expect(followBar?.hidden).toBe(false);
+    await pushSocketMessage(harness, {
+      type: "presence:update",
+      viewers: [{ id: "user_me", kind: "user", name: "Me Reviewer", color: "#2f6e88" }],
+    });
+    expect(followBar?.hidden).toBe(true);
+    expect(presenceButtons(harness)).toHaveLength(0);
+  });
+
+  it("Given pointer movement inside the artifact and remote cursor updates, When presence relays them, Then cursors render with each reviewer's color, avatar, and name over the artifact", async () => {
+    const harness = await operateTrustedHostScript({
+      connectWidget: false,
+      presenceSelf: { id: "user_me", kind: "user", name: "Me Reviewer", color: "#2f6e88" },
+      presenceViewers: [
+        { id: "user_me", kind: "user", name: "Me Reviewer", color: "#2f6e88" },
+        { id: "user_alfa", kind: "user", name: "Alfa Reviewer", color: "#c2502f", avatarPreset: "violet-signal" },
+      ],
+    });
+    const nonce = harness.artifactOffer?.channelNonce;
+    const envelope = { channelNonce: nonce, shipletId: "shiplet_a", revisionId: "revision_a1" };
+    await harness.channels[0]?.port1.dispatch({ ...envelope, protocol: "shiplet.artifact.viewport.v1", type: "change", viewport: { width: 900, height: 700, documentWidth: 900, documentHeight: 3000, scrollX: 0, scrollY: 100 } });
+    await harness.channels[0]?.port1.dispatch({ ...envelope, protocol: "shiplet.artifact.pointer.v1", type: "move", pointer: { pageX: 300, pageY: 450, viewportX: 300, viewportY: 350 } });
+    await harness.channels[0]?.port1.dispatch({ ...envelope, protocol: "shiplet.artifact.pointer.v1", type: "move", pointer: { pageX: 300, pageY: 450, viewportX: 300, viewportY: 350, credential: "no" } });
+    const sent = socketSent(harness);
+    expect(sent.filter((message) => message.type === "viewport:update")).toEqual([
+      { type: "viewport:update", page: { pathname: "/pricing/", href: "https://client.example/pricing/", title: "" }, viewport: { width: 900, height: 700, scrollX: 0, scrollY: 100 } },
+    ]);
+    expect(sent.filter((message) => message.type === "cursor:update")).toEqual([
+      { type: "cursor:update", page: { pathname: "/pricing/", href: "https://client.example/pricing/", title: "" }, cursor: { x: 300, y: 450, viewportX: 300, viewportY: 350, scrollX: 0, scrollY: 100 } },
+    ]);
+    await harness.channels[0]?.port1.dispatch({ ...envelope, protocol: "shiplet.artifact.pointer.v1", type: "leave" });
+    expect(socketSent(harness).at(-1)).toMatchObject({ type: "cursor:leave" });
+
+    await pushSocketMessage(harness, {
+      type: "cursor:update",
+      viewer: { id: "user_alfa", kind: "user", name: "Alfa Reviewer", color: "#c2502f", avatarPreset: "violet-signal" },
+      page: { pathname: "/pricing/" },
+      cursor: { x: 220, y: 700, viewportX: 220, viewportY: 100, scrollX: 0, scrollY: 600 },
+    });
+    const cursor = harness.createdElements.find((element) => element.getAttribute("data-shiplet-remote-cursor") === "user_alfa");
+    expect(cursor?.hidden).toBe(false);
+    expect(cursor?.style.transform).toBe("translate(220px, 600px)");
+    const arrow = harness.createdElements.find((element) => element.className === "shiplet-review-remote-cursor-arrow");
+    const label = harness.createdElements.find((element) => element.className === "shiplet-review-remote-cursor-label");
+    const name = harness.createdElements.find((element) => element.className === "shiplet-review-remote-cursor-name");
+    const avatar = harness.createdElements.find((element) => element.className === "shiplet-review-remote-cursor-avatar");
+    expect(arrow?.style.color).toBe("#c2502f");
+    expect(label?.style.backgroundColor).toBe("#c2502f");
+    expect(name?.textContent).toBe("Alfa Reviewer");
+    expect(avatar?.textContent).toBe("AR");
+    const cursorImage = harness.createdElements.filter((element) => element.tagName === "IMG").at(-1);
+    await cursorImage?.dispatch("load");
+    expect(avatar?.style.backgroundPosition).toBe("33.33333333333333% 50%");
+
+    await pushSocketMessage(harness, {
+      type: "cursor:update",
+      viewer: { id: "user_me", kind: "user", name: "Me Reviewer", color: "#2f6e88" },
+      page: { pathname: "/pricing/" },
+      cursor: { x: 1, y: 1 },
+    });
+    expect(harness.createdElements.find((element) => element.getAttribute("data-shiplet-remote-cursor") === "user_me")).toBeUndefined();
+
+    await pushSocketMessage(harness, {
+      type: "cursor:update",
+      viewer: { id: "user_alfa", kind: "user", name: "Alfa Reviewer", color: "#c2502f" },
+      page: { pathname: "/pricing/" },
+      cursor: { x: 220, y: 5000 },
+    });
+    expect(cursor?.hidden).toBe(true);
+
+    await pushSocketMessage(harness, { type: "cursor:leave", viewer: { id: "user_alfa", kind: "user", name: "Alfa Reviewer" }, page: { pathname: "/pricing/" } });
+    expect(cursor?.removed).toBe(true);
   });
 
   it("pins avatar assets and image policy to the trusted platform origin on artifact subdomains", async () => {
