@@ -900,7 +900,7 @@ describe("WordPress embed installations", () => {
     const html = await response.text();
     expect(html).toContain('data-shiplet-embed-auth-bootstrap="v1"');
     expect(html).toContain('type="button"');
-    expect(html).toContain("Open secure Shiplet sign-in");
+    expect(html).toContain('data-shiplet-embed-action="annotate"');
     expect(html).not.toContain("shiplet_embed_code");
     expect(html).not.toContain("reviewToken");
   });
@@ -1156,6 +1156,9 @@ describe("WordPress embed installations", () => {
     const html = await response.text();
     expect(html).toContain('data-review-state="permission_denied"');
     expect(html).toContain('role="alert"');
+    expect(html).toContain("outsider-state@example.com");
+    expect(html).toContain("Sign in with another account");
+    expect(html).toContain("switch_account=1");
     expect(html).not.toContain("data-shiplet-artifact-frame");
   });
 

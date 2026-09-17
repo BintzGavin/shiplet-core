@@ -32,7 +32,7 @@ const DOCS_PUBLIC_CONTENT_SHA256: Record<string, string> = {
     "9fb78882f2041ecf900e128ad19c53131617c987bcb347f084d46c871d2ed83a",
   "api-surface":
     "ae7d36eb6be9d7c20c4e9a493540d3b9f3d89ce7d31dbb1de9a25d8ee5f56f95",
-  "embed": "948c7b0492546b4e157336a96f4c9394a2c2925fbf8c7e9c86501413219a844e",
+  "embed": "19aff21c3359f20c2b02c84373391c1b8b043722e1fe7ed51a7bcc668e4e2a63",
   "security": "5b52e175c0b5cb8630e199c1bfc126895eadaa47e5f0fa3ec19d7878b6e7caa6"
 };
 

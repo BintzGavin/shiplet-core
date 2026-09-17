@@ -880,7 +880,7 @@ export function trustedReviewHostScript(): string {
 	const drawOnScreenshot = document.createElement("button");
 	drawOnScreenshot.type = "button";
 	drawOnScreenshot.className = "shiplet-review-secondary";
-	drawOnScreenshot.textContent = "Markup screenshot";
+	drawOnScreenshot.textContent = "Draw on screenshot";
 	drawOnScreenshot.hidden = true;
 	drawOnScreenshot.setAttribute("data-shiplet-review-annotate", "v1");
 	const selectedTarget = document.createElement("p");
@@ -897,6 +897,15 @@ export function trustedReviewHostScript(): string {
 	annotationPropertyRows.className = "shiplet-annotation-property-rows";
 	annotationProperties.append(annotationPropertiesSummary, annotationPropertyRows);
 	annotationProperties.hidden = true;
+	const quickDraw = document.createElement("button");
+	quickDraw.type = "button";
+	quickDraw.className = "shiplet-review-quick-draw";
+	quickDraw.textContent = "Draw";
+	quickDraw.setAttribute("aria-label", "Draw on screenshot");
+	quickDraw.setAttribute("title", "Draw on screenshot");
+	quickDraw.hidden = true;
+	quickDraw.addEventListener("click", event => { if (event && event.isTrusted === true) openAnnotationEditor(); });
+	composerActions.insertBefore(quickDraw, submit);
 	captureTools.append(selectTarget, clearTarget, drawOnScreenshot);
 	form.append(annotationCardHeader, selectedTarget, label, comment, composerActions, annotationProperties, mentionDetails, captureTools, composerContext);
 	form.hidden = true;
@@ -910,7 +919,10 @@ export function trustedReviewHostScript(): string {
 	annotationModeBar.setAttribute("data-shiplet-annotation-modebar", "v1");
 	annotationModeBar.setAttribute("aria-live", "polite");
 	annotationModeBar.hidden = true;
-	annotationModeBar.textContent = "Annotating · " + reviewPath;
+	const annotationModeLabel = document.createElement("span");
+	annotationModeLabel.className = "shiplet-annotation-mode-label";
+	annotationModeLabel.textContent = "Annotating · " + reviewPath;
+	annotationModeBar.appendChild(annotationModeLabel);
 	const cancelAnnotationMode = document.createElement("button");
 	cancelAnnotationMode.type = "button";
 	cancelAnnotationMode.textContent = "Cancel";
@@ -1692,13 +1704,22 @@ export function trustedReviewHostScript(): string {
 	}
 
 	function setAnnotationExpanded(expanded) {
-		annotationExpanded = Boolean(expanded || embeddedSiteOrigin);
+		annotationExpanded = Boolean(expanded);
 		form.setAttribute("data-annotation-state", annotationExpanded ? "expanded" : "compact");
 		annotationSettings.setAttribute("aria-expanded", annotationExpanded ? "true" : "false");
 		if (annotationExpanded) form.setAttribute("role", "dialog");
 		else form.removeAttribute("role");
 		if (artifactCapture) anchorAnnotationComposer(artifactCapture, true);
 		else moveAnnotationComposer(parseFloat(form.style.left || "8"), parseFloat(form.style.top || "8"));
+		notifyEmbedView();
+	}
+
+	function notifyEmbedView() {
+		if (!embeddedSiteOrigin || window === parent) return;
+		const view = annotationEditing ? "drawing" : annotationSelecting ? "selecting" : annotationActive ? (annotationExpanded ? "expanded" : "composer") : !panel.hidden ? "comments" : "toolbar";
+		page.setAttribute("data-shiplet-embed-view", view);
+		const coordinates = artifactCapture && artifactCapture.coordinates;
+		parent.postMessage({ protocol: "shiplet.embed.ui.v1", view, anchor: coordinates ? { x: coordinates.pageX, y: coordinates.pageY } : null }, embeddedSiteOrigin);
 	}
 
 	function setAnnotationMode(active, selecting) {
@@ -1710,7 +1731,7 @@ export function trustedReviewHostScript(): string {
 		launcher.setAttribute("data-panel-open", annotationActive ? "true" : "false");
 		artifact.setAttribute("data-shiplet-selecting", annotationSelecting ? "true" : "false");
 		document.body.setAttribute("data-shiplet-annotating", annotationActive ? "true" : "false");
-		if (embeddedSiteOrigin && window !== parent) parent.postMessage({ protocol: "shiplet.embed.ui.v1", selecting: annotationSelecting, composing: annotationActive }, embeddedSiteOrigin);
+		notifyEmbedView();
 	}
 
 	function cancelTargetSelection() {
@@ -1812,7 +1833,11 @@ export function trustedReviewHostScript(): string {
 	}
 
 	if (embeddedSiteOrigin) window.addEventListener("message", event => {
-		if (event.source !== parent || event.origin !== embeddedSiteOrigin || !event.data || event.data.protocol !== "shiplet.embed.focus.v1") return;
+		if (event.source !== parent || event.origin !== embeddedSiteOrigin || !event.data) return;
+		if (event.data.protocol === "shiplet.embed.dismiss.v1") {
+			cancelAnnotationFlow(); setPanelOpen(false); return;
+		}
+		if (event.data.protocol !== "shiplet.embed.focus.v1") return;
 		const index = event.data.index;
 		if (!Number.isInteger(index) || index < 0 || index >= threadViews.length) return;
 		setPanelOpen(true); setActiveThread(threadViews[index]);
@@ -2081,6 +2106,7 @@ export function trustedReviewHostScript(): string {
 			render(response && response.feedback);
 		} catch (error) {
 			if (error && (error.status === 401 || error.status === 403)) {
+				if (embeddedSiteOrigin && !annotationActive) returnToEmbedSignIn();
 				setStatus("Review access was denied. Reopen the review or ask the owner for access.", "error");
 			} else if (typeof navigator === "object" && navigator && navigator.onLine === false) {
 				setStatus("You’re offline. Comments will be available when the connection returns.", "error");
@@ -2100,6 +2126,7 @@ export function trustedReviewHostScript(): string {
 		commentsLauncher.setAttribute("aria-expanded", open ? "true" : "false");
 		if (open) closeButton.focus();
 		else commentsLauncher.focus();
+		notifyEmbedView();
 	}
 
 	function isRecord(value) {
@@ -2172,6 +2199,7 @@ export function trustedReviewHostScript(): string {
 		updateAnnotationProperties(null);
 		clearTarget.hidden = true;
 		drawOnScreenshot.hidden = true;
+		quickDraw.hidden = true;
 		selectTarget.textContent = "Select element";
 		annotationTargetPin.hidden = true;
 	}
@@ -2241,6 +2269,7 @@ export function trustedReviewHostScript(): string {
 		if (annotationToolbar) annotationToolbar.hidden = true;
 		if (annotationStrokes.length === 0) clearAnnotationMarkup();
 		else renderAnnotationCanvas();
+		notifyEmbedView();
 	}
 
 	async function applyAnnotations() {
@@ -2318,12 +2347,14 @@ export function trustedReviewHostScript(): string {
 				done.disabled = false;
 				if (annotationStrokes.length === 0) clearAnnotationMarkup();
 				else renderAnnotationCanvas();
+				notifyEmbedView();
 				setStatus(applied ? "Screenshot annotations added." : "Screenshot annotations could not be added.", applied ? "ready" : "error");
 			});
 			cancelDrawing.addEventListener("click", (event) => { if (event && event.isTrusted === true) closeAnnotationEditor(); });
 		}
 		annotationStrokeCheckpoint = annotationStrokes.length;
 		annotationEditing = true;
+		notifyEmbedView();
 		annotationLayer.setAttribute("data-drawing", "true");
 		annotationToolbar.hidden = false;
 		renderAnnotationCanvas();
@@ -2605,6 +2636,7 @@ export function trustedReviewHostScript(): string {
 			updateAnnotationProperties(captureValue);
 			clearTarget.hidden = false;
 			drawOnScreenshot.hidden = !captureValue.screenshotDataUrl;
+			quickDraw.hidden = !captureValue.screenshotDataUrl;
 			selectTarget.textContent = "Change element";
 			showComposer(true);
 			setStatus("Element context captured. Add an annotation and continue to secure confirmation.", "ready");
@@ -2710,6 +2742,25 @@ export function trustedReviewHostScript(): string {
 		await submitReviewFeedback();
 	});
 
+	function returnToEmbedSignIn() {
+		const start = new URL("/embed/review/start", location.href);
+		start.searchParams.set("installation_id", new URL(apiUrl).searchParams.get("installation_id") || new URL(location.href).searchParams.get("installation_id") || "");
+		start.searchParams.set("return_url", reviewPageUrl);
+		location.replace(start.toString());
+	}
+
+	async function beginAnnotation() {
+		if (embeddedSiteOrigin) {
+			try { await request("GET"); }
+			catch (error) {
+				if (error && (error.status === 401 || error.status === 403)) returnToEmbedSignIn();
+				else { setStatus("Could not check review access. Check your connection and try again.", "error"); setPanelOpen(true); }
+				return;
+			}
+		}
+		startTargetSelection();
+	}
+
 	function startTargetSelection() {
 		if (pendingArtifactRequestId) return;
 		setPanelOpen(false);
@@ -2728,9 +2779,9 @@ export function trustedReviewHostScript(): string {
 		artifactPort.postMessage({ protocol: "shiplet.artifact.capture.command.v1", type: "start", channelNonce: artifactChannelNonce, shipletId, revisionId, requestId: pendingArtifactRequestId });
 	}
 
-	selectTarget.addEventListener("click", (event) => {
+	selectTarget.addEventListener("click", async (event) => {
 		if (!event || event.isTrusted !== true) return;
-		startTargetSelection();
+		await beginAnnotation();
 	});
 
 	clearTarget.addEventListener("click", (event) => {
@@ -2833,15 +2884,15 @@ export function trustedReviewHostScript(): string {
 	});
 	previousButton.addEventListener("click", (event) => { if (event && event.isTrusted === true) scrollToThread(-1); });
 	nextButton.addEventListener("click", (event) => { if (event && event.isTrusted === true) scrollToThread(1); });
-	composeButton.addEventListener("click", (event) => {
+	composeButton.addEventListener("click", async (event) => {
 		if (!event || event.isTrusted !== true) return;
-		startTargetSelection();
+		await beginAnnotation();
 	});
 	cancelComposer.addEventListener("click", (event) => { if (event && event.isTrusted === true) cancelAnnotationFlow(); });
 	cancelAnnotationMode.addEventListener("click", (event) => { if (event && event.isTrusted === true) cancelAnnotationFlow(); });
 	closeButton.addEventListener("click", (event) => { if (event && event.isTrusted === true) setPanelOpen(false); });
 	commentsLauncher.addEventListener("click", (event) => { if (event && event.isTrusted === true) setPanelOpen(panel.hidden); });
-	launcher.addEventListener("click", (event) => { if (event && event.isTrusted === true) startTargetSelection(); });
+	launcher.addEventListener("click", async (event) => { if (event && event.isTrusted === true) await beginAnnotation(); });
 	window.addEventListener("keydown", (event) => {
 		if (event && event.key === "Escape" && followingId) stopFollowing();
 	});
@@ -2879,7 +2930,7 @@ export function trustedReviewHostScript(): string {
 		}
 		if (!editable && !event.metaKey && !event.ctrlKey && !event.altKey && !event.shiftKey && String(event.key || "").toLowerCase() === "c") {
 			event.preventDefault();
-			startTargetSelection();
+			await beginAnnotation();
 		}
 	});
 	window.addEventListener("resize", () => {
@@ -2897,7 +2948,14 @@ export function trustedReviewHostScript(): string {
 	});
 	if (typeof window.setInterval === "function") window.setInterval(() => { if (!document.hidden) void refresh(); }, 5000);
 
-	if (embeddedSiteOrigin) setPanelOpen(true);
+	if (embeddedSiteOrigin) {
+		// Intent is written only inside the trusted frame by a real launcher click.
+		const intentKey = "shiplet.embed.intent:" + (new URL(location.href).searchParams.get("installation_id") || "");
+		let intent; try { intent = sessionStorage.getItem(intentKey); sessionStorage.removeItem(intentKey); } catch {}
+		if (intent === "annotate") startTargetSelection();
+		else if (intent === "comments") setPanelOpen(true);
+		else notifyEmbedView();
+	}
 	void refresh();
 	void loadWatch();
 	void loadMentionUsers();
@@ -2912,7 +2970,7 @@ export function trustedReviewHostStyles(): string {
 .shiplet-review-launcher-dock{position:fixed;right:16px;bottom:16px;z-index:31;display:flex;align-items:stretch;gap:6px;transition:opacity .14s ease,transform .14s ease}.shiplet-review-launcher-dock[data-annotation-active="true"]{visibility:hidden;opacity:0;pointer-events:none;transform:translateY(8px)}
 .shiplet-review-launcher,.shiplet-review-comments-launcher{appearance:none;display:inline-flex;align-items:center;justify-content:center;min-height:40px;border:1px solid rgba(255,255,255,.34);background:#20293a;box-shadow:0 4px 16px rgba(0,0,0,.32),0 0 0 1px rgba(0,0,0,.32);color:#fff;font:750 12px/1 ui-sans-serif,system-ui,sans-serif;cursor:pointer}.shiplet-review-launcher{padding:0 13px;border-radius:9px}.shiplet-review-launcher::before{content:"+";display:grid;place-items:center;width:17px;height:17px;margin-right:7px;border:1.5px solid #fff;border-radius:999px;font:800 14px/1 ui-sans-serif}.shiplet-review-launcher[data-panel-open="true"]{visibility:hidden;opacity:0;pointer-events:none;transform:translateY(8px)}.shiplet-review-comments-launcher{width:40px;padding:0;border-radius:9px}
 .shiplet-review-count{display:inline-grid;place-items:center;min-width:20px;height:20px;padding:0 5px;border-radius:999px;background:#fff;color:var(--shiplet-ink);font-size:10px;font-weight:800}
-.shiplet-annotation-modebar{position:fixed;top:12px;left:50%;z-index:2147483550;display:flex;align-items:center;gap:10px;max-width:calc(100vw - 24px);min-height:42px;padding:5px 6px 5px 12px;transform:translateX(-50%);border:1px solid var(--shiplet-accent);border-radius:10px;background:var(--shiplet-surface);box-shadow:0 7px 22px rgba(0,0,0,.26);color:var(--shiplet-ink);font:800 12px/1.2 ui-sans-serif,system-ui,sans-serif;white-space:nowrap}.shiplet-annotation-modebar[hidden]{display:none}.shiplet-annotation-modebar button{min-width:34px;min-height:32px;border:1px solid var(--shiplet-line);border-radius:7px;background:#fff;color:var(--shiplet-ink);font:750 11px/1 ui-sans-serif,system-ui;cursor:pointer}
+.shiplet-annotation-modebar{position:fixed;top:12px;left:50%;z-index:2147483550;display:flex;align-items:center;gap:10px;max-width:calc(100vw - 24px);min-height:42px;padding:5px 6px 5px 12px;transform:translateX(-50%);border:1px solid var(--shiplet-accent);border-radius:10px;background:var(--shiplet-surface);box-shadow:0 7px 22px rgba(0,0,0,.26);color:var(--shiplet-ink);font:800 12px/1.2 ui-sans-serif,system-ui,sans-serif;white-space:nowrap}.shiplet-annotation-mode-label{min-width:0;overflow:hidden;text-overflow:ellipsis}.shiplet-annotation-modebar[hidden]{display:none}.shiplet-annotation-modebar button{min-width:34px;min-height:32px;border:1px solid var(--shiplet-line);border-radius:7px;background:#fff;color:var(--shiplet-ink);font:750 11px/1 ui-sans-serif,system-ui;cursor:pointer}
 .shiplet-annotation-target-focus{position:fixed;z-index:2147483518;border:2px solid var(--shiplet-accent);border-radius:6px;background:rgba(47,110,136,.05);box-shadow:0 0 0 1px rgba(255,255,255,.9),0 0 0 4px rgba(47,110,136,.16);pointer-events:none}.shiplet-annotation-target-focus::before,.shiplet-annotation-target-focus::after{content:"";position:absolute;width:18px;height:18px;border-color:var(--shiplet-action)}.shiplet-annotation-target-focus::before{top:-3px;left:-3px;border-top:3px solid var(--shiplet-action);border-left:3px solid var(--shiplet-action);border-radius:6px 0 0}.shiplet-annotation-target-focus::after{right:-3px;bottom:-3px;border-right:3px solid var(--shiplet-action);border-bottom:3px solid var(--shiplet-action);border-radius:0 0 6px}.shiplet-annotation-target-focus[hidden]{display:none}.shiplet-annotation-target-pin{position:fixed;z-index:2147483520;width:28px;height:24px;transform:translate(-50%,-50%);border:2px solid #fff;border-radius:9px;background:var(--shiplet-action);box-shadow:0 0 0 2px var(--shiplet-ink),0 5px 12px rgba(0,0,0,.34);pointer-events:none}.shiplet-annotation-target-pin::after{content:"";position:absolute;left:5px;bottom:-6px;width:8px;height:8px;border-right:2px solid #fff;border-bottom:2px solid #fff;background:var(--shiplet-action);transform:rotate(45deg)}.shiplet-annotation-target-pin[hidden]{display:none}
 .shiplet-review-visually-hidden{position:absolute!important;width:1px!important;height:1px!important;padding:0!important;margin:-1px!important;overflow:hidden!important;clip:rect(0,0,0,0)!important;white-space:nowrap!important;border:0!important}
 iframe[data-shiplet-artifact-frame][data-shiplet-selecting="true"]{outline:3px solid #1677ff;outline-offset:-3px;filter:saturate(.96) brightness(.94)}
@@ -2938,13 +2996,25 @@ button:disabled{cursor:wait;opacity:.58}:focus-visible{outline:3px solid #2f6e88
 @media (max-width:480px){#shiplet-kernel-review-panel{right:8px;bottom:8px;width:calc(100vw - 16px);max-height:min(68dvh,560px);border-radius:12px}.shiplet-review-launcher-dock{right:10px;bottom:10px}.shiplet-review-launcher,.shiplet-review-comments-launcher{min-height:44px}.shiplet-review-comments-launcher{width:44px}.shiplet-annotation-modebar{top:8px;width:calc(100vw - 16px);min-height:44px;justify-content:space-between}.shiplet-annotation-modebar button{min-width:44px;min-height:44px}.shiplet-review-form{width:calc(100vw - 16px);max-width:calc(100vw - 16px)}.shiplet-review-form[data-annotation-state="compact"]{grid-template-columns:minmax(0,1fr) auto}.shiplet-review-form[data-annotation-state="expanded"]{max-height:calc(100dvh - 16px)}.shiplet-review-form textarea{min-height:52px;font-size:16px}.shiplet-annotation-drag-handle,.shiplet-annotation-card-close,.shiplet-review-composer-actions button{min-width:44px;min-height:44px}.shiplet-review-presence{top:10px;left:10px;max-width:calc(100vw - 20px)}.shiplet-review-presence-summary{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0,0,0,0)}.shiplet-review-head{flex-wrap:wrap}.shiplet-review-heading{flex-basis:100%}.shiplet-review-context-disclosure summary{display:flex;align-items:center;min-height:44px}.shiplet-review-actions{width:100%;justify-content:flex-end}.shiplet-review-compose{width:44px;padding:0;font-size:18px}.shiplet-review-secondary,.shiplet-review-icon,.shiplet-review-primary,.shiplet-review-thread-action,.shiplet-review-status-more summary,.shiplet-review-options summary,.shiplet-review-reply-form button,.shiplet-review-composer-actions button,.shiplet-review-capture-tools button{min-width:44px;min-height:44px}.shiplet-review-reply-form input{min-height:44px}.shiplet-review-thread-summary{min-height:52px}.shiplet-review-annotation-toolbar{top:8px;left:8px;right:8px;transform:none;justify-content:center}}
 @media (prefers-reduced-motion:reduce){*,*::before,*::after{scroll-behavior:auto!important;transition-duration:.01ms!important;animation-duration:.01ms!important;animation-iteration-count:1!important}}
 
-html[data-shiplet-embed-origin]:not([data-shiplet-embed-origin=""]) main{background:#fbf9f4}
-html[data-shiplet-embed-origin]:not([data-shiplet-embed-origin=""]) #shiplet-kernel-review-panel{position:absolute;inset:0 0 70px;width:100%;max-width:none;max-height:none;border:0;border-radius:0;box-shadow:none}
-html[data-shiplet-embed-origin]:not([data-shiplet-embed-origin=""]) .shiplet-review-form{left:12px!important;top:auto!important;bottom:12px;width:calc(100% - 24px);max-height:calc(100dvh - 24px);box-shadow:0 8px 24px #20293a22}
+html[data-shiplet-embed-origin]:not([data-shiplet-embed-origin=""]),html[data-shiplet-embed-origin]:not([data-shiplet-embed-origin=""]) body,html[data-shiplet-embed-origin]:not([data-shiplet-embed-origin=""]) main{background:transparent}
+html[data-shiplet-embed-origin]:not([data-shiplet-embed-origin=""]) #shiplet-kernel-review-panel{inset:8px 8px 72px;width:auto;max-width:none;max-height:none}
+html[data-shiplet-embed-origin]:not([data-shiplet-embed-origin=""]) .shiplet-review-form{left:12px!important;top:auto!important;bottom:12px;width:calc(100% - 24px);max-height:calc(100dvh - 24px)}
 html[data-shiplet-embed-origin]:not([data-shiplet-embed-origin=""]) .shiplet-review-target{max-width:100%;white-space:normal;border-radius:8px}
-html[data-shiplet-embed-origin]:not([data-shiplet-embed-origin=""]) .shiplet-annotation-drag-handle,html[data-shiplet-embed-origin]:not([data-shiplet-embed-origin=""]) .shiplet-annotation-modebar,
+html[data-shiplet-embed-origin]:not([data-shiplet-embed-origin=""]) .shiplet-annotation-modebar{max-width:calc(100% - 24px);overflow:hidden;text-overflow:ellipsis}
+html[data-shiplet-embed-origin]:not([data-shiplet-embed-origin=""]) .shiplet-annotation-modebar button{flex-shrink:0}
+html[data-shiplet-embed-origin]:not([data-shiplet-embed-origin=""]) .shiplet-annotation-drag-handle,
 html[data-shiplet-embed-origin]:not([data-shiplet-embed-origin=""]) .shiplet-annotation-target-focus,
-html[data-shiplet-embed-origin]:not([data-shiplet-embed-origin=""]) .shiplet-annotation-target-pin{display:none!important}
+html[data-shiplet-embed-origin]:not([data-shiplet-embed-origin=""]) .shiplet-annotation-target-pin,
+html[data-shiplet-embed-origin]:not([data-shiplet-embed-origin=""]) .shiplet-review-presence,
+html[data-shiplet-embed-origin]:not([data-shiplet-embed-origin=""]) .shiplet-review-cursor-layer,
+.shiplet-review-form[data-annotation-state="expanded"] .shiplet-review-quick-draw,
+html[data-shiplet-embed-view="drawing"] .shiplet-review-form,
+html[data-shiplet-embed-view="drawing"] .shiplet-annotation-modebar,
+html[data-shiplet-embed-view="composer"] .shiplet-annotation-modebar,
+html[data-shiplet-embed-view="expanded"] .shiplet-annotation-modebar{display:none!important}
+.shiplet-embed-auth-status{position:fixed;inset:8px 8px 72px;margin:0;padding:12px;border:1px solid var(--shiplet-line);border-radius:10px;background:var(--shiplet-surface);color:var(--shiplet-ink);font:14px/1.4 system-ui;overflow:auto}.shiplet-embed-auth-status[hidden]{display:none}.shiplet-embed-auth-status button{min-height:44px;margin-left:8px;border:1px solid var(--shiplet-line);border-radius:7px;background:#fff;color:var(--shiplet-ink);cursor:pointer}
+@media(max-width:480px){html[data-shiplet-embed-view="comments"] #shiplet-kernel-review-panel{inset:0 0 72px;border-radius:12px 12px 0 0}}
+
 `;
 }
 
