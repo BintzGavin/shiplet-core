@@ -119,6 +119,11 @@ function operatedElement(tagName: string): OperatedElement {
       children.push(...items);
       element.childElementCount = children.length;
     },
+    insertBefore(item: OperatedElement, before: OperatedElement) {
+      const index = children.indexOf(before);
+      children.splice(index < 0 ? children.length : index, 0, item);
+      element.childElementCount = children.length;
+    },
     appendChild(item: OperatedElement) {
       children.push(item);
       element.childElementCount = children.length;
@@ -138,6 +143,9 @@ function operatedElement(tagName: string): OperatedElement {
 }
 
 async function operateTrustedHostScript(options?: {
+  embedded?: boolean;
+  pendingEmbedAction?: string;
+  feedbackStatus?: number;
   connectArtifact?: boolean;
   connectWidget?: boolean;
   confirmationUrl?: string;
@@ -150,6 +158,7 @@ async function operateTrustedHostScript(options?: {
   viewport?: { width: number; height: number };
 }) {
   const pageAttributes = new Map([
+    ["data-shiplet-embed-origin", options?.embedded ? "https://client.example" : ""],
     [
       "data-review-api-url",
       options?.presenceViewers
@@ -169,6 +178,7 @@ async function operateTrustedHostScript(options?: {
     getAttribute(name: string) {
       return pageAttributes.get(name) || null;
     },
+    setAttribute(name: string, value: string) { pageAttributes.set(name, value); },
   };
   const panel = operatedElement("section");
   const controls = operatedElement("div");
@@ -199,6 +209,8 @@ async function operateTrustedHostScript(options?: {
               : null;
   const widgetWindow = { postMessage: vi.fn() };
   const artifactWindow = { postMessage: vi.fn() };
+  const parentWindow = options?.embedded ? artifactWindow : undefined;
+  const storedIntent = new Map(options?.pendingEmbedAction ? [["shiplet.embed.intent:installation_test", options.pendingEmbedAction]] : []);
   widget.contentWindow = widgetWindow;
   artifact.contentWindow = artifactWindow;
   const body = operatedElement("body");
@@ -337,11 +349,12 @@ async function operateTrustedHostScript(options?: {
     },
   };
   const fetch = vi.fn(async () => ({
-    ok: true,
-    status: 200,
+    ok: !options?.feedbackStatus || options.feedbackStatus === 200,
+    status: options?.feedbackStatus || 200,
     json: async () => ({ feedback: options?.feedback ?? [] }),
   }));
   const navigator = { onLine: options?.online ?? true };
+  const replaceLocation = vi.fn();
   const execute = new Function(
     "window",
     "document",
@@ -351,17 +364,21 @@ async function operateTrustedHostScript(options?: {
     "MessageChannel",
     "TextEncoder",
     "navigator",
+    "parent",
+    "sessionStorage",
     trustedReviewHostScript(),
   );
   execute(
     window,
     document,
-    { href: "https://app.shiplet.cc/embed/review/host" },
+    { href: "https://app.shiplet.cc/embed/review/host?installation_id=installation_test", replace: replaceLocation },
     fetch,
     fakeCrypto,
     FakeMessageChannel,
     TextEncoder,
     navigator,
+    parentWindow,
+    { getItem: (key: string) => storedIntent.get(key), removeItem: (key: string) => storedIntent.delete(key) },
   );
   await Promise.resolve();
   if (options?.dispatchInitialFrameLoads !== false) {
@@ -383,16 +400,16 @@ async function operateTrustedHostScript(options?: {
       },
     });
   }
-  if (options?.dispatchInitialFrameLoads !== false) {
+  if (options?.dispatchInitialFrameLoads !== false && !options?.embedded) {
     await artifact.dispatch("load");
   }
-  const artifactOffer = artifactWindow.postMessage.mock.calls.at(-1)?.[0] as
+  const artifactOffer = artifactWindow.postMessage.mock.calls.filter((call) => call[0]?.protocol === "shiplet.artifact.channel.v1").at(-1)?.[0] as
     | Record<string, unknown>
     | undefined;
   if (artifactOffer && options?.connectArtifact !== false) {
     await window.dispatch("message", {
       source: artifactWindow,
-      origin: "null",
+      origin: options?.embedded ? "https://client.example" : "null",
       data: {
         protocol: "shiplet.artifact.channel.v1",
         type: "ready",
@@ -435,6 +452,8 @@ async function operateTrustedHostScript(options?: {
     artifact,
     artifactOffer,
     artifactWindow,
+    replaceLocation,
+    storedIntent,
     body,
     channels,
     comment,
@@ -556,6 +575,49 @@ function expectSecureTopLevelConfirmationForm(
 }
 
 describe("trusted review host boundary", () => {
+  it("returns an expired embedded session to the sign-in gate before starting annotation", async () => {
+    const harness = await operateTrustedHostScript({ embedded: true, feedbackStatus: 401 });
+    await harness.launcher!.dispatch("click", { isTrusted: true });
+    expect(harness.replaceLocation).toHaveBeenCalled();
+    const destination = new URL(harness.replaceLocation.mock.calls[0][0]);
+    expect(destination.pathname).toBe("/embed/review/start");
+    expect(destination.searchParams.get("return_url")).toBe("https://client.example/pricing/");
+    expect(harness.form!.hidden).toBe(true);
+    const commands = harness.channels.flatMap(channel => channel.port1.messages) as Array<{type: string}>;
+    expect(commands.filter(command => command.type === "start")).toHaveLength(0);
+  });
+  it("keeps embedded comments closed until requested and returns to the regular toolbar", async () => {
+    const harness = await operateTrustedHostScript({ embedded: true });
+    const views = () => harness.artifactWindow.postMessage.mock.calls
+      .map(call => call[0]).filter(message => message.protocol === "shiplet.embed.ui.v1" && message.view);
+    expect(harness.panel.hidden).toBe(true);
+    expect(views().at(-1)?.view).toBe("toolbar");
+    const comments = harness.createdElements.find(element => element.className === "shiplet-review-comments-launcher")!;
+    await comments.dispatch("click", { isTrusted: true });
+    expect(harness.panel.hidden).toBe(false);
+    expect(views().at(-1)?.view).toBe("comments");
+    await harness.close!.dispatch("click", { isTrusted: true });
+    expect(harness.panel.hidden).toBe(true);
+    expect(views().at(-1)?.view).toBe("toolbar");
+    await harness.launcher!.dispatch("click", { isTrusted: true });
+    expect(views().at(-1)?.view).toBe("selecting");
+    const cancel = harness.createdElements.find(element => element.getAttribute("data-shiplet-annotation-mode-cancel") === "v1")!;
+    await cancel.dispatch("click", { isTrusted: true });
+    expect(views().at(-1)?.view).toBe("toolbar");
+    expect(harness.open).not.toHaveBeenCalled();
+  });
+
+  it("resumes the requested action once after a trusted popup establishes the site session", async () => {
+    const harness = await operateTrustedHostScript({ embedded: true, pendingEmbedAction: "annotate" });
+    expect(harness.storedIntent.size).toBe(0);
+    expect(harness.panel.hidden).toBe(true);
+    const commands = harness.channels.flatMap(channel => channel.port1.messages) as Array<{type: string}>;
+    expect(commands.filter(command => command.type === "start")).toHaveLength(1);
+    const comments = await operateTrustedHostScript({ embedded: true, pendingEmbedAction: "comments" });
+    expect(comments.panel.hidden).toBe(false);
+    expect(comments.open).not.toHaveBeenCalled();
+  });
+
   // Given a trusted host around an opaque artifact, when review state loads or
   // changes, then the host—not the child—owns familiar, accessible controls.
   it("renders a sleeping launcher, contextual compact threads, and a progressively disclosed composer in the trusted document", async () => {
@@ -1699,7 +1761,7 @@ describe("trusted review host boundary", () => {
         element.getAttribute("data-shiplet-annotation-modebar") === "v1",
     );
     expect.soft(modeBar?.hidden).toBe(false);
-    expect.soft(modeBar?.textContent).toContain("Annotating · /pricing/");
+    expect.soft(modeBar?.children[0]?.textContent).toContain("Annotating · /pricing/");
     expect.soft(modeBar?.textContent).not.toContain("revision_a1");
 
     await capturePort.dispatch({

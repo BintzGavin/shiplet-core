@@ -900,7 +900,7 @@ describe("WordPress embed installations", () => {
     const html = await response.text();
     expect(html).toContain('data-shiplet-embed-auth-bootstrap="v1"');
     expect(html).toContain('type="button"');
-    expect(html).toContain("Open secure Shiplet sign-in");
+    expect(html).toContain('data-shiplet-embed-action="annotate"');
     expect(html).not.toContain("shiplet_embed_code");
     expect(html).not.toContain("reviewToken");
   });

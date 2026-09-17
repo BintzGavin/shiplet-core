@@ -75,7 +75,7 @@ async function reviewInstallation() {
 }
 
 describe("framework-independent widget installation", () => {
-  it("styles the signed-out review frame with self-contained CSP-authorized mobile controls", async () => {
+  it("shows the regular Annotate toolbar while signed out, without a nested login panel", async () => {
     const installation = await reviewInstallation();
     const response = await request(`/embed/review/start?${new URLSearchParams({
       installation_id: installation.id,
@@ -83,8 +83,14 @@ describe("framework-independent widget installation", () => {
     })}`);
     expect(response.status).toBe(200);
     const html = await response.text();
-    expectStyledReviewPage(response, html);
-    expect(html).toContain("Open secure Shiplet sign-in");
+    expect(html).toContain('class="shiplet-review-launcher"');
+    expect(html).toContain('data-shiplet-embed-action="annotate"');
+    expect(html).toContain('data-shiplet-embed-action="comments"');
+    expect(html).toContain(">Annotate</button>");
+    expect(html).not.toContain("<h1");
+    expect(html).not.toContain("Open secure Shiplet sign-in");
+    expect(html).toContain("/api/review/host.css");
+    expect(response.headers.get("content-security-policy")).toContain("style-src 'self'");
     expect(response.headers.get("content-security-policy")).toContain("frame-ancestors 'self' https://example.com");
     expect(html).not.toContain("shiplet_embed_auth_");
   });

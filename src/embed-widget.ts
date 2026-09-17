@@ -41,6 +41,7 @@ export function embedWidgetScript() {
     dispose() {
       this.close(); clearInterval(this.timer); this.timer = null;
       if (this.onKey) window.removeEventListener("keydown", this.onKey, true);
+      if (this.onResize) window.removeEventListener("resize", this.onResize);
       this.shadowRoot.replaceChildren();
     }
     mount() {
@@ -51,16 +52,17 @@ export function embedWidgetScript() {
       if (!/^[A-Za-z0-9_-]{1,160}$/.test(this.installation)) return this.fail("Shiplet: add a valid installation-id.");
       if ((api.protocol !== "https:" && !(api.protocol === "http:" && /^(localhost|127\.0\.0\.1|\[::1\])$/.test(api.hostname))) || api.username || api.password || api.search || api.hash || api.pathname !== "/") return this.fail("Shiplet: use an HTTPS API origin, or localhost.");
       this.origin = api.origin;
-      this.shadowRoot.innerHTML = '<link rel="stylesheet"><div class="pins"></div><section class="surface" aria-label="Shiplet feedback" hidden></section><button type="button" aria-label="Open Shiplet feedback" aria-expanded="false">Feedback</button>';
+      this.shadowRoot.innerHTML = '<link rel="stylesheet"><div class="pins"></div><section class="surface" data-view="toolbar" aria-label="Shiplet review tools"></section>';
       this.shadowRoot.querySelector("link").href = this.origin + "/api/embed/widget.css";
       this.pins = this.shadowRoot.querySelector(".pins");
       this.surface = this.shadowRoot.querySelector(".surface");
-      this.button = this.shadowRoot.querySelector("button");
-      this.button.addEventListener("click", () => this.frame ? this.close() : this.open());
-      this.onKey = event => { if (event.key === "Escape" && this.frame) { this.close(); this.button.focus(); } };
+      this.onKey = event => { if (event.isTrusted && event.key === "Escape" && this.frame) this.frame.contentWindow.postMessage({ protocol: "shiplet.embed.dismiss.v1" }, this.origin); };
       window.addEventListener("keydown", this.onKey, true);
+      this.onResize = () => this.positionSurface();
+      window.addEventListener("resize", this.onResize);
       this.page = safePageUrl();
-      this.timer = setInterval(() => { this.positionPins(); const next = safePageUrl(); if (next !== this.page) { this.page = next; if (this.frame) { this.close(); this.open(); } } }, 400);
+      this.open();
+      this.timer = setInterval(() => { this.positionPins(); const next = safePageUrl(); if (next !== this.page) { this.page = next; this.close(); this.open(); } }, 400);
     }
     fail(message) { const status = document.createElement("span"); status.setAttribute("role", "status"); status.textContent = message; this.shadowRoot.append(status); }
     open() {
@@ -70,16 +72,15 @@ export function embedWidgetScript() {
       start.searchParams.set("installation_id", this.installation);
       start.searchParams.set("return_url", this.page);
       this.frame = document.createElement("iframe");
-      this.frame.title = "Shiplet feedback";
+      this.frame.title = "Shiplet review tools";
       this.frame.setAttribute("sandbox", "allow-scripts allow-forms allow-same-origin allow-popups allow-popups-to-escape-sandbox allow-storage-access-by-user-activation");
       this.frame.setAttribute("allow", "storage-access");
       this.frame.referrerPolicy = "no-referrer";
       this.frame.src = start.toString();
       this.surface.replaceChildren(this.frame);
       this.surface.hidden = false;
-      this.button.textContent = "Close feedback";
-      this.button.setAttribute("aria-label", "Close Shiplet feedback");
-      this.button.setAttribute("aria-expanded", "true");
+      this.surface.dataset.view = "toolbar";
+      this.positionSurface();
       this.cleanupBridge = attachShipletPageBridge(this.frame, this.origin);
       this.onMessage = event => {
         if (!this.frame || event.source !== this.frame.contentWindow || event.origin !== this.origin) return;
@@ -87,13 +88,29 @@ export function embedWidgetScript() {
         if (!data || data.protocol !== "shiplet.embed.ui.v1") return;
         clearTimeout(this.loadTimer);
         this.surface.querySelector(".recovery")?.remove();
-        if (typeof data.composing === "boolean") this.surface.dataset.composing = String(data.composing);
-        if (typeof data.selecting === "boolean") { this.surface.dataset.selecting = String(data.selecting); this.pins.hidden = data.selecting; }
+        if (["toolbar", "comments", "selecting", "composer", "expanded", "drawing", "access"].includes(data.view)) {
+          this.surface.dataset.view = data.view;
+          this.pins.hidden = data.view === "selecting";
+          this.anchor = data.anchor && Number.isFinite(data.anchor.x) && Number.isFinite(data.anchor.y) ? data.anchor : null;
+          this.positionSurface();
+        }
         if (Array.isArray(data.pins)) this.renderPins(data.pins);
       };
       window.addEventListener("message", this.onMessage);
       this.loadTimer = setTimeout(() => this.recovery(), 15000);
       this.frame.addEventListener("error", () => this.recovery());
+    }
+    positionSurface() {
+      if (!this.surface) return;
+      this.surface.style.left = ""; this.surface.style.top = "";
+      const view = this.surface.dataset.view;
+      if ((view === "composer" || view === "expanded") && this.anchor && innerWidth > 480) {
+        const rect = this.surface.getBoundingClientRect();
+        const x = this.anchor.x - scrollX, y = this.anchor.y - scrollY;
+        const left = x + rect.width + 70 < innerWidth ? x + 54 : x - rect.width - 54;
+        this.surface.style.left = Math.max(8, Math.min(innerWidth - rect.width - 8, left)) + "px";
+        this.surface.style.top = Math.max(8, Math.min(innerHeight - rect.height - 8, y + 24)) + "px";
+      }
     }
     renderPins(items) {
       this.pins.replaceChildren(); this.pinItems = [];
@@ -118,6 +135,7 @@ export function embedWidgetScript() {
     recovery() {
       if (!this.frame) return;
       if (this.surface.querySelector(".recovery")) return;
+      this.surface.dataset.view = "access";
       const box = document.createElement("div"); box.className = "recovery";
       const status = document.createElement("p"); status.setAttribute("role", "status"); status.textContent = "Shiplet could not connect. Check your connection and site CSP.";
       const retry = document.createElement("button"); retry.textContent = "Retry"; retry.onclick = () => { this.close(); this.open(); };
@@ -131,12 +149,23 @@ export function embedWidgetScript() {
       this.frame?.remove(); this.frame = null;
       this.pinItems = []; this.pins?.replaceChildren();
       if (this.surface) { this.surface.hidden = true; this.surface.replaceChildren(); delete this.surface.dataset.selecting; delete this.surface.dataset.composing; }
-      if (this.button) { this.button.textContent = "Feedback"; this.button.setAttribute("aria-label", "Open Shiplet feedback"); this.button.setAttribute("aria-expanded", "false"); }
+      this.anchor = null;
     }
   }
   customElements.define("shiplet-feedback", ShipletFeedback);
 })();`;
 }
 
-export const EMBED_WIDGET_CSS =
-  ':host{all:initial;position:fixed;right:16px;bottom:16px;z-index:2147483647;font:14px/1.4 system-ui,sans-serif;color:#20293a}*{box-sizing:border-box}button{font:700 14px system-ui;cursor:pointer;border:1px solid #8f321c;border-radius:24px;background:#b44729;color:white;min-height:44px;padding:10px 18px;box-shadow:0 3px 14px #0002}button:focus-visible,a:focus-visible{outline:3px solid #2f6e88;outline-offset:3px}.surface{position:fixed;right:16px;bottom:72px;width:min(420px,calc(100vw - 32px));height:min(680px,calc(100dvh - 96px));border:1px solid #bcc3ca;border-radius:14px;overflow:hidden;background:#fff;box-shadow:0 16px 48px #0f172a33}.surface[hidden]{display:none}iframe{display:block;width:100%;height:100%;border:0;background:white}.recovery{padding:14px;background:#f4f1e9;display:flex;gap:12px;align-items:center;flex-wrap:wrap}.recovery a{color:#245b72}.recovery p{margin:0}.surface[data-selecting=true]{height:54px}.surface[data-selecting=true] iframe{visibility:hidden}.surface[data-selecting=true]::after{content:"Select an element on the page \u00b7 Escape to cancel";position:absolute;inset:0;padding:16px;background:#edf5f7;color:#245b72;font:600 13px system-ui}.pins button{position:fixed;border-radius:50%;padding:0;min-height:32px;width:32px;height:32px;background:#2f6e88;border-color:#245b72}.pins[hidden]{display:none}.recovery{position:absolute;inset:auto 0 0;z-index:2}.surface[data-composing=true]:not([data-selecting=true]){height:min(430px,calc(100dvh - 96px))}';
+export const EMBED_WIDGET_CSS = String.raw`
+:host{all:initial;position:fixed;right:0;bottom:0;z-index:2147483647;font:14px/1.4 system-ui,sans-serif;color:#20293a}*{box-sizing:border-box}
+.surface{position:fixed;right:4px;bottom:4px;width:188px;height:72px;border:0;background:transparent}.surface[hidden]{display:none}iframe{display:block;width:100%;height:100%;border:0;background:transparent;color-scheme:normal}
+.surface[data-view=comments]{width:min(420px,100vw);height:min(680px,100dvh)}
+.surface[data-view=selecting]{top:4px;left:50%;bottom:auto;right:auto;transform:translateX(-50%);width:min(560px,100vw);height:76px}
+.surface[data-view=composer]{width:min(384px,100vw);height:112px}
+.surface[data-view=expanded]{width:min(408px,100vw);height:min(460px,100dvh)}
+.surface[data-view=drawing]{inset:0;width:100vw;height:100dvh}
+.surface[data-view=access]{width:min(368px,100vw);height:188px}
+.pins button{position:fixed;border-radius:50%;padding:0;min-height:32px;width:32px;height:32px;background:#fff;color:#20293a;border:2px solid #20293a;font:800 12px system-ui;cursor:pointer;box-shadow:0 3px 10px #0003}.pins[hidden]{display:none}
+.recovery{position:absolute;inset:8px;padding:16px;border:1px solid #c8cbd3;border-radius:12px;background:#fbf9f4;display:flex;gap:12px;align-items:center;flex-wrap:wrap}.recovery a{color:#245b72}.recovery p{margin:0}.recovery button{min-height:44px;padding:8px 16px;border:1px solid #20293a;border-radius:8px;background:#20293a;color:#fff;font:700 14px system-ui;cursor:pointer}button:focus-visible,a:focus-visible{outline:3px solid #2f6e88;outline-offset:3px}
+@media(max-width:480px){.surface{right:0;bottom:0}.surface[data-view=comments]{height:100dvh;width:100vw}.surface[data-view=expanded]{height:min(460px,100dvh)}}
+`;
