@@ -17,6 +17,18 @@ const repoRoot = path.resolve(
 );
 const mutations = [
   {
+    name: "account recovery silently reuses the current login",
+    file: "src/index.ts",
+    from: '          prompt: "login",',
+    to: "          prompt: undefined,",
+  },
+  {
+    name: "account recovery skips the registered return origin",
+    file: "src/index.ts",
+    from: '      if (!pageUrl) return failure("Invalid review page", 400);',
+    to: '      if (false) return failure("Invalid review page", 400);',
+  },
+  {
     name: "browser setup accepts a foreign form origin",
     file: "src/index.ts",
     additional: [

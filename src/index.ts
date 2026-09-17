@@ -26,6 +26,7 @@
 import { Hono } from "hono";
 import { registerBrowserEmbed, renderEmbedSetup } from "./embed-setup";
 import { EMBED_WIDGET_CSS, embedWidgetScript } from "./embed-widget";
+import { renderReviewAccessPage, withReviewAccessStyles } from "./review-access-page";
 import { CAPTURE_BODY_LIMIT, capturePublishPayload, renderBrowserCapture } from "./browser-capture";
 import { BROWSER_CAPTURE_ASSETS, BROWSER_COMPANION_ZIP } from "./generated-browser-companion";
 import { DynamicWorkerExecutor } from "@cloudflare/codemode";
@@ -10624,6 +10625,7 @@ function workOSLoginRedirect(
     accountAction?: string;
     consentToken?: string | null;
     organizationId?: string | null;
+    prompt?: "login";
   },
 ) {
   const state = btoa(
@@ -10641,7 +10643,7 @@ function workOSLoginRedirect(
     redirectUri:
       c.env.WORKOS_REDIRECT_URI ||
       new URL("/auth/callback", c.req.url).toString(),
-    prompt: options.accountAction === "add" ? "login" : undefined,
+    prompt: options.prompt || (options.accountAction === "add" ? "login" : undefined),
   });
   return c.redirect(authorizationUrl);
 }
@@ -12374,6 +12376,10 @@ async function embedReviewStateResponse(
     reviewState = "offline";
   }
   if (installation?.revoked_on) reviewState = "revoked";
+  if (reviewState === "permission_denied" && installation && project && !project.archived_on) {
+    const user = await getCurrentUser(c.req.raw, c.env);
+    if (user) return embedAuthBootstrapResponse(c, installation, user.email);
+  }
   const origin = url.origin;
   return createTrustedReviewHostResponse({
     shipletId: project?.id || installation?.project_id || "embed_unavailable",
@@ -12395,6 +12401,7 @@ async function embedReviewStateResponse(
 function embedAuthBootstrapResponse(
   c: any,
   installation: NonNullable<Awaited<ReturnType<typeof getEmbedInstallation>>>,
+  deniedAccount?: string,
 ) {
   const origin = new URL(c.req.url).origin;
   const nonce = createKernelDocumentNonce();
@@ -12407,13 +12414,25 @@ function embedAuthBootstrapResponse(
       installation.site_origin,
     ) || installation.site_url,
   );
+  if (deniedAccount) authorization.searchParams.set("switch_account", "1");
   const loginUrl = authorization.toString();
-  const html = `<!doctype html><html lang="en" data-shiplet-embed-auth-bootstrap="v1"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Sign in to review · Shiplet</title><script src="${origin}/api/embed/auth-bootstrap.js" nonce="${nonce}" defer></script></head><body><main><h1>Sign in to review</h1><p>Authentication opens in a secure Shiplet window.</p><button type="button" data-shiplet-embed-auth-open data-login-url="${escapeEmbedHtml(loginUrl)}">Open secure Shiplet sign-in</button><p role="status" aria-live="polite" data-shiplet-embed-auth-status></p></main></body></html>`;
-  return new Response(html, {
-    status: 200,
+  const heading = deniedAccount ? "This account needs review access" : "Sign in to review";
+  const copy = deniedAccount
+    ? `<p role="alert">You're signed in as <strong>${escapeEmbedHtml(deniedAccount)}</strong>. Ask the owner to invite this account, or sign in with the account that already has access.</p>`
+    : "<p>Sign in with the account invited to review this website.</p>";
+  const html = renderReviewAccessPage({
+    title: heading,
+    heading,
+    attributes: `data-shiplet-embed-auth-bootstrap="v1"${deniedAccount ? ' data-review-state="permission_denied"' : ""}`,
+    content: `${copy}<div class="access-actions"><button type="button" data-shiplet-embed-auth-open data-login-url="${escapeEmbedHtml(loginUrl)}">${deniedAccount ? "Sign in with another account" : "Open secure Shiplet sign-in"}</button></div><p role="status" aria-live="polite" data-shiplet-embed-auth-status></p><p class="access-note">Your website stays open while you sign in through Shiplet.</p>`,
+    script: `<script src="${origin}/api/embed/auth-bootstrap.js" nonce="${nonce}" defer></script>`,
+  });
+  return new Response(withReviewAccessStyles(html, nonce), {
+    status: deniedAccount ? 403 : 200,
     headers: {
       "content-type": "text/html; charset=utf-8",
-      "content-security-policy": `default-src 'none'; script-src 'nonce-${nonce}'; script-src-attr 'none'; connect-src 'self'; img-src 'none'; style-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'self' ${installation.site_origin}`,
+      "content-security-policy": `default-src 'none'; script-src 'nonce-${nonce}'; script-src-attr 'none'; connect-src 'self'; img-src 'none'; style-src 'nonce-${nonce}'; style-src-attr 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'self' ${installation.site_origin}`,
+      "cache-control": "no-store",
       "referrer-policy": "no-referrer",
       "x-content-type-options": "nosniff",
     },
@@ -12473,7 +12492,13 @@ function trustedConfirmationHtml(input: {
     !complete && input.intentId
       ? `<form method="post" action="${completePath}"><input type="hidden" name="intent_id" value="${escapeEmbedHtml(input.intentId)}"><button type="submit" name="approval" value="confirm">${escapeEmbedHtml(input.confirmLabel || (isWorkflow ? "Confirm and record workflow event" : "Confirm and send feedback"))}</button></form>`
       : "";
-  return `<!doctype html><html lang="en" data-shiplet-confirmation="${input.state === "complete" ? "complete" : "v1"}"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${complete ? completeHeading : isWorkflow ? "Confirm workflow event" : "Confirm feedback"} · Shiplet</title></head><body><main><h1>${complete ? completeHeading : isWorkflow ? "Confirm workflow event" : "Confirm feedback"}</h1><p>${escapeEmbedHtml(input.summary)}</p>${fieldDetails}${form}</main></body></html>`;
+  const heading = complete ? completeHeading : isWorkflow ? "Confirm workflow event" : "Confirm feedback";
+  return renderReviewAccessPage({
+    title: heading,
+    heading,
+    attributes: `data-shiplet-confirmation="${complete ? "complete" : "v1"}"`,
+    content: `<p>${escapeEmbedHtml(input.summary)}</p>${fieldDetails}${form}${complete ? '<p class="access-note">Return to your website to continue reviewing. You can close this window.</p>' : ""}`,
+  });
 }
 
 function trustedConfirmationResponse(
@@ -12482,11 +12507,12 @@ function trustedConfirmationResponse(
   status = 200,
 ) {
   const origin = new URL(requestUrl).origin;
-  return new Response(html, {
+  const nonce = createKernelDocumentNonce();
+  return new Response(withReviewAccessStyles(html, nonce), {
     status,
     headers: {
       "content-type": "text/html; charset=utf-8",
-      "content-security-policy": `default-src 'none'; script-src 'none'; connect-src 'none'; img-src 'none'; style-src 'none'; base-uri 'none'; form-action ${origin}; frame-ancestors 'none'`,
+      "content-security-policy": `default-src 'none'; script-src 'none'; connect-src 'none'; img-src 'none'; style-src 'nonce-${nonce}'; style-src-attr 'none'; base-uri 'none'; form-action ${origin}; frame-ancestors 'none'`,
       "referrer-policy": "no-referrer",
       "x-content-type-options": "nosniff",
       "cache-control": "no-store",
@@ -12538,6 +12564,14 @@ app.get("/api/embed/auth-bootstrap.js", () => {
 
 app.on(["GET", "POST"], "/embed/review/authorize", async (c) => {
   const url = new URL(c.req.url);
+  const failure = (message: string, status: 400 | 403 | 500, content?: string) =>
+    c.req.method === "GET"
+      ? trustedConfirmationResponse(c.req.url, renderReviewAccessPage({
+          title: "Review access",
+          heading: message,
+          content: content || '<p>Return to the website and open Feedback to try again.</p><p class="access-note">If this continues, ask the website owner to check its Shiplet connection.</p>',
+        }), status)
+      : c.text(message, status);
   try {
     let installationId = url.searchParams.get("installation_id") || "";
     let ticket = "";
@@ -12553,23 +12587,34 @@ app.on(["GET", "POST"], "/embed/review/authorize", async (c) => {
     }
     const installation = await getEmbedInstallation(c.env.DB, installationId);
     if (!installation || installation.revoked_on)
-      return c.text("Site installation unavailable", 403);
+      return failure("Site installation unavailable", 403);
     const project = await getProjectById(c.env.DB, installation.project_id);
     if (!project || project.archived_on)
-      return c.text("Shiplet unavailable", 403);
+      return failure("Shiplet unavailable", 403);
     if (c.req.method === "GET") {
+      const pageUrl = normalizeEmbedReturnUrl(
+        url.searchParams.get("return_url"),
+        installation.site_origin,
+      );
+      if (!pageUrl) return failure("Invalid review page", 400);
+      if (url.searchParams.get("switch_account") === "1") {
+        url.searchParams.delete("switch_account");
+        return workOSLoginRedirect(c, {
+          returnTo: embedRouteReturnTo(url.toString()),
+          prompt: "login",
+        });
+      }
       const user = await getCurrentUser(c.req.raw, c.env);
       if (!user)
         return c.redirect(
           authLoginRedirectUrl(c.env, c.req.url, embedRouteReturnTo(c.req.url)),
         );
-      if (!(await canViewProject(c.env.DB, project, user.id)))
-        return c.text("Shiplet review access required", 403);
-      const pageUrl = normalizeEmbedReturnUrl(
-        url.searchParams.get("return_url"),
-        installation.site_origin,
-      );
-      if (!pageUrl) return c.text("Invalid review page", 400);
+      if (!(await canViewProject(c.env.DB, project, user.id))) {
+        const switchUrl = new URL(url);
+        switchUrl.searchParams.set("switch_account", "1");
+        return failure("This account needs review access", 403,
+          `<p>You're signed in as <strong>${escapeEmbedHtml(user.email)}</strong>. This account doesn't have access to this review.</p><div class="access-actions"><a class="access-primary" href="${escapeEmbedHtml(embedRouteReturnTo(switchUrl.toString()))}">Sign in with another account</a></div><p class="access-note">Ask the owner to invite this account, or use the account that already has access.</p><a href="${escapeEmbedHtml(pageUrl)}">Return to website</a>`);
+      }
       const grant = await createEmbedReviewGrant(c.env.DB, {
         installation,
         project,
@@ -12578,13 +12623,18 @@ app.on(["GET", "POST"], "/embed/review/authorize", async (c) => {
       });
       const nonce = createKernelDocumentNonce();
       return new Response(
-        `<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Return to your website · Shiplet</title><h1>You’re signed in</h1><p>Return to your website to continue reviewing. You can close this window.</p><script nonce="${nonce}">if(window.opener)window.opener.postMessage({protocol:"shiplet.embed.auth.v1",ticket:${JSON.stringify(grant)}},location.origin);</script></html>`,
+        withReviewAccessStyles(renderReviewAccessPage({
+          title: "Return to your website",
+          heading: "You're signed in",
+          content: `<p>Return to your website to continue reviewing.</p><div class="access-actions"><a class="access-primary" href="${escapeEmbedHtml(pageUrl)}">Return to website</a></div><p class="access-note">This window closes automatically when your review is ready.</p>`,
+          script: `<script nonce="${nonce}">if(window.opener)window.opener.postMessage({protocol:"shiplet.embed.auth.v1",ticket:${JSON.stringify(grant)}},location.origin);</script>`,
+        }), nonce),
         {
           headers: {
             "content-type": "text/html; charset=utf-8",
             "cache-control": "no-store",
             "referrer-policy": "no-referrer",
-            "content-security-policy": `default-src 'none'; script-src 'nonce-${nonce}'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'`,
+            "content-security-policy": `default-src 'none'; script-src 'nonce-${nonce}'; script-src-attr 'none'; style-src 'nonce-${nonce}'; style-src-attr 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'`,
           },
         },
       );
@@ -12627,7 +12677,7 @@ app.on(["GET", "POST"], "/embed/review/authorize", async (c) => {
     return response;
   } catch (error) {
     if (isResponse(error)) return error;
-    return c.text("Sign-in could not be completed", 500);
+    return failure("Sign-in could not be completed", 500);
   }
 });
 

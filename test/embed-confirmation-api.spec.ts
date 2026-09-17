@@ -141,6 +141,10 @@ describe("trusted embedded review confirmation", () => {
       "frame-ancestors 'none'",
     );
     const intentHtml = await intentResponse.text();
+    expect(intentHtml).toContain('data-shiplet-access-page="v1"');
+    const styleNonce = intentHtml.match(/<style nonce="([^"]+)">/)?.[1];
+    expect(styleNonce).toBeTruthy();
+    expect(intentResponse.headers.get("content-security-policy")).toContain(`style-src 'nonce-${styleNonce}'`);
     expect(intentHtml).toContain('data-shiplet-confirmation="v1"');
     expect(intentHtml).toContain("Confirm this bounded review event");
     expect(intentHtml).not.toContain("operation-receipt");
@@ -176,6 +180,7 @@ describe("trusted embedded review confirmation", () => {
     });
     expect(completed.status).toBe(200);
     const completedHtml = await completed.text();
+    expect(completedHtml).toContain('data-shiplet-access-page="v1"');
     expect(completedHtml).toContain('data-shiplet-confirmation="complete"');
     expect(completedHtml).not.toContain("operation-receipt");
 
