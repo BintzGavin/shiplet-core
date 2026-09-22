@@ -7,7 +7,7 @@ import {
   waitOnExecutionContext,
 } from "cloudflare:test";
 import { describe, it, expect, vi } from "vitest";
-import app from "../src/index";
+import app, { schemaInitializationTest } from "../src/index";
 import {
   AVATAR_SPRITE_URL,
   MAX_AVATAR_UPLOAD_BYTES,
@@ -397,6 +397,153 @@ async function recreateLegacyProjectsTableWithoutArchiveColumns() {
     .run();
   await db.prepare("PRAGMA foreign_keys = ON").run();
 }
+
+describe("request-neutral schema initialization", () => {
+  function durableEpochHarness(initialEpoch: number | null = null) {
+    let epoch = initialEpoch;
+    return {
+      readEpoch: vi.fn(async () => epoch),
+      recordEpoch: vi.fn(async (_db: D1Database, nextEpoch: number) => {
+        epoch = nextEpoch;
+      }),
+    };
+  }
+
+  it("uses one durable epoch across distinct request-local facades", async () => {
+    const firstFacade = {} as D1Database;
+    const secondFacade = {} as D1Database;
+    const durableEpoch = durableEpochHarness();
+    const ensureSchemas = vi.fn(async () => undefined);
+    const initialize = schemaInitializationTest.createSchemaInitializer({
+      ...durableEpoch,
+      ensureSchemas,
+    });
+
+    await initialize(firstFacade);
+    await initialize(secondFacade);
+
+    expect(ensureSchemas).toHaveBeenCalledTimes(1);
+    expect(durableEpoch.recordEpoch).toHaveBeenCalledTimes(1);
+  });
+
+  it("skips schema work for the current durable epoch", async () => {
+    const durableEpoch = durableEpochHarness(
+      schemaInitializationTest.currentEpoch,
+    );
+    const ensureSchemas = vi.fn(async () => undefined);
+    const initialize = schemaInitializationTest.createSchemaInitializer({
+      ...durableEpoch,
+      ensureSchemas,
+    });
+
+    await initialize({} as D1Database);
+
+    expect(ensureSchemas).not.toHaveBeenCalled();
+    expect(durableEpoch.recordEpoch).not.toHaveBeenCalled();
+  });
+
+  it.each([null, schemaInitializationTest.currentEpoch - 1])(
+    "runs schemas and records the current epoch for %s readiness",
+    async (storedEpoch) => {
+      const durableEpoch = durableEpochHarness(storedEpoch);
+      const ensureSchemas = vi.fn(async () => undefined);
+      const initialize = schemaInitializationTest.createSchemaInitializer({
+        ...durableEpoch,
+        ensureSchemas,
+      });
+
+      await initialize({} as D1Database);
+
+      expect(ensureSchemas).toHaveBeenCalledTimes(1);
+      expect(durableEpoch.recordEpoch).toHaveBeenCalledWith(
+        expect.anything(),
+        schemaInitializationTest.currentEpoch,
+      );
+    },
+  );
+
+  it("records readiness only after schemas succeed and retries later", async () => {
+    const durableEpoch = durableEpochHarness();
+    const ensureSchemas = vi
+      .fn<(db: D1Database) => Promise<void>>()
+      .mockRejectedValueOnce(new Error("schema unavailable"))
+      .mockResolvedValueOnce(undefined);
+    const initialize = schemaInitializationTest.createSchemaInitializer({
+      ...durableEpoch,
+      ensureSchemas,
+    });
+
+    await expect(initialize({} as D1Database)).rejects.toThrow(
+      "schema unavailable",
+    );
+    expect(durableEpoch.recordEpoch).not.toHaveBeenCalled();
+    await expect(initialize({} as D1Database)).resolves.toBeUndefined();
+
+    expect(ensureSchemas).toHaveBeenCalledTimes(2);
+    expect(durableEpoch.recordEpoch).toHaveBeenCalledTimes(1);
+  });
+
+  it("fails closed when durable readiness cannot be read", async () => {
+    const ensureSchemas = vi.fn(async () => undefined);
+    const recordEpoch = vi.fn(async () => undefined);
+    const initialize = schemaInitializationTest.createSchemaInitializer({
+      readEpoch: vi.fn(async () => {
+        throw new Error("read unavailable");
+      }),
+      ensureSchemas,
+      recordEpoch,
+    });
+
+    await expect(initialize({} as D1Database)).rejects.toThrow(
+      "read unavailable",
+    );
+    expect(ensureSchemas).not.toHaveBeenCalled();
+    expect(recordEpoch).not.toHaveBeenCalled();
+  });
+
+  it("reruns safely after a marker write failure", async () => {
+    const durableEpoch = durableEpochHarness();
+    durableEpoch.recordEpoch.mockRejectedValueOnce(new Error("write unavailable"));
+    const ensureSchemas = vi.fn(async () => undefined);
+    const initialize = schemaInitializationTest.createSchemaInitializer({
+      ...durableEpoch,
+      ensureSchemas,
+    });
+
+    await expect(initialize({} as D1Database)).rejects.toThrow(
+      "write unavailable",
+    );
+    await expect(initialize({} as D1Database)).resolves.toBeUndefined();
+
+    expect(ensureSchemas).toHaveBeenCalledTimes(2);
+    expect(durableEpoch.recordEpoch).toHaveBeenCalledTimes(2);
+  });
+
+  it("lets concurrent cold request facades run independent schema work", async () => {
+    const durableEpoch = durableEpochHarness();
+    const completions: Array<() => void> = [];
+    const ensureSchemas = vi.fn(
+      () =>
+        new Promise<void>((resolve) => {
+          completions.push(resolve);
+        }),
+    );
+    const initialize = schemaInitializationTest.createSchemaInitializer({
+      ...durableEpoch,
+      ensureSchemas,
+    });
+
+    const first = initialize({} as D1Database);
+    const second = initialize({} as D1Database);
+    await Promise.resolve();
+    const callCountWhileBothRequestsAreCold = ensureSchemas.mock.calls.length;
+    completions.forEach((resolve) => resolve());
+    await Promise.all([first, second]);
+
+    expect(callCountWhileBothRequestsAreCold).toBe(2);
+    expect(durableEpoch.recordEpoch).toHaveBeenCalledTimes(2);
+  });
+});
 
 async function withFeatureFlags<T>(flags: string, callback: () => Promise<T>) {
   const testEnv = env as unknown as TestEnv;
@@ -10288,6 +10435,44 @@ describe("Shiplet", () => {
       return { organization, project: body.project };
     }
 
+    it("keeps periodic trusted review facade reads on the exact modern contract", async () => {
+      await withCustomDomain("shiplet.cc", async () => {
+        const organization = await createTestOrganization(makeRequest);
+        const published = await publishStaticShiplet(
+          makeRequest,
+          organization.id,
+        );
+        const pageUrl = `https://${published.project.subdomain}.shiplet.cc/`;
+        const query = new URLSearchParams({
+          pageUrl,
+          state: "open",
+          limit: "100",
+        });
+        const facadeUrl = `${pageUrl}__shiplet/review/feedback?${query}`;
+
+        for (let read = 0; read < 3; read += 1) {
+          const response = await requestHelper(facadeUrl, {
+            headers: AUTH_HEADERS,
+          });
+          expect(response.status).toBe(200);
+          const payload = (await response.json()) as {
+            feedback: unknown[];
+            nextCursor: string | null;
+          };
+          expect(Object.keys(payload).sort()).toEqual([
+            "feedback",
+            "nextCursor",
+          ]);
+          expect(Array.isArray(payload.feedback)).toBe(true);
+          expect(
+            payload.nextCursor === null ||
+              (typeof payload.nextCursor === "string" &&
+                payload.nextCursor.length <= 2_048),
+          ).toBe(true);
+        }
+      });
+    });
+
     it("should serve the embedded review client script", async () => {
       const response = await makeRequest("/api/review/client.js");
 
@@ -10774,18 +10959,24 @@ describe("Shiplet", () => {
       );
       expect(autocompleteResponse.status).toBe(200);
       const autocomplete = (await autocompleteResponse.json()) as {
-        users: Array<{
-          id: string;
-          email: string;
-          shiplet_access_status: string;
-        }>;
+        users: Array<{ id: string; label: string }>;
+        nextCursor: string | null;
       };
+      expect(Object.keys(autocomplete).sort()).toEqual([
+        "nextCursor",
+        "users",
+      ]);
       expect(autocomplete.users).toHaveLength(1);
-      expect(autocomplete.users[0]).toMatchObject({
+      expect(Object.keys(autocomplete.users[0]).sort()).toEqual(["id", "label"]);
+      expect(autocomplete.users[0]).toEqual({
         id: reviewer.id,
-        email: reviewer.email,
-        shiplet_access_status: "invite_required",
+        label: "Invited Reviewer",
       });
+      const serializedAutocomplete = JSON.stringify(autocomplete);
+      expect(serializedAutocomplete).not.toContain('"shiplet_access_status"');
+      expect(serializedAutocomplete).not.toContain('"organization_role"');
+      expect(serializedAutocomplete).not.toContain('"grant_id"');
+      expect(serializedAutocomplete).not.toContain('"email":');
 
       const createResponse = await makeRequest(
         `/api/projects/${project.id}/review-feedback`,

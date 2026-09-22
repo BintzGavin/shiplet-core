@@ -66,6 +66,7 @@ async function fixture() {
     .bind(project.id)
     .first<{ active_revision_id: string }>();
   return {
+    organization,
     project,
     revisionId: active!.active_revision_id,
     pageUrl: `http://localhost/${subdomain}`,
@@ -73,6 +74,98 @@ async function fixture() {
 }
 
 describe("managed trusted review confirmation", () => {
+
+  it("rejects unauthorized or organizationless managed mentions before preparing an intent", async () => {
+    const { organization, project, revisionId, pageUrl } = await fixture();
+    const outsider = {
+      "x-shiplet-user-id": `user_managed_outsider_${crypto.randomUUID()}`,
+      "x-shiplet-user-email": `managed-outsider-${crypto.randomUUID()}@example.com`,
+    };
+    expect(
+      (
+        await request("/api/organizations", {
+          method: "POST",
+          headers: { "Content-Type": "application/json", ...outsider },
+          body: JSON.stringify({ name: `Outsider ${crypto.randomUUID()}` }),
+        })
+      ).status,
+    ).toBe(201);
+    const requestId = `request_${crypto.randomUUID()}`;
+    const body = (mentions: Array<{ userId: string }>) =>
+      new URLSearchParams({
+        request_id: requestId,
+        operation: "feedback.create",
+        comment: "Managed mention preflight",
+        page_url: pageUrl,
+        client_feedback_id: `managed-${crypto.randomUUID()}`,
+        shiplet_id: project.id,
+        revision_id: revisionId,
+        mentions_json: JSON.stringify(mentions),
+      });
+    const foreign = await request("/review/confirm", {
+      method: "POST",
+      headers: {
+        Origin: "http://localhost",
+        "Content-Type": "application/x-www-form-urlencoded",
+        ...OWNER,
+      },
+      body: body([{ userId: outsider["x-shiplet-user-id"] }]),
+    });
+    expect(foreign.status).toBe(400);
+    expect(await foreign.text()).toBe("Invalid review mentions");
+    expect(
+      (
+        await (env as Env).DB.prepare(
+          "SELECT COUNT(*) AS count FROM embed_review_operation_intents WHERE request_id = ?",
+        )
+          .bind(requestId)
+          .first<{ count: number }>()
+      )?.count,
+    ).toBe(0);
+    expect(
+      (
+        await request("/review/confirm", {
+          method: "POST",
+          headers: {
+            Origin: "http://localhost",
+            "Content-Type": "application/x-www-form-urlencoded",
+            ...OWNER,
+          },
+          body: body([]),
+        })
+      ).status,
+    ).toBe(200);
+
+    const organizationlessRequestId = `request_${crypto.randomUUID()}`;
+    await (env as Env).DB.prepare(
+      "UPDATE projects SET organization_id = NULL WHERE id = ?",
+    )
+      .bind(project.id)
+      .run();
+    const organizationless = await request("/review/confirm", {
+      method: "POST",
+      headers: {
+        Origin: "http://localhost",
+        "Content-Type": "application/x-www-form-urlencoded",
+        ...OWNER,
+      },
+      body: new URLSearchParams({
+        request_id: organizationlessRequestId,
+        operation: "feedback.create",
+        comment: "Organizationless mention",
+        page_url: pageUrl,
+        client_feedback_id: `managed-${crypto.randomUUID()}`,
+        shiplet_id: project.id,
+        revision_id: revisionId,
+        mentions_json: JSON.stringify([
+          { userId: OWNER["x-shiplet-user-id"] },
+        ]),
+      }),
+    });
+    expect(organizationless.status).toBe(400);
+    expect(await organizationless.text()).toBe("Invalid review mentions");
+    expect(organization.id).toMatch(/^org_/);
+  });
 
   it("rolls back a legacy receipt and every attributed effect when activation changes at commit time", async () => {
     const { project, revisionId, pageUrl } = await fixture();
@@ -329,13 +422,14 @@ describe("managed trusted review confirmation", () => {
     );
 
     const feedback = await (env as Env).DB.prepare(
-      `SELECT submitted_by_user_id, comment, screenshot_mode,
+      `SELECT id, submitted_by_user_id, comment, screenshot_mode,
               selected_element_json, coordinates_json
        FROM review_feedback
        WHERE project_id = ? AND client_feedback_id = ?`,
     )
       .bind(project.id, clientFeedbackId)
       .first<{
+        id: string;
         submitted_by_user_id: string;
         comment: string;
         screenshot_mode: string;
@@ -367,6 +461,26 @@ describe("managed trusted review confirmation", () => {
       event_kind: "review.feedback_created",
       actor_id: OWNER["x-shiplet-user-id"],
     });
+    const outcome = await request(
+      `/${project.subdomain}/__shiplet/review/operations/${requestId}?${new URLSearchParams({
+        revision_id: revisionId,
+        page_url: pageUrl,
+        effect: "feedback.create",
+      })}`,
+      { headers: OWNER },
+    );
+    expect(outcome.status).toBe(200);
+    expect(await outcome.json()).toMatchObject({
+      operation: {
+        requestId,
+        effect: "feedback.create",
+        state: "completed",
+        result: {
+          feedbackId: feedback!.id,
+          eventId: expect.stringMatching(/^event_/),
+        },
+      },
+    });
 
     const replay = await request("/review/confirm/complete", {
       method: "POST",
@@ -380,7 +494,8 @@ describe("managed trusted review confirmation", () => {
         approval: "confirm",
       }),
     });
-    expect(replay.status).toBe(409);
+    expect(replay.status).toBe(200);
+    expect(await replay.text()).toContain('data-shiplet-confirmation="complete"');
   });
 
   it("rejects a cross-origin or stale-revision intent before persistence", async () => {

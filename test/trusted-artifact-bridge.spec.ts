@@ -52,6 +52,10 @@ function capture(overrides: Record<string, unknown> = {}) {
 
 function operateArtifactBridge() {
   const messageListeners: Array<(event: any) => unknown> = [];
+  const windowListeners = new Map<string, Array<(event: any) => unknown>>();
+  const activeIntervals = new Set<number>();
+  const activeTimeouts = new Set<number>();
+  let nextTimer = 1;
   const parentMessages: Array<{ message: any; origin: string }> = [];
   const parentWindow = {
     postMessage(message: any, origin: string) {
@@ -61,18 +65,96 @@ function operateArtifactBridge() {
   const window = {
     addEventListener(type: string, listener: (event: any) => unknown) {
       if (type === "message") messageListeners.push(listener);
+      windowListeners.set(type, [
+        ...(windowListeners.get(type) || []),
+        listener,
+      ]);
     },
+    removeEventListener(type: string, listener: (event: any) => unknown) {
+      windowListeners.set(
+        type,
+        (windowListeners.get(type) || []).filter(
+          (candidate) => candidate !== listener,
+        ),
+      );
+    },
+    getComputedStyle(target: FakeElement) {
+      return target.computedStyle;
+    },
+    matchMedia() {
+      return { matches: false };
+    },
+    requestAnimationFrame(callback: () => void) {
+      callback();
+      return 1;
+    },
+    setInterval() {
+      const timer = nextTimer++;
+      activeIntervals.add(timer);
+      return timer;
+    },
+    clearInterval(timer: number) {
+      activeIntervals.delete(timer);
+    },
+    setTimeout() {
+      const timer = nextTimer++;
+      activeTimeouts.add(timer);
+      return timer;
+    },
+    clearTimeout(timer: number) {
+      activeTimeouts.delete(timer);
+    },
+    location: { href: "https://artifact.example/review" },
     scrollX: 0,
     scrollY: 0,
     scrollTo: undefined as undefined | ((value: unknown) => void),
   };
+  class FakeElement {
+    isConnected = true;
+    isContentEditable = false;
+    parentElement: FakeElement | null = null;
+    shadowRoot: { activeElement: FakeElement | null } | null = null;
+    tagName = "BUTTON";
+    scrollCalls: unknown[] = [];
+    rect = { left: 100, top: 120, width: 80, height: 40 };
+    computedStyle = {
+      display: "block",
+      visibility: "visible",
+      opacity: "1",
+      contentVisibility: "visible",
+    };
+    closest(): FakeElement | null {
+      return null;
+    }
+    getBoundingClientRect() {
+      return {
+        ...this.rect,
+        right: this.rect.left + this.rect.width,
+        bottom: this.rect.top + this.rect.height,
+      };
+    }
+    getClientRects() {
+      return this.rect.width > 0 && this.rect.height > 0 ? [this.rect] : [];
+    }
+    scrollIntoView(value: unknown) {
+      this.scrollCalls.push(value);
+    }
+  }
+  const targets = new Map<string, FakeElement>();
   const documentListeners = new Map<string, Array<(event: any) => unknown>>();
+  const documentElement = new FakeElement();
+  documentElement.tagName = "HTML";
+  Object.assign(documentElement, {
+    appendChild() {},
+    scrollWidth: 1280,
+    scrollHeight: 720,
+  });
+  const body = new FakeElement();
+  body.tagName = "BODY";
   const document = {
-    documentElement: {
-      appendChild() {},
-      scrollWidth: 1280,
-      scrollHeight: 720,
-    },
+    activeElement: body as FakeElement | null,
+    body,
+    documentElement,
     createElement() {
       return {
         style: {},
@@ -96,6 +178,10 @@ function operateArtifactBridge() {
     },
     querySelectorAll() {
       return [];
+    },
+    querySelector(selector: string) {
+      if (selector === "[invalid") throw new SyntaxError("Invalid selector");
+      return targets.get(selector) || null;
     },
   };
   class FakePort {
@@ -122,14 +208,70 @@ function operateArtifactBridge() {
     "innerHeight",
     trustedArtifactBridgeScript(),
   );
-  execute(window, document, parentWindow, class {}, class {}, 1280, 720);
+  execute(window, document, parentWindow, FakeElement, class {}, 1280, 720);
   const dispatch = (event: any) => {
     for (const listener of messageListeners) listener(event);
   };
-  return { dispatch, documentListeners, parentMessages, parentWindow, FakePort, window };
+  return {
+    dispatch,
+    activeIntervals,
+    activeTimeouts,
+    document,
+    documentListeners,
+    parentMessages,
+    parentWindow,
+    FakeElement,
+    FakePort,
+    targets,
+    window,
+    windowListeners,
+  };
+}
+
+function connectArtifactBridge(harness: ReturnType<typeof operateArtifactBridge>) {
+  const offer = {
+    protocol: "shiplet.artifact.channel.v1",
+    type: "offer",
+    channelNonce: "nonce_saved_targets",
+    shipletId: "shiplet_a",
+    revisionId: "revision_a1",
+  };
+  const port = new harness.FakePort();
+  const posted: unknown[] = [];
+  (port as unknown as { postMessage: (value: unknown) => void }).postMessage = (
+    value: unknown,
+  ) => {
+    posted.push(value);
+  };
+  harness.dispatch({
+    source: harness.parentWindow,
+    origin: "https://app.shiplet.cc",
+    data: offer,
+    ports: [],
+  });
+  harness.dispatch({
+    source: harness.parentWindow,
+    origin: "https://app.shiplet.cc",
+    data: { ...offer, type: "connect" },
+    ports: [port],
+  });
+  posted.length = 0;
+  return { offer, port, posted };
 }
 
 describe("trusted artifact capture bridge", () => {
+  it("[T2] captures the current page through a distinct request-bound protocol with truthful fidelity", () => {
+    const script = trustedArtifactBridgeScript();
+
+    expect(script).toContain('shiplet.artifact.page-capture.command.v1');
+    expect(script).toContain('shiplet.artifact.page-capture.result.v1');
+    expect(script).toContain('"raster-source"');
+    expect(script).toContain('"sanitized-dom"');
+    expect(script).toContain('"fallback"');
+    expect(script).toContain(
+      '["images", "canvas", "media", "form-values", "external-styles"]',
+    );
+  });
   it("Given an opaque artifact frame, When it returns bounded context for the outstanding request, Then the kernel accepts only inert review metadata", () => {
     expect(parseTrustedArtifactCapture(capture(), binding)).toEqual(
       capture().payload,
@@ -275,6 +417,38 @@ describe("trusted artifact capture bridge", () => {
     expect(freshPort.listeners).toHaveLength(1);
   });
 
+  it("acknowledges each exact capture start only after the listeners are installed", () => {
+    const harness = operateArtifactBridge();
+    const { offer, port, posted } = connectArtifactBridge(harness);
+    const start = {
+      ...offer,
+      protocol: "shiplet.artifact.capture.command.v1",
+      type: "start",
+      requestId: "capture_request_ready",
+    };
+
+    port.dispatch(start);
+
+    expect(harness.documentListeners.get("pointerover")).toHaveLength(1);
+    expect(harness.documentListeners.get("click")).toHaveLength(1);
+    expect(posted).toEqual([
+      {
+        protocol: "shiplet.artifact.capture.state.v1",
+        type: "ready",
+        channelNonce: offer.channelNonce,
+        shipletId: offer.shipletId,
+        revisionId: offer.revisionId,
+        requestId: start.requestId,
+      },
+    ]);
+
+    port.dispatch(start);
+    port.dispatch({ ...start, requestId: "capture_request_other" });
+    port.dispatch({ ...start, channelNonce: "nonce_foreign" });
+    port.dispatch({ ...start, type: "unexpected" });
+    expect(posted).toHaveLength(1);
+  });
+
   it("Given a connected artifact channel, When the reviewer moves their pointer, Then the bridge reports bounded page coordinates to the kernel only", () => {
     const harness = operateArtifactBridge();
     const offer = { protocol: "shiplet.artifact.channel.v1", type: "offer", channelNonce: "nonce_pointer", shipletId: "shiplet_a", revisionId: "revision_a1" };
@@ -327,5 +501,370 @@ describe("trusted artifact capture bridge", () => {
     const keydown = harness.documentListeners.get("keydown") || [];
     keydown[0]({ key: "ArrowDown" });
     expect(posted).toHaveLength(1);
+  });
+});
+
+describe("trusted saved-target bridge", () => {
+  it("registers bounded inert descriptors and reveals only a bound eligible target", () => {
+    const harness = operateArtifactBridge();
+    const target = new harness.FakeElement();
+    harness.targets.set("#saved-target", target);
+    const { offer, port, posted } = connectArtifactBridge(harness);
+
+    port.dispatch({
+      ...offer,
+      protocol: "shiplet.artifact.saved-targets.command.v1",
+      type: "replace",
+      targets: [
+        {
+          feedbackId: "feedback_a",
+          selector: "#saved-target",
+          expectedTag: "BUTTON",
+          relativePoint: { x: 0.25, y: 0.75 },
+        },
+      ],
+    });
+
+    expect(posted).toContainEqual({
+      ...offer,
+      protocol: "shiplet.artifact.saved-targets.geometry.v1",
+      type: "update",
+      targets: [
+        {
+          feedbackId: "feedback_a",
+          eligible: true,
+          offscreen: false,
+          coordinates: {
+            pageX: 120,
+            pageY: 150,
+            viewportX: 120,
+            viewportY: 150,
+          },
+          targetRect: { left: 100, top: 120, width: 80, height: 40 },
+        },
+      ],
+    });
+    expect(JSON.stringify(posted)).not.toContain("#saved-target");
+    expect(JSON.stringify(posted)).not.toContain("BUTTON");
+
+    port.dispatch({
+      ...offer,
+      protocol: "shiplet.artifact.saved-target.reveal.v1",
+      type: "reveal",
+      feedbackId: "feedback_a",
+      unexpected: true,
+    });
+    port.dispatch({
+      ...offer,
+      protocol: "shiplet.artifact.saved-target.reveal.v1",
+      type: "reveal",
+      feedbackId: "feedback_unknown",
+    });
+    expect(target.scrollCalls).toEqual([]);
+    port.dispatch({
+      ...offer,
+      protocol: "shiplet.artifact.saved-target.reveal.v1",
+      type: "reveal",
+      feedbackId: "feedback_a",
+    });
+    expect(target.scrollCalls).toEqual([
+      { behavior: "smooth", block: "center", inline: "center" },
+    ]);
+  });
+
+  it("rejects oversized, malformed, stale and unexpected saved-target authority", () => {
+    const harness = operateArtifactBridge();
+    const target = new harness.FakeElement();
+    harness.targets.set("#saved-target", target);
+    const { offer, port, posted } = connectArtifactBridge(harness);
+    const descriptor = {
+      feedbackId: "feedback_a",
+      selector: "#saved-target",
+    };
+
+    for (const message of [
+      {
+        ...offer,
+        protocol: "shiplet.artifact.saved-targets.command.v1",
+        type: "replace",
+        targets: Array.from({ length: 251 }, (_, index) => ({
+          feedbackId: `feedback_${index}`,
+          selector: "#saved-target",
+        })),
+      },
+      {
+        ...offer,
+        protocol: "shiplet.artifact.saved-targets.command.v1",
+        type: "replace",
+        targets: [{ ...descriptor, selector: "[invalid" }],
+      },
+      {
+        ...offer,
+        protocol: "shiplet.artifact.saved-targets.command.v1",
+        type: "replace",
+        targets: [{ ...descriptor, credential: "forbidden" }],
+      },
+      {
+        ...offer,
+        channelNonce: "nonce_stale",
+        protocol: "shiplet.artifact.saved-targets.command.v1",
+        type: "replace",
+        targets: [descriptor],
+      },
+      {
+        ...offer,
+        shipletId: "shiplet_other",
+        protocol: "shiplet.artifact.saved-targets.command.v1",
+        type: "replace",
+        targets: [descriptor],
+      },
+      {
+        ...offer,
+        revisionId: "revision_other",
+        protocol: "shiplet.artifact.saved-targets.command.v1",
+        type: "replace",
+        targets: [descriptor],
+      },
+      {
+        ...offer,
+        protocol: "shiplet.artifact.saved-targets.command.v1",
+        type: "replace",
+        targets: [{ ...descriptor, selector: "x".repeat(1201) }],
+      },
+      {
+        ...offer,
+        protocol: "shiplet.artifact.saved-targets.command.v1",
+        type: "replace",
+        targets: [{ ...descriptor, relativePoint: { x: 1.1, y: 0.5 } }],
+      },
+    ]) {
+      port.dispatch(message);
+    }
+    port.dispatch({
+      ...offer,
+      protocol: "shiplet.artifact.saved-target.reveal.v1",
+      type: "reveal",
+      feedbackId: "feedback_a",
+    });
+
+    expect(posted).toEqual([]);
+    expect(target.scrollCalls).toEqual([]);
+  });
+
+  it("relays only explicitly enabled trusted non-editable shortcut actions", () => {
+    const harness = operateArtifactBridge();
+    const { offer, port, posted } = connectArtifactBridge(harness);
+    const keydown = harness.documentListeners.get("keydown") || [];
+    expect(keydown).toHaveLength(2);
+    const shortcutListener = keydown[1];
+    const plainTarget = new harness.FakeElement();
+    const editableTarget = new harness.FakeElement();
+    editableTarget.tagName = "INPUT";
+    editableTarget.closest = () => editableTarget;
+    harness.document.activeElement = plainTarget;
+    let prevented = 0;
+    let stopped = 0;
+    const event = (overrides: Record<string, unknown> = {}) => {
+      const value = {
+        key: "c",
+        keyCode: 67,
+        isTrusted: true,
+        isComposing: false,
+        ctrlKey: false,
+        metaKey: false,
+        altKey: false,
+        shiftKey: false,
+        target: plainTarget,
+        preventDefault() {
+          prevented += 1;
+        },
+        stopPropagation() {
+          stopped += 1;
+        },
+        ...overrides,
+      };
+      return { ...value, composedPath: () => [value.target] };
+    };
+
+    shortcutListener(event());
+    port.dispatch({
+      ...offer,
+      protocol: "shiplet.artifact.shortcuts.command.v1",
+      type: "enable",
+      unexpected: true,
+    });
+    shortcutListener(event());
+    port.dispatch({
+      ...offer,
+      protocol: "shiplet.artifact.shortcuts.command.v1",
+      type: "enable",
+    });
+    const compositionStart =
+      harness.documentListeners.get("compositionstart") || [];
+    const compositionEnd =
+      harness.documentListeners.get("compositionend") || [];
+    compositionStart[0]({});
+    shortcutListener(event());
+    compositionEnd[0]({});
+    shortcutListener(event());
+    shortcutListener(event({ key: "Escape", keyCode: 27 }));
+    for (const blocked of [
+      event({ target: editableTarget }),
+      event({ ctrlKey: true }),
+      event({ metaKey: true }),
+      event({ altKey: true }),
+      event({ shiftKey: true }),
+      event({ isComposing: true }),
+      event({ keyCode: 229 }),
+      event({ isTrusted: false }),
+    ]) {
+      shortcutListener(blocked);
+    }
+
+    expect(posted).toEqual([
+      {
+        ...offer,
+        protocol: "shiplet.artifact.shortcuts.v1",
+        type: "action",
+        action: "comment",
+      },
+      {
+        ...offer,
+        protocol: "shiplet.artifact.shortcuts.v1",
+        type: "action",
+        action: "cancel",
+      },
+    ]);
+    expect(prevented).toBe(0);
+    expect(stopped).toBe(0);
+  });
+
+  it("renews only increasing bounded lifecycle sequences and disconnects the full B2 session", () => {
+    const harness = operateArtifactBridge();
+    const target = new harness.FakeElement();
+    harness.targets.set("#saved-target", target);
+    const { offer, port, posted } = connectArtifactBridge(harness);
+    expect(harness.activeIntervals.size).toBe(1);
+    port.dispatch({
+      ...offer,
+      protocol: "shiplet.artifact.saved-targets.command.v1",
+      type: "replace",
+      targets: [{ feedbackId: "feedback_a", selector: "#saved-target" }],
+    });
+    expect(harness.activeTimeouts.size).toBe(1);
+    posted.length = 0;
+
+    port.dispatch({
+      ...offer,
+      protocol: "shiplet.artifact.lifecycle.command.v1",
+      type: "renew",
+      sequence: 1,
+    });
+    for (const invalid of [
+      { ...offer, type: "renew", sequence: 1 },
+      { ...offer, type: "renew", sequence: 0 },
+      { ...offer, type: "renew", sequence: 2 ** 31 },
+      { ...offer, type: "renew", sequence: 2, unexpected: true },
+      { ...offer, channelNonce: "nonce_stale", type: "renew", sequence: 2 },
+    ]) {
+      port.dispatch({
+        ...invalid,
+        protocol: "shiplet.artifact.lifecycle.command.v1",
+      });
+    }
+    port.dispatch({
+      ...offer,
+      protocol: "shiplet.artifact.lifecycle.command.v1",
+      type: "renew",
+      sequence: 2,
+    });
+    expect(posted).toEqual([
+      {
+        ...offer,
+        protocol: "shiplet.artifact.lifecycle.v1",
+        type: "alive",
+        sequence: 1,
+      },
+      {
+        ...offer,
+        protocol: "shiplet.artifact.lifecycle.v1",
+        type: "alive",
+        sequence: 2,
+      },
+    ]);
+
+    port.dispatch({
+      ...offer,
+      protocol: "shiplet.artifact.lifecycle.command.v1",
+      type: "disconnect",
+      unexpected: true,
+    });
+    expect(port.closed).toBe(false);
+    port.dispatch({
+      ...offer,
+      protocol: "shiplet.artifact.lifecycle.command.v1",
+      type: "disconnect",
+    });
+    expect(port.closed).toBe(true);
+    expect(harness.activeIntervals.size).toBe(0);
+    expect(harness.activeTimeouts.size).toBe(0);
+    posted.length = 0;
+    port.dispatch({
+      ...offer,
+      protocol: "shiplet.artifact.lifecycle.command.v1",
+      type: "renew",
+      sequence: 3,
+    });
+    expect(posted).toEqual([]);
+  });
+
+  it("clears saved targets and shortcut authority when a fresh channel replaces the port", () => {
+    const harness = operateArtifactBridge();
+    const target = new harness.FakeElement();
+    harness.targets.set("#saved-target", target);
+    const { offer, port, posted } = connectArtifactBridge(harness);
+    port.dispatch({
+      ...offer,
+      protocol: "shiplet.artifact.saved-targets.command.v1",
+      type: "replace",
+      targets: [{ feedbackId: "feedback_a", selector: "#saved-target" }],
+    });
+    port.dispatch({
+      ...offer,
+      protocol: "shiplet.artifact.shortcuts.command.v1",
+      type: "enable",
+    });
+    posted.length = 0;
+
+    harness.dispatch({
+      source: harness.parentWindow,
+      origin: "https://app.shiplet.cc",
+      data: { ...offer, channelNonce: "nonce_fresh" },
+      ports: [],
+    });
+    port.dispatch({
+      ...offer,
+      protocol: "shiplet.artifact.saved-target.reveal.v1",
+      type: "reveal",
+      feedbackId: "feedback_a",
+    });
+    const keydown = harness.documentListeners.get("keydown") || [];
+    keydown[1]({
+      key: "c",
+      keyCode: 67,
+      isTrusted: true,
+      isComposing: false,
+      ctrlKey: false,
+      metaKey: false,
+      altKey: false,
+      shiftKey: false,
+      target: { closest: () => null, isContentEditable: false },
+      preventDefault() {},
+      stopPropagation() {},
+    });
+
+    expect(port.closed).toBe(true);
+    expect(posted).toEqual([]);
+    expect(target.scrollCalls).toEqual([]);
   });
 });

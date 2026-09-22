@@ -858,6 +858,115 @@ describe("D1 custom MCP capability dispatcher", () => {
     });
   });
 
+  it("Given exact trusted approval, When custom MCP sets Staging, Then the open status persists and reads canonically", async () => {
+    const own = await seedShiplet("feedback_staging");
+    const feedbackId = `review_${crypto.randomUUID()}`;
+    await (env as Env).DB.prepare(
+      `INSERT INTO review_feedback (
+				 id, project_id, organization_id, ticket_number, client_feedback_id,
+				 comment, status, page_url, pathname, page_url_key, screenshot_mode,
+				 source, created_on, updated_on
+			 ) VALUES (?, ?, ?, 1, ?, 'Stage the review', 'New',
+				 'https://example.invalid/staging', '/staging', 'example.invalid/staging',
+				 'page', 'api', ?, ?)`,
+    )
+      .bind(
+        feedbackId,
+        own.shipletId,
+        own.organizationId,
+        `client_${crypto.randomUUID()}`,
+        own.createdOn,
+        own.createdOn,
+      )
+      .run();
+    const dispatcher = createD1CustomMcpCapabilityDispatcher({
+      db: (env as Env).DB,
+      now: () => NOW,
+    });
+    const approved = await approvedMutation({
+      shipletId: own.shipletId,
+      revisionId: own.revisionId,
+      action: "review.feedback.write",
+      resource: "review:feedback",
+      payload: {
+        operation: "set_status",
+        feedbackId,
+        status: "Staging",
+      },
+    });
+    const write = await dispatcher.dispatch(
+      dispatchInput(approved.authorized, {
+        mutationAuthority: approved.mutationAuthority,
+      }),
+    );
+    expect(write).toMatchObject({
+      status: "committed",
+      value: { feedbackId, status: "Staging" },
+    });
+
+    const read = await dispatcher.dispatch(
+      dispatchInput(
+        authorization({
+          shipletId: own.shipletId,
+          revisionId: own.revisionId,
+          action: "review.feedback.read",
+          resource: "review:feedback",
+          payload: { operation: "get", feedbackId },
+        }),
+      ),
+    );
+    expect(read).toMatchObject({
+      status: "committed",
+      value: { feedback: { id: feedbackId, status: "Staging" } },
+    });
+
+    const event = await (env as Env).DB.prepare(
+      `SELECT canonical_status_category FROM shiplet_events
+			 WHERE project_id = ? AND event_kind = 'review.status-changed'
+			 ORDER BY created_at DESC LIMIT 1`,
+    )
+      .bind(own.shipletId)
+      .first<{ canonical_status_category: string }>();
+    expect(event?.canonical_status_category).toBe("open");
+
+    const unknown = await approvedMutation({
+      shipletId: own.shipletId,
+      revisionId: own.revisionId,
+      action: "review.feedback.write",
+      resource: "review:feedback",
+      payload: {
+        operation: "set_status",
+        feedbackId,
+        status: "staging",
+      },
+    });
+    await expect(
+      dispatcher.dispatch(
+        dispatchInput(unknown.authorized, {
+          mutationAuthority: unknown.mutationAuthority,
+        }),
+      ),
+    ).resolves.toMatchObject({ status: "aborted" });
+
+    const unauthorized = authorization({
+      shipletId: own.shipletId,
+      revisionId: own.revisionId,
+      action: "review.feedback.write",
+      resource: "review:feedback",
+      payload: { operation: "set_status", feedbackId, status: "Staging" },
+    });
+    await expect(
+      dispatcher.dispatch(dispatchInput(unauthorized)),
+    ).resolves.toMatchObject({ status: "aborted" });
+    await expect(
+      (env as Env).DB.prepare(
+        "SELECT status FROM review_feedback WHERE id = ? AND project_id = ?",
+      )
+        .bind(feedbackId, own.shipletId)
+        .first<{ status: string }>(),
+    ).resolves.toEqual({ status: "Staging" });
+  });
+
   it("Given denied egress, wrong resources, expiry, or cancellation, When dispatch runs, Then no effect commits and a bounded journal remains", async () => {
     const own = await seedShiplet("denials");
     const dispatcher = createD1CustomMcpCapabilityDispatcher({

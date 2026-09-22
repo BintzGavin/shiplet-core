@@ -4,6 +4,14 @@ import {
   AVATAR_SPRITE_ROWS,
   AVATAR_SPRITE_URL,
 } from "./avatars";
+import {
+  reviewAnnotationEditorScript,
+  reviewAnnotationEditorStyles,
+} from "./review-annotation-editor";
+import {
+  reviewAttachmentDraftScript,
+  reviewAttachmentDraftStyles,
+} from "./review-attachment-drafts";
 
 export interface TrustedReviewHostInput {
   shipletId: string;
@@ -591,6 +599,29 @@ export function createTrustedReviewHostResponse(
         isLocalDevelopmentHttpUrl(hostScriptUrl),
       ).toString()
     : artifactUrl.toString();
+  const draftContextUrl = (() => {
+    const url = new URL(reviewApiUrl);
+    if (embeddedSiteOrigin) {
+      url.pathname = "/embed/review/draft-context";
+      url.search = "";
+      url.searchParams.set("installation_id", new URL(reviewApiUrl).searchParams.get("installation_id") || "");
+      return url.toString();
+    }
+    if (/\/__shiplet\/review\/feedback$/.test(url.pathname)) {
+      url.pathname = url.pathname.replace(
+        /\/__shiplet\/review\/feedback$/,
+        "/__shiplet/review/draft-context",
+      );
+      url.search = "";
+      return url.toString();
+    }
+    if (/\/review-feedback$/.test(url.pathname)) {
+      url.pathname = url.pathname.replace(/\/review-feedback$/, "/review-draft-context");
+      url.search = "";
+      return url.toString();
+    }
+    throw new TypeError("Invalid review API URL for draft context");
+  })();
   const submissionMode = input.submissionMode ?? "confirmation";
   if (submissionMode !== "confirmation" && submissionMode !== "sandbox") {
     throw new TypeError("Invalid review submission mode");
@@ -629,7 +660,7 @@ export function createTrustedReviewHostResponse(
     ? `<iframe data-shiplet-widget-frame="v1" title="Review widget for ${title}" src="${escapeHtml(widgetUrl.toString())}" sandbox="${widgetSandbox}" referrerpolicy="no-referrer"></iframe>`
     : "";
   const html = `<!doctype html>
-<html lang="en" data-shiplet-trusted-review-host="v1" data-review-state="ready" data-shiplet-embed-origin="${escapeHtml(embeddedSiteOrigin)}" data-shiplet-id="${escapeHtml(input.shipletId)}" data-revision-id="${escapeHtml(input.revisionId)}" data-review-avatar-url="${escapeHtml(new URL(AVATAR_SPRITE_URL, hostScriptUrl.origin).toString())}" data-review-api-url="${escapeHtml(reviewApiUrl.toString())}" data-review-confirm-url="${escapeHtml(confirmationUrl.toString())}" data-review-page-url="${escapeHtml(reviewPageUrl)}" data-review-submission-mode="${submissionMode}">
+<html lang="en" data-shiplet-trusted-review-host="v1" data-review-state="ready" data-review-embed-origin="${escapeHtml(embeddedSiteOrigin)}" data-shiplet-embed-origin="${escapeHtml(embeddedSiteOrigin)}" data-shiplet-id="${escapeHtml(input.shipletId)}" data-revision-id="${escapeHtml(input.revisionId)}" data-review-avatar-url="${escapeHtml(new URL(AVATAR_SPRITE_URL, hostScriptUrl.origin).toString())}" data-review-api-url="${escapeHtml(reviewApiUrl.toString())}" data-review-draft-context-url="${escapeHtml(draftContextUrl)}" data-review-artifact-url="${escapeHtml(artifactUrl.toString())}" data-review-confirm-url="${escapeHtml(confirmationUrl.toString())}" data-review-page-url="${escapeHtml(reviewPageUrl)}" data-review-submission-mode="${submissionMode}">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
@@ -655,15 +686,22 @@ ${widget}
 
 export function trustedReviewHostScript(): string {
   const avatarPresets = JSON.stringify(AVATAR_PRESETS).replace(/</g, "\\u003c");
+  const annotationEditor = reviewAnnotationEditorScript();
+  const attachmentDrafts = reviewAttachmentDraftScript();
   return String.raw`(() => {
 	"use strict";
+${annotationEditor}
+${attachmentDrafts}
 	const page = document.documentElement;
 	const embeddedSiteOrigin = page.getAttribute("data-shiplet-embed-origin") || "";
+	const draftContextUrl = page.getAttribute("data-review-draft-context-url") || "";
+	const artifactInitialUrl = page.getAttribute("data-review-artifact-url") || "";
+	let currentArtifactRouteUrl = artifactInitialUrl;
 	const panel = document.getElementById("shiplet-kernel-review-panel");
 	const controls = document.querySelector("[data-shiplet-kernel-review-controls]");
 	const apiUrl = page.getAttribute("data-review-api-url") || "";
 	const reviewConfirmationUrl = page.getAttribute("data-review-confirm-url") || "";
-	const reviewPageUrl = page.getAttribute("data-review-page-url") || location.href;
+	let reviewPageUrl = page.getAttribute("data-review-page-url") || location.href;
 	const reviewSubmissionMode = page.getAttribute("data-review-submission-mode") === "sandbox" ? "sandbox" : "confirmation";
 	const shipletId = page.getAttribute("data-shiplet-id") || "";
 	const revisionId = page.getAttribute("data-revision-id") || "";
@@ -683,6 +721,7 @@ export function trustedReviewHostScript(): string {
 	const confirm = confirmation && confirmation.querySelector("[data-shiplet-widget-confirm]");
 	const cancel = confirmation && confirmation.querySelector("[data-shiplet-widget-cancel]");
 	if (!panel || !controls || !apiUrl || !reviewConfirmationUrl || !shipletId || !revisionId) return;
+	artifact.setAttribute("data-shiplet-selecting", "false");
 
 	const launcher = document.createElement("button");
 	launcher.type = "button";
@@ -752,6 +791,19 @@ export function trustedReviewHostScript(): string {
 	refreshButton.className = "shiplet-review-secondary";
 	refreshButton.textContent = "Refresh";
 	refreshButton.setAttribute("data-shiplet-review-refresh", "v1");
+	const overlayToggle = document.createElement("button");
+	overlayToggle.type = "button";
+	overlayToggle.className = "shiplet-review-secondary shiplet-review-overlay-toggle";
+	overlayToggle.textContent = "Hide comments";
+	overlayToggle.setAttribute("aria-pressed", "false");
+	overlayToggle.setAttribute("data-shiplet-review-overlay-toggle", "v1");
+	const pageCommentsButton = document.createElement("button");
+	pageCommentsButton.type = "button";
+	pageCommentsButton.className = "shiplet-review-page-comments";
+	pageCommentsButton.textContent = "Page comments";
+	pageCommentsButton.setAttribute("aria-haspopup", "menu");
+	pageCommentsButton.setAttribute("aria-expanded", "false");
+	pageCommentsButton.setAttribute("data-shiplet-review-page-comments", "v1");
 	const watchButton = document.createElement("button");
 	watchButton.type = "button";
 	watchButton.className = "shiplet-review-secondary";
@@ -764,7 +816,71 @@ export function trustedReviewHostScript(): string {
 	optionsSummary.textContent = "•••";
 	optionsSummary.setAttribute("aria-label", "Review options");
 	const optionsActions = document.createElement("div");
-	optionsActions.append(watchButton, refreshButton);
+	const settings = document.createElement("details");
+	settings.className = "shiplet-review-settings";
+	const settingsSummary = document.createElement("summary");
+	settingsSummary.textContent = "Settings";
+	const settingsPanel = document.createElement("div");
+	settingsPanel.setAttribute("data-shiplet-review-settings", "v1");
+	const dockLabel = document.createElement("label");
+	dockLabel.textContent = "Dock";
+	const dockSelect = document.createElement("select");
+	dockSelect.setAttribute("aria-label", "Review dock");
+	for (const dock of ["top-left", "top-right", "bottom-left", "bottom-right"]) {
+		const option = document.createElement("option");
+		option.value = dock;
+		option.textContent = dock.split("-").map(value => value[0].toUpperCase() + value.slice(1)).join(" ");
+		dockSelect.appendChild(option);
+	}
+	dockLabel.appendChild(dockSelect);
+	const launchLabel = document.createElement("label");
+	launchLabel.textContent = "Launch";
+	const launchSelect = document.createElement("select");
+	launchSelect.setAttribute("aria-label", "Review launch behavior");
+	for (const entry of [["manual", "Manual"], ["open-comments", "Open comments"]]) {
+		const option = document.createElement("option"); option.value = entry[0]; option.textContent = entry[1]; launchSelect.appendChild(option);
+	}
+	launchLabel.appendChild(launchSelect);
+	const motionLabel = document.createElement("label");
+	motionLabel.textContent = "Motion";
+	const motionSelect = document.createElement("select");
+	motionSelect.setAttribute("aria-label", "Review motion");
+	for (const entry of [["system", "Use system setting"], ["reduced", "Reduce motion"]]) {
+		const option = document.createElement("option"); option.value = entry[0]; option.textContent = entry[1]; motionSelect.appendChild(option);
+	}
+	motionLabel.appendChild(motionSelect);
+	const copyRequestsLabel = document.createElement("label");
+	const copyRequestsToggle = document.createElement("input");
+	copyRequestsToggle.type = "checkbox";
+	copyRequestsToggle.setAttribute("aria-label", "Enable copy requests");
+	const copyRequestsHelp = document.createElement("span");
+	copyRequestsHelp.textContent = " Enable Copy request proposals. These are review proposals and never edit the artifact.";
+	copyRequestsLabel.append(copyRequestsToggle, copyRequestsHelp);
+	const copyHiddenReview = document.createElement("button");
+	copyHiddenReview.type = "button";
+	copyHiddenReview.textContent = "Copy review link with review UI hidden";
+	const copyHiddenComments = document.createElement("button");
+	copyHiddenComments.type = "button";
+	copyHiddenComments.textContent = "Copy review link with comments hidden";
+	const cleanLinkFallback = document.createElement("input");
+	cleanLinkFallback.readOnly = true;
+	cleanLinkFallback.hidden = true;
+	cleanLinkFallback.setAttribute("aria-label", "Review link to copy");
+	const restoreVisibility = document.createElement("button");
+	restoreVisibility.type = "button";
+	restoreVisibility.textContent = "Show review UI";
+	restoreVisibility.hidden = true;
+	settingsPanel.append(dockLabel, launchLabel, motionLabel, copyRequestsLabel, copyHiddenReview, copyHiddenComments, cleanLinkFallback, restoreVisibility);
+	settings.append(settingsSummary, settingsPanel);
+	const customActions = document.createElement("details");
+	customActions.className = "shiplet-review-custom-actions";
+	customActions.hidden = !widget;
+	const customActionsSummary = document.createElement("summary");
+	customActionsSummary.textContent = "Custom actions";
+	const customActionsBody = document.createElement("p");
+	customActionsBody.textContent = "Configured review actions run in an isolated widget and require confirmation.";
+	customActions.append(customActionsSummary, customActionsBody);
+	optionsActions.append(watchButton, refreshButton, overlayToggle, settings, customActions);
 	optionsMenu.append(optionsSummary, optionsActions);
 	const closeButton = document.createElement("button");
 	closeButton.type = "button";
@@ -772,15 +888,158 @@ export function trustedReviewHostScript(): string {
 	closeButton.textContent = "Close";
 	closeButton.setAttribute("aria-label", "Close review panel");
 	closeButton.setAttribute("data-shiplet-review-close", "v1");
+	if (embeddedSiteOrigin) {
+		pageCommentsButton.className += " shiplet-review-page-comments-embedded";
+		actions.append(pageCommentsButton);
+	}
 	actions.append(previousButton, nextButton, composeButton, optionsMenu, closeButton);
 	header.append(headingGroup, actions);
+	const creationMenu = document.createElement("section");
+	creationMenu.className = "shiplet-review-create-menu";
+	creationMenu.setAttribute("aria-label", "Create review feedback");
+	creationMenu.hidden = true;
+	const pageComment = document.createElement("button");
+	pageComment.type = "button";
+	pageComment.textContent = "Page comment";
+	pageComment.setAttribute("aria-label", "Page comment");
+	const drawOnPage = document.createElement("button");
+	drawOnPage.type = "button";
+	drawOnPage.textContent = "Draw on page";
+	drawOnPage.setAttribute("aria-label", "Draw on page");
+	const selectElement = document.createElement("button");
+	selectElement.type = "button";
+	selectElement.textContent = "Select an element";
+	selectElement.setAttribute("aria-label", "Select an element");
+	creationMenu.append(pageComment, drawOnPage, selectElement);
 	const status = document.createElement("p");
 	status.className = "shiplet-review-status";
 	status.setAttribute("role", "status");
+	const staleIndicator = document.createElement("section");
+	staleIndicator.className = "shiplet-review-status shiplet-review-stale";
+	staleIndicator.setAttribute("data-shiplet-review-stale", "v1");
+	staleIndicator.setAttribute("role", "status");
+	staleIndicator.setAttribute("aria-live", "polite");
+	staleIndicator.hidden = true;
+	const staleMessage = document.createElement("span");
+	const staleRefresh = document.createElement("button");
+	staleRefresh.type = "button";
+	staleRefresh.className = "shiplet-review-secondary";
+	staleRefresh.textContent = "Refresh";
+	staleRefresh.setAttribute("aria-label", "Refresh comments");
+	staleIndicator.append(staleMessage, staleRefresh);
+	const storageNotice = document.createElement("section");
+	storageNotice.className = "shiplet-review-status shiplet-review-storage-notice";
+	storageNotice.setAttribute("data-shiplet-review-storage", "v1");
+	storageNotice.setAttribute("role", "status");
+	storageNotice.hidden = true;
+	const storageMessage = document.createElement("span");
+	const storageRetry = document.createElement("button");
+	storageRetry.type = "button";
+	storageRetry.className = "shiplet-review-secondary";
+	storageRetry.textContent = "Retry storage";
+	storageRetry.setAttribute("aria-label", "Retry storage");
+	storageNotice.append(storageMessage, storageRetry);
+	const filterBar = document.createElement("section");
+	filterBar.className = "shiplet-review-filter-bar";
+	filterBar.setAttribute("aria-label", "Comment scope");
+	const filters = document.createElement("details");
+	filters.className = "shiplet-review-filters";
+	const filtersSummary = document.createElement("summary");
+	filtersSummary.textContent = "Filters";
+	filtersSummary.setAttribute("aria-label", "Filters");
+	const activeScopeSummary = document.createElement("span");
+	activeScopeSummary.className = "shiplet-review-scope-summary";
+	activeScopeSummary.setAttribute("data-shiplet-review-scope-summary", "v1");
+	const resetFilters = document.createElement("button");
+	resetFilters.type = "button";
+	resetFilters.className = "shiplet-review-secondary";
+	resetFilters.textContent = "Reset";
+	resetFilters.setAttribute("aria-label", "Reset comment filters");
+	const filterFields = document.createElement("div");
+	filterFields.className = "shiplet-review-filter-fields";
+	const scopeLabel = document.createElement("label");
+	scopeLabel.textContent = "Page scope";
+	const scopeSelect = document.createElement("select");
+	scopeSelect.setAttribute("aria-label", "Page scope");
+	for (const entry of [["page", "Current page"], ["prefix", "Path prefix"], ["site", embeddedSiteOrigin ? "All pages on this site" : "All authorized pages"]]) {
+		const option = document.createElement("option"); option.value = entry[0]; option.textContent = entry[1]; scopeSelect.appendChild(option);
+	}
+	scopeLabel.appendChild(scopeSelect);
+	const prefixLabel = document.createElement("label");
+	prefixLabel.textContent = "Path prefix";
+	const prefixInput = document.createElement("input");
+	prefixInput.type = "url";
+	prefixInput.setAttribute("aria-label", "Path prefix URL");
+	prefixInput.setAttribute("autocomplete", "off");
+	const applyPrefix = document.createElement("button");
+	applyPrefix.type = "button";
+	applyPrefix.className = "shiplet-review-secondary";
+	applyPrefix.textContent = "Apply prefix";
+	const prefixHelp = document.createElement("span");
+	prefixHelp.className = "shiplet-review-filter-help";
+	prefixHelp.textContent = "Matches this exact path and its / descendants on the authorized origin.";
+	prefixLabel.append(prefixInput, applyPrefix, prefixHelp);
+	const stateLabel = document.createElement("label");
+	stateLabel.textContent = "State";
+	const stateSelect = document.createElement("select");
+	stateSelect.setAttribute("aria-label", "State");
+	for (const entry of [["open", "Open"], ["closed", "Closed"], ["all", "Open and closed"]]) {
+		const option = document.createElement("option"); option.value = entry[0]; option.textContent = entry[1]; stateSelect.appendChild(option);
+	}
+	stateLabel.appendChild(stateSelect);
+	const actorLabel = document.createElement("label");
+	actorLabel.textContent = "People";
+	const actorSelect = document.createElement("select");
+	actorSelect.setAttribute("aria-label", "People");
+	for (const entry of [["everyone", "Everyone"], ["mine", "Mine"], ["mentions", "Mentions of me"]]) {
+		const option = document.createElement("option"); option.value = entry[0]; option.textContent = entry[1]; actorSelect.appendChild(option);
+	}
+	actorLabel.appendChild(actorSelect);
+	const revisionLabel = document.createElement("label");
+	revisionLabel.textContent = "Revision";
+	const revisionSelect = document.createElement("select");
+	revisionSelect.setAttribute("aria-label", "Revision");
+	for (const entry of [["all", "All revisions"], ["current", "Current revision"]]) {
+		const option = document.createElement("option"); option.value = entry[0]; option.textContent = entry[1]; revisionSelect.appendChild(option);
+	}
+	revisionLabel.appendChild(revisionSelect);
+	const filterError = document.createElement("p");
+	filterError.className = "shiplet-review-filter-error";
+	filterError.setAttribute("role", "alert");
+	filterError.hidden = true;
+	filterFields.append(scopeLabel, prefixLabel, stateLabel, actorLabel, revisionLabel, filterError);
+	filters.append(filtersSummary, filterFields);
+	filterBar.append(filters, activeScopeSummary, resetFilters);
 	const list = document.createElement("ol");
 	list.className = "shiplet-review-list";
 	list.setAttribute("aria-label", "Review comments");
 	list.setAttribute("aria-busy", "true");
+	const pinLimit = document.createElement("p");
+	pinLimit.className = "shiplet-review-pin-limit";
+	pinLimit.setAttribute("data-shiplet-review-pin-limit", "v1");
+	pinLimit.hidden = true;
+	const pagination = document.createElement("section");
+	pagination.className = "shiplet-review-pagination";
+	pagination.setAttribute("aria-label", "Comment pages");
+	const loadedCount = document.createElement("p");
+	loadedCount.setAttribute("data-shiplet-review-loaded-count", "v1");
+	loadedCount.setAttribute("role", "status");
+	const loadMore = document.createElement("button");
+	loadMore.type = "button";
+	loadMore.className = "shiplet-review-secondary";
+	loadMore.textContent = "Load more";
+	loadMore.setAttribute("aria-label", "Load more comments");
+	const retryPage = document.createElement("button");
+	retryPage.type = "button";
+	retryPage.className = "shiplet-review-secondary";
+	retryPage.textContent = "Retry";
+	retryPage.setAttribute("aria-label", "Retry loading comments");
+	retryPage.hidden = true;
+	const pageError = document.createElement("p");
+	pageError.className = "shiplet-review-page-error";
+	pageError.setAttribute("role", "alert");
+	pageError.hidden = true;
+	pagination.append(loadedCount, loadMore, retryPage, pageError);
 	const form = document.createElement("form");
 	form.className = "shiplet-review-form";
 	form.id = "shiplet-annotation-composer";
@@ -832,6 +1091,16 @@ export function trustedReviewHostScript(): string {
 	comment.required = true;
 	comment.maxLength = 5000;
 	comment.rows = 2;
+	const composerMessage = document.createElement("p");
+	composerMessage.className = "shiplet-review-status shiplet-review-composer-message";
+	composerMessage.setAttribute("role", "status");
+	composerMessage.hidden = true;
+	const retryOperationButton = document.createElement("button");
+	retryOperationButton.type = "button";
+	retryOperationButton.className = "shiplet-review-secondary shiplet-review-operation-retry";
+	retryOperationButton.textContent = "Start a new attempt";
+	retryOperationButton.setAttribute("aria-label", "Start a new attempt");
+	retryOperationButton.hidden = true;
 	const mentionDetails = document.createElement("details");
 	mentionDetails.className = "shiplet-review-mentions";
 	mentionDetails.hidden = true;
@@ -842,6 +1111,48 @@ export function trustedReviewHostScript(): string {
 	mentionSelect.size = 3;
 	mentionSelect.setAttribute("aria-label", "Mention reviewers");
 	mentionDetails.append(mentionSummary, mentionSelect);
+	const mentionListbox = document.createElement("div");
+	mentionListbox.className = "shiplet-review-mention-listbox";
+	mentionListbox.setAttribute("role", "listbox");
+	mentionListbox.setAttribute("aria-label", "Mention suggestions");
+	mentionListbox.hidden = true;
+	const richTools = document.createElement("section");
+	richTools.className = "shiplet-review-rich-tools";
+	richTools.setAttribute("data-shiplet-review-attachments", "v1");
+	const attachmentDrafts = typeof Element === "function" ? createReviewAttachmentDrafts({
+		container: richTools,
+		idFactory: () => "attachment_" + crypto.randomUUID().replace(/-/g, ""),
+		onError: errors => setComposerMessage(errors.join(" "), "error"),
+	}) : { current: () => [], serialize: async () => [], clear: () => false, hide: () => false, show: () => false };
+	const fidelityDisclosure = document.createElement("p");
+	fidelityDisclosure.className = "shiplet-review-fidelity";
+	fidelityDisclosure.textContent = "No image attached.";
+	const copyRequest = document.createElement("details");
+	copyRequest.className = "shiplet-review-copy-request";
+	copyRequest.hidden = true;
+	const copyRequestSummary = document.createElement("summary");
+	copyRequestSummary.textContent = "Copy request";
+	const copyRequestHelp = document.createElement("p");
+	copyRequestHelp.textContent = "Propose bounded text, template, or admitted-image changes for review. Shiplet never edits the artifact from this form.";
+	const copyRequestChange = document.createElement("textarea");
+	copyRequestChange.maxLength = 4000;
+	copyRequestChange.placeholder = "Describe a proposed text, template, or image change";
+	copyRequestChange.setAttribute("aria-label", "Copy request change");
+	copyRequest.append(copyRequestSummary, copyRequestHelp, copyRequestChange);
+	const annotationEditorContainer = document.createElement("section");
+	annotationEditorContainer.className = "shiplet-review-structured-editor";
+	const structuredEditor = typeof Element === "function" ? createReviewAnnotationEditor({
+		container: annotationEditorContainer,
+		initialPreferences: { tool: "pen", color: "#D92D5B", strokeWidth: 5 },
+		onApply: result => {
+			if (!artifactCapture || !result) return;
+			artifactCapture = { ...artifactCapture, screenshotDataUrl: result.screenshotDataUrl, screenshotAnnotations: result.screenshotAnnotations };
+			fidelityDisclosure.textContent = fidelityText(artifactCapture.fidelity, artifactCapture.screenshotFailureNote);
+			void scheduleDraftSave(true);
+		},
+		onCancel: () => comment.focus(),
+		onError: message => setComposerMessage(message, "error"),
+	}) : { open: async () => false, close: () => false, current: null };
 	const submit = document.createElement("button");
 	submit.type = "submit";
 	submit.textContent = "Send";
@@ -907,13 +1218,16 @@ export function trustedReviewHostScript(): string {
 	quickDraw.addEventListener("click", event => { if (event && event.isTrusted === true) openAnnotationEditor(); });
 	composerActions.insertBefore(quickDraw, submit);
 	captureTools.append(selectTarget, clearTarget, drawOnScreenshot);
-	form.append(annotationCardHeader, selectedTarget, label, comment, composerActions, annotationProperties, mentionDetails, captureTools, composerContext);
+	form.append(annotationCardHeader, selectedTarget, label, comment, mentionListbox, composerMessage, retryOperationButton, composerActions, fidelityDisclosure, richTools, copyRequest, annotationEditorContainer, annotationProperties, mentionDetails, captureTools, composerContext);
 	form.hidden = true;
-	controls.replaceChildren(header, status, list);
+	controls.replaceChildren(header, creationMenu, filterBar, status, pinLimit, list, pagination);
 	if (embeddedSiteOrigin) watchButton.hidden = true;
 	panel.hidden = true;
 	document.body.appendChild(launcherDock);
+	document.body.appendChild(restoreVisibility);
 	document.body.appendChild(form);
+	document.body.appendChild(staleIndicator);
+	document.body.appendChild(storageNotice);
 	const annotationModeBar = document.createElement("section");
 	annotationModeBar.className = "shiplet-annotation-modebar";
 	annotationModeBar.setAttribute("data-shiplet-annotation-modebar", "v1");
@@ -946,6 +1260,51 @@ export function trustedReviewHostScript(): string {
 	pinLayer.className = "shiplet-review-pin-layer";
 	pinLayer.setAttribute("aria-label", "Contextual review comments");
 	document.body.appendChild(pinLayer);
+	const pageCommentsMenu = document.createElement("div");
+	pageCommentsMenu.className = "shiplet-review-page-comments-menu";
+	pageCommentsMenu.setAttribute("role", "menu");
+	pageCommentsMenu.hidden = true;
+	pageCommentsMenu.addEventListener("keydown", (event) => {
+		if (!event || event.isTrusted !== true) return;
+		const choices = Array.from(pageCommentsMenu.querySelectorAll("button"));
+		const active = choices.indexOf(document.activeElement);
+		if (event.key === "Escape") { event.preventDefault(); pageCommentsMenu.hidden = true; pageCommentsButton.setAttribute("aria-expanded", "false"); pageCommentsButton.focus(); }
+		else if (event.key === "ArrowDown" || event.key === "ArrowRight") { event.preventDefault(); choices[(active + 1 + choices.length) % choices.length]?.focus(); }
+		else if (event.key === "ArrowUp" || event.key === "ArrowLeft") { event.preventDefault(); choices[(active - 1 + choices.length) % choices.length]?.focus(); }
+		else if (event.key === "Home") { event.preventDefault(); choices[0]?.focus(); }
+		else if (event.key === "End") { event.preventDefault(); choices[choices.length - 1]?.focus(); }
+	});
+	if (embeddedSiteOrigin) {
+		pageCommentsMenu.className += " shiplet-review-page-comments-menu-embedded";
+		actions.append(pageCommentsMenu);
+	} else {
+		document.body.appendChild(pageCommentsButton);
+		document.body.appendChild(pageCommentsMenu);
+	}
+	const contextualThread = document.createElement("section");
+	contextualThread.id = "shiplet-contextual-review-thread";
+	contextualThread.className = "shiplet-contextual-thread";
+	contextualThread.setAttribute("role", "region");
+	contextualThread.setAttribute("data-shiplet-contextual-thread", "v1");
+	contextualThread.hidden = true;
+	const contextualThreadHeader = document.createElement("header");
+	contextualThreadHeader.className = "shiplet-contextual-thread-header";
+	const contextualThreadTitle = document.createElement("strong");
+	contextualThreadTitle.className = "shiplet-contextual-thread-title";
+	const contextualTargetStatus = document.createElement("p");
+	contextualTargetStatus.className = "shiplet-contextual-thread-target-status";
+	contextualTargetStatus.setAttribute("role", "status");
+	contextualTargetStatus.hidden = true;
+	const contextualThreadClose = document.createElement("button");
+	contextualThreadClose.type = "button";
+	contextualThreadClose.className = "shiplet-contextual-thread-close";
+	contextualThreadClose.textContent = "Close";
+	contextualThreadClose.setAttribute("data-shiplet-contextual-thread-close", "v1");
+	const contextualThreadBody = document.createElement("div");
+	contextualThreadBody.className = "shiplet-contextual-thread-body";
+	contextualThreadHeader.append(contextualThreadTitle, contextualThreadClose);
+	contextualThread.append(contextualThreadHeader, contextualTargetStatus, contextualThreadBody);
+	document.body.appendChild(contextualThread);
 	const widgetRecovery = widget ? document.createElement("section") : null;
 	const widgetRecoveryMessage = widget ? document.createElement("p") : null;
 	const widgetRetry = widget ? document.createElement("button") : null;
@@ -1001,8 +1360,14 @@ export function trustedReviewHostScript(): string {
 	let artifactChannelNonce = "";
 	let artifactChannelConnected = false;
 	let pendingArtifactRequestId = "";
+	let pendingPageCaptureRequestId = "";
+	let pendingPageCapturePageUrl = "";
+	let artifactCaptureReadyRequestId = "";
+	let artifactCapturePostedNonce = "";
 	let artifactCapture = null;
 	let artifactCaptureRequestId = "";
+	const defaultReviewPreferences = Object.freeze({ version: 1, dock: "bottom-right", launch: "manual", overlaysVisible: true, bubbleColor: "#B44729", annotation: { tool: "pen", color: "#D92D5B", strokeWidth: 5 }, motion: "system", copyRequestsEnabled: false });
+	let reviewPreferences = JSON.parse(JSON.stringify(defaultReviewPreferences));
 	let artifactViewport = null;
 	let artifactAnchor = null;
 	let artifactScreenshotBase = null;
@@ -1016,13 +1381,59 @@ export function trustedReviewHostScript(): string {
 	let annotationStrokes = [];
 	let annotationActive = false;
 	let annotationExpanded = false;
+	let annotationPreparing = false;
 	let annotationSelecting = false;
 	let annotationDrag = null;
 	let annotationComposerOffset = null;
 	let watching = false;
 	let renderedItems = [];
 	let activeFeedbackId = "";
+	let activeThreadPresentation = "";
+	let contextualTrigger = null;
 	let threadViews = [];
+	const threadStates = new Map();
+	let refreshGeneration = 0;
+	let firstPageSerial = 0;
+	let nextCursor = null;
+	let nextPageInFlight = "";
+	let nextPageFailed = false;
+	let unsupportedFilter = "";
+	const filterPreferenceKey = "shiplet.review.filters.v1:" + new URL(location.href).origin + ":" + shipletId;
+	const defaultFilters = { scope: "page", prefix: "", state: "open", actor: "everyone", revision: "all" };
+	let filterPreferences = { ...defaultFilters };
+	let memoryFilterPreferences = null;
+	let composerOperation = null;
+	let topDraftVersion = 1;
+	let topOperationSnapshot = null;
+	let composerMessageKind = "";
+	let activeComposition = false;
+	let reviewContext = null;
+	let reviewContextKey = "";
+	let contextGeneration = 0;
+	let contextReady = !draftContextUrl || reviewSubmissionMode === "sandbox";
+	let contextFailure = "";
+	let draftDb = null;
+	let draftStorageState = "unknown";
+	let draftSaveTimer = 0;
+	let draftSaveInFlight = null;
+	let restoredDraft = null;
+	let overlayVisible = true;
+	let savedTargetDescriptors = [];
+	let savedTargetGeometry = new Map();
+	let bridgeLifecycleSequence = 0;
+	let bridgeLifecycleTimer = 0;
+	let bridgeLeaseTimer = 0;
+	let bridgeGeneration = 0;
+	let bridgeReady = false;
+	let bridgeLastAlive = 0;
+	let bridgeReconnectTimer = 0;
+	let bridgeRouteGeneration = 0;
+	let bridgeGeometrySeen = false;
+	let pageCommentsItems = [];
+	let overlapStacks = [];
+	const operationReceipts = [];
+	let pendingRevealId = "";
+	let operationPollRequestId = "";
 	let mentionUsers = [];
 	let presenceSocket = null;
 	let presenceReconnectTimer = 0;
@@ -1047,6 +1458,129 @@ export function trustedReviewHostScript(): string {
 	let widgetHandshakeTimer = 0;
 	const seenWidgetRequestIds = new Set();
 	const reducedMotion = typeof window.matchMedia === "function" && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+	function canonicalReviewPageKey(value) {
+		try {
+			const url = new URL(value);
+			url.search = "";
+			if (url.hash.startsWith("#/") && !url.hash.startsWith("#//")) url.hash = url.hash.split("?")[0];
+			else url.hash = "";
+			return url.origin + url.pathname + url.hash;
+		} catch { return ""; }
+	}
+
+	function normalizedPrefix(value) {
+		try {
+			const current = new URL(reviewPageUrl);
+			const url = new URL(String(value || ""), current.origin);
+			if (url.origin !== current.origin || url.username || url.password || url.search || url.hash) return "";
+			url.pathname = url.pathname || "/";
+			return url.origin + url.pathname;
+		} catch { return ""; }
+	}
+
+	function readFilterPreferences() {
+		let raw = "";
+		try { if (typeof localStorage === "object" && localStorage) raw = localStorage.getItem(filterPreferenceKey) || ""; } catch {}
+		let parsed = memoryFilterPreferences;
+		if (raw && raw.length <= 2048) {
+			try { parsed = JSON.parse(raw); } catch {}
+		}
+		if (!isRecord(parsed)) return { ...defaultFilters };
+		return {
+			scope: ["page", "prefix", "site"].includes(parsed.scope) ? parsed.scope : "page",
+			prefix: normalizedPrefix(parsed.prefix) || "",
+			state: ["open", "closed", "all"].includes(parsed.state) ? parsed.state : "open",
+			actor: ["everyone", "mine", "mentions"].includes(parsed.actor) ? parsed.actor : "everyone",
+			revision: parsed.revision === "current" ? "current" : "all",
+		};
+	}
+
+	function persistFilterPreferences() {
+		const safe = {
+			scope: filterPreferences.scope,
+			prefix: filterPreferences.prefix,
+			state: filterPreferences.state,
+			actor: filterPreferences.actor,
+			revision: filterPreferences.revision,
+		};
+		memoryFilterPreferences = safe;
+		try { if (typeof localStorage === "object" && localStorage) localStorage.setItem(filterPreferenceKey, JSON.stringify(safe)); } catch {}
+	}
+
+	function filterScopeLabel() {
+		if (filterPreferences.scope === "prefix") {
+			try { return "Path " + new URL(filterPreferences.prefix).pathname; } catch { return "Path prefix"; }
+		}
+		if (filterPreferences.scope === "site") return embeddedSiteOrigin ? "All pages on this site" : "All authorized pages";
+		return "Current page";
+	}
+
+	function updateFilterUi() {
+		scopeSelect.value = filterPreferences.scope;
+		stateSelect.value = filterPreferences.state;
+		actorSelect.value = filterPreferences.actor;
+		revisionSelect.value = filterPreferences.revision;
+		prefixInput.value = filterPreferences.prefix || normalizedPrefix(reviewPageUrl);
+		prefixLabel.hidden = filterPreferences.scope !== "prefix";
+		const stateLabelValue = filterPreferences.state === "all" ? "Open and closed" : filterPreferences.state === "closed" ? "Closed" : "Open";
+		const actorLabelValue = filterPreferences.actor === "mine" ? "Mine" : filterPreferences.actor === "mentions" ? "Mentions of me" : "Everyone";
+		const revisionLabelValue = filterPreferences.revision === "current" ? "Current revision" : "All revisions";
+		activeScopeSummary.textContent = [filterScopeLabel(), stateLabelValue, revisionLabelValue, actorLabelValue].join(" · ");
+		resetFilters.hidden = filterPreferences.scope === "page" && filterPreferences.state === "open" && filterPreferences.actor === "everyone" && filterPreferences.revision === "all";
+	}
+
+	function showFilterError(message) {
+		filterError.textContent = message || "";
+		filterError.hidden = !message;
+	}
+
+	function buildListUrl(cursor) {
+		const url = new URL(apiUrl);
+		for (const key of ["includeClosed", "status", "pageUrl", "pagePrefix", "scope", "state", "revisionId", "submittedByMe", "mentionedMe", "cursor", "limit"]) url.searchParams.delete(key);
+		url.searchParams.set("limit", "100");
+		url.searchParams.set("state", filterPreferences.state);
+		if (embeddedSiteOrigin) {
+			url.searchParams.set("scope", filterPreferences.scope);
+			if (filterPreferences.scope === "page") url.searchParams.set("pageUrl", reviewPageUrl);
+			if (filterPreferences.scope === "prefix") url.searchParams.set("pagePrefix", filterPreferences.prefix);
+		} else if (filterPreferences.scope === "page") {
+			url.searchParams.set("pageUrl", reviewPageUrl);
+		} else if (filterPreferences.scope === "prefix") {
+			url.searchParams.set("pagePrefix", filterPreferences.prefix);
+		}
+		if (filterPreferences.revision === "current") url.searchParams.set("revisionId", revisionId);
+		if (filterPreferences.actor === "mine") url.searchParams.set("submittedByMe", "true");
+		if (filterPreferences.actor === "mentions") url.searchParams.set("mentionedMe", "true");
+		if (cursor) url.searchParams.set("cursor", cursor);
+		return url.toString();
+	}
+
+	function validateListPayload(value) {
+		if (!isRecord(value) || !Array.isArray(value.feedback) || !Object.prototype.hasOwnProperty.call(value, "nextCursor") || (value.nextCursor !== null && (!boundedString(value.nextCursor, 4096) || !value.nextCursor))) {
+			throw new Error("Review service returned an incomplete page.");
+		}
+		return { feedback: value.feedback, nextCursor: value.nextCursor };
+	}
+
+	function mergeByFeedbackId(primary, retained) {
+		const merged = [];
+		const seen = new Set();
+		for (const entry of [...primary, ...retained]) {
+			if (!isRecord(entry) || !isIdentifier(entry.id) || seen.has(entry.id)) continue;
+			seen.add(entry.id); merged.push(entry);
+		}
+		return merged;
+	}
+
+	function currentPageItem(item) {
+		return isRecord(item) && boundedString(item.page_url, 4096) && canonicalReviewPageKey(item.page_url) === canonicalReviewPageKey(reviewPageUrl);
+	}
+
+	function statusMatchesFilter(value) {
+		const closed = value === "Done" || value === "Dropped";
+		return filterPreferences.state === "all" || (filterPreferences.state === "closed" ? closed : !closed);
+	}
 
 	function itemText(item) {
 		if (!item || typeof item !== "object") return "Comment";
@@ -1151,6 +1685,96 @@ export function trustedReviewHostScript(): string {
 
 	function reviewedPathname() {
 		try { return new URL(reviewPageUrl).pathname || "/"; } catch { return "/"; }
+	}
+
+	function validReviewPreferences(value) {
+		if (!isRecord(value) || !hasExactKeys(value, ["version", "dock", "launch", "overlaysVisible", "bubbleColor", "annotation", "motion", "copyRequestsEnabled"]) || value.version !== 1) return null;
+		if (!["top-left", "top-right", "bottom-left", "bottom-right"].includes(value.dock) || !["manual", "open-comments"].includes(value.launch) || typeof value.overlaysVisible !== "boolean" || !/^#[0-9A-Fa-f]{6}$/.test(value.bubbleColor) || !["system", "reduced"].includes(value.motion) || typeof value.copyRequestsEnabled !== "boolean") return null;
+		if (!isRecord(value.annotation) || !hasExactKeys(value.annotation, ["tool", "color", "strokeWidth"]) || !["pen", "arrow", "text"].includes(value.annotation.tool) || !/^#[0-9A-Fa-f]{6}$/.test(value.annotation.color) || !Number.isInteger(value.annotation.strokeWidth) || value.annotation.strokeWidth < 1 || value.annotation.strokeWidth > 16) return null;
+		return JSON.parse(JSON.stringify(value));
+	}
+
+	function preferenceStorageKey() {
+		if (!reviewContext || !reviewContext.actor || !isIdentifier(reviewContext.actor.id) || !isIdentifier(reviewContext.projectId)) return "";
+		return "shiplet.review.preferences.v1:" + reviewContext.actor.kind + ":" + reviewContext.actor.id + ":" + reviewContext.projectId;
+	}
+
+	function applyReviewPreferences() {
+		const dock = reviewPreferences.dock;
+		page.setAttribute("data-review-dock", dock);
+		document.body.setAttribute("data-review-dock", dock);
+		launcherDock.setAttribute("data-review-dock", dock);
+		panel.setAttribute("data-review-dock", dock);
+		form.setAttribute("data-review-dock", dock);
+		dockSelect.value = dock;
+		launchSelect.value = reviewPreferences.launch;
+		motionSelect.value = reviewPreferences.motion;
+		copyRequestsToggle.checked = reviewPreferences.copyRequestsEnabled;
+		copyRequest.hidden = !reviewPreferences.copyRequestsEnabled;
+		page.style.setProperty("--shiplet-review-bubble", reviewPreferences.bubbleColor);
+		const osReduced = typeof matchMedia === "function" && matchMedia("(prefers-reduced-motion: reduce)").matches;
+		document.body.setAttribute("data-review-reduced-motion", osReduced || reviewPreferences.motion === "reduced" ? "true" : "false");
+		if (overlayVisible !== reviewPreferences.overlaysVisible) setOverlayVisible(reviewPreferences.overlaysVisible);
+		if (embeddedSiteOrigin && window !== parent) parent.postMessage({ protocol: "shiplet.embed.presentation.v1", dock, overlayVisible: Boolean(reviewPreferences.overlaysVisible), reviewVisible: true }, embeddedSiteOrigin);
+	}
+
+	function hydrateReviewPreferences() {
+		const key = preferenceStorageKey();
+		if (!key) return;
+		try {
+			const stored = localStorage.getItem(key);
+			if (stored) {
+				const parsed = validReviewPreferences(JSON.parse(stored));
+				if (parsed) reviewPreferences = parsed;
+				else storageDisclosure("Saved review preferences were corrupt and were reset.");
+			}
+		} catch { storageDisclosure("Preferences are using memory only and will not persist."); }
+		applyReviewPreferences();
+		if (reviewPreferences.launch === "open-comments") setPanelOpen(true);
+	}
+
+	function persistReviewPreferences() {
+		const key = preferenceStorageKey();
+		if (!key) return;
+		try { localStorage.setItem(key, JSON.stringify(reviewPreferences)); }
+		catch { storageDisclosure("Preferences are using memory only and will not persist."); }
+		applyReviewPreferences();
+	}
+
+	function cleanReviewLink(mode) {
+		const target = new URL(reviewPageUrl);
+		for (const key of Array.from(target.searchParams.keys())) {
+			const normalized = key.toLowerCase();
+			if (["access_token", "authorization_code", "claim", "claim_url", "code", "credential", "id_token", "magic_link", "nonce", "oauth_code", "oauth_token", "password", "policy", "presence_token", "review_token", "session", "sig", "signature", "signed", "state", "token"].includes(normalized) || normalized.startsWith("__shiplet") || normalized.startsWith("shiplet_internal")) target.searchParams.delete(key);
+		}
+		target.searchParams.delete("shiplet_review");
+		target.searchParams.delete("shiplet_comments");
+		target.searchParams.set(mode === "review" ? "shiplet_review" : "shiplet_comments", "hidden");
+		return target.toString();
+	}
+
+	async function copyCleanReviewLink(mode) {
+		const value = cleanReviewLink(mode);
+		try {
+			if (!navigator.clipboard || typeof navigator.clipboard.writeText !== "function") throw new Error("clipboard");
+			await navigator.clipboard.writeText(value);
+			cleanLinkFallback.hidden = true;
+			setStatus("Review link copied.", "ready");
+		} catch {
+			cleanLinkFallback.value = value;
+			cleanLinkFallback.hidden = false;
+			cleanLinkFallback.focus();
+			if (typeof cleanLinkFallback.select === "function") cleanLinkFallback.select();
+			setStatus("Clipboard access was denied. Copy the selected review link or retry.", "error");
+		}
+	}
+
+	function applyTransientVisibility() {
+		let hidden = "";
+		try { const current = new URL(location.href); hidden = current.searchParams.get("shiplet_review") === "hidden" ? "review" : current.searchParams.get("shiplet_comments") === "hidden" ? "comments" : ""; } catch {}
+		launcherDock.hidden = hidden === "review";
+		if (hidden) { panel.hidden = true; if (hidden === "comments") setOverlayVisible(false); restoreVisibility.hidden = false; restoreVisibility.textContent = hidden === "review" ? "Show review UI" : "Show comments"; }
+		else restoreVisibility.hidden = true;
 	}
 
 	function sendPresence(payload) {
@@ -1502,8 +2126,151 @@ export function trustedReviewHostScript(): string {
 		status.hidden = kind === "ready" && /^\d+ comments?\.$/.test(message);
 	}
 
+	function updateOverlayUi() {
+		const effectiveReviewOverlay = overlayVisible && !annotationSelecting;
+		overlayToggle.textContent = overlayVisible ? "Hide comments" : "Show comments";
+		overlayToggle.setAttribute("aria-label", overlayVisible ? "Hide comments" : "Show comments");
+		overlayToggle.setAttribute("aria-pressed", overlayVisible ? "false" : "true");
+		pinLayer.hidden = !effectiveReviewOverlay;
+		pageCommentsButton.hidden = !effectiveReviewOverlay || pageCommentsItems.length === 0 || activeThreadPresentation === "contextual";
+		if (!effectiveReviewOverlay) {
+			pageCommentsButton.hidden = true;
+			if (pageCommentsMenu) pageCommentsMenu.hidden = true;
+			for (const stack of overlapStacks) if (stack.menu) { stack.menu.hidden = true; stack.trigger?.setAttribute("aria-expanded", "false"); }
+		}
+		updateReviewPinPositions();
+	}
+
+	function setOverlayVisible(next, persist = true) {
+		overlayVisible = Boolean(next);
+		updateOverlayUi();
+		notifyEmbedView();
+		if (persist) void scheduleDraftSave(false);
+		if (overlayVisible && bridgeReady) {
+			registerSavedTargets();
+			if (typeof window.requestAnimationFrame === "function") window.requestAnimationFrame(() => updateReviewPinPositions());
+			else updateReviewPinPositions();
+		}
+	}
+
+	function renderPageCommentsMenu() {
+		if (!pageCommentsMenu) return;
+		pageCommentsMenu.replaceChildren();
+		for (const item of pageCommentsItems) {
+			const view = threadViews.find((entry) => entry.id === item.id);
+			if (!view) continue;
+			const button = document.createElement("button");
+			button.type = "button";
+			button.setAttribute("role", "menuitem");
+			button.textContent = (boundedString(item.ticket_label, 120) ? item.ticket_label : "Comment") + " · " + String(item.comment || "Comment").replace(/\s+/g, " ").slice(0, 96);
+			button.addEventListener("click", (event) => {
+				if (!event || event.isTrusted !== true) return;
+				pageCommentsMenu.hidden = true;
+				pageCommentsButton.setAttribute("aria-expanded", "false");
+				setActiveThread(view, "list", pageCommentsButton);
+				view.row.scrollIntoView?.({ block: "nearest", behavior: reducedMotion ? "auto" : "smooth" });
+				view.button.focus({ preventScroll: true });
+			});
+			pageCommentsMenu.appendChild(button);
+		}
+	}
+
+	function renderPinStacks() {
+		overlapStacks = [];
+		const candidates = threadViews.filter((entry) => entry.pin && entry.id && !entry.pin.hidden && liveReviewPinPoint(entry.item));
+		const visited = new Set();
+		for (const entry of candidates) {
+			if (visited.has(entry.id)) continue;
+			const group = [];
+			const queue = [entry];
+			visited.add(entry.id);
+			while (queue.length) {
+				const current = queue.shift();
+				group.push(current);
+				const currentPoint = liveReviewPinPoint(current.item);
+				for (const other of candidates) {
+					if (visited.has(other.id)) continue;
+					const otherPoint = liveReviewPinPoint(other.item);
+					if (!currentPoint || !otherPoint) continue;
+					if (Math.abs(currentPoint.x - otherPoint.x) <= 36 && Math.abs(currentPoint.y - otherPoint.y) <= 36) {
+						visited.add(other.id);
+						queue.push(other);
+					}
+				}
+			}
+			if (group.length < 2) continue;
+			const stack = { entries: group, trigger: null, menu: null };
+			const trigger = document.createElement("button");
+			trigger.type = "button";
+			trigger.className = "shiplet-review-pin-stack";
+			trigger.textContent = String(group.length);
+			trigger.setAttribute("aria-label", group.length + " comments at this location");
+			trigger.setAttribute("aria-haspopup", "menu");
+			trigger.setAttribute("aria-expanded", "false");
+			const menu = document.createElement("div");
+			menu.className = "shiplet-review-pin-stack-menu";
+			menu.setAttribute("role", "menu");
+			menu.hidden = true;
+			for (const member of group) {
+				if (member.pin) member.pin.hidden = true;
+				const choice = document.createElement("button");
+				choice.type = "button";
+				choice.setAttribute("role", "menuitem");
+				const ticket = boundedString(member.item.ticket_label, 120) ? member.item.ticket_label : "Comment";
+				const status = threadState(member.id, member.item).confirmedStatus;
+				choice.textContent = ticket + " · " + status + " · " + (boundedString(member.item.comment, 180) ? member.item.comment : "Comment");
+				choice.addEventListener("click", (event) => {
+					if (!event || event.isTrusted !== true) return;
+					menu.hidden = true;
+					trigger.setAttribute("aria-expanded", "false");
+					setActiveThread(member, "contextual", trigger);
+					requestSavedTargetReveal(member.id);
+				});
+				menu.appendChild(choice);
+			}
+			trigger.addEventListener("click", (event) => {
+				if (!event || event.isTrusted !== true) return;
+				const opening = menu.hidden;
+				for (const other of overlapStacks) if (other.menu && other.menu !== menu) { other.menu.hidden = true; other.trigger?.setAttribute("aria-expanded", "false"); }
+				menu.hidden = !opening;
+				trigger.setAttribute("aria-expanded", opening ? "true" : "false");
+				if (opening) menu.querySelector("button")?.focus();
+			});
+			menu.addEventListener("keydown", (event) => {
+				if (!event || event.isTrusted !== true) return;
+				const choices = Array.from(menu.querySelectorAll("button"));
+				const active = choices.indexOf(document.activeElement);
+				if (event.key === "Escape") { event.preventDefault(); menu.hidden = true; trigger.setAttribute("aria-expanded", "false"); trigger.focus(); }
+				else if (event.key === "ArrowDown" || event.key === "ArrowRight") { event.preventDefault(); choices[(active + 1 + choices.length) % choices.length]?.focus(); }
+				else if (event.key === "ArrowUp" || event.key === "ArrowLeft") { event.preventDefault(); choices[(active - 1 + choices.length) % choices.length]?.focus(); }
+				else if (event.key === "Home") { event.preventDefault(); choices[0]?.focus(); }
+				else if (event.key === "End") { event.preventDefault(); choices[choices.length - 1]?.focus(); }
+			});
+			stack.trigger = trigger;
+			stack.menu = menu;
+			pinLayer.append(trigger, menu);
+			overlapStacks.push(stack);
+		}
+		positionPinStacks();
+	}
+
+	function positionPinStacks() {
+		const effectiveReviewOverlay = overlayVisible && !annotationSelecting;
+		for (const stack of overlapStacks) {
+			const points = stack.entries.map((entry) => liveReviewPinPoint(entry.item)).filter((point) => point && point.x >= 0 && point.x <= window.innerWidth && point.y >= -16 && point.y <= window.innerHeight);
+			if (!points.length || !effectiveReviewOverlay) { stack.trigger.hidden = true; stack.menu.hidden = true; continue; }
+			stack.trigger.hidden = false;
+			const point = points.reduce((sum, value) => ({ x: sum.x + value.x, y: sum.y + value.y }), { x: 0, y: 0 });
+			point.x /= points.length; point.y /= points.length;
+			stack.trigger.style.left = point.x + "px";
+			stack.trigger.style.top = point.y + "px";
+			stack.menu.style.left = Math.max(8, Math.min(window.innerWidth - 328, point.x - 150)) + "px";
+			stack.menu.style.top = Math.max(8, Math.min(window.innerHeight - 180, point.y + 24)) + "px";
+		}
+	}
+
 	function updateCount(value) {
-		const count = Math.max(0, Math.min(100, Number(value) || 0));
+		const count = Math.max(0, Math.floor(Number(value) || 0));
 		launcherCount.textContent = String(count);
 		launcherCount.setAttribute("aria-label", count + (count === 1 ? " comment" : " comments"));
 		commentsLauncher.setAttribute("aria-label", "Open " + count + (count === 1 ? " comment" : " comments") + " for " + revisionId);
@@ -1523,10 +2290,76 @@ export function trustedReviewHostScript(): string {
 
 	function selectedMentions(select) {
 		const selected = [];
+		if (!select) return selected;
 		for (const option of Array.from(select.selectedOptions || []).slice(0, 20)) {
 			if (isIdentifier(option.value) && mentionUsers.some((user) => user.id === option.value)) selected.push({ userId: option.value });
 		}
 		return selected;
+	}
+
+	function threadState(feedbackId, item) {
+		const key = shipletId + "\n" + revisionId + "\n" + reviewPageUrl + "\n" + feedbackId;
+		let state = threadStates.get(key);
+		if (!state) {
+			state = {
+				key,
+				text: "",
+				mentions: [],
+				confirmedStatus: boundedString(item && item.status, 40) ? item.status : "New",
+				replyOperation: null,
+				statusOperation: null,
+				message: "",
+				messageKind: "",
+			};
+			threadStates.set(key, state);
+		} else if (!state.statusOperation && boundedString(item && item.status, 40)) {
+			state.confirmedStatus = item.status;
+		}
+		return state;
+	}
+
+	function syncRenderedThreadDrafts() {
+		for (const view of threadViews) {
+			if (!view || !view.id || !view.state) continue;
+			if (view.replyInput) view.state.text = String(view.replyInput.value || "").slice(0, 5000);
+			if (view.replyMentions) view.state.mentions = selectedMentions(view.replyMentions);
+		}
+	}
+
+	function setComposerMessage(message, kind) {
+		composerMessageKind = kind || "";
+		composerMessage.textContent = message || "";
+		composerMessage.hidden = !message;
+		composerMessage.setAttribute("role", kind === "error" ? "alert" : "status");
+		composerMessage.setAttribute("data-state", kind || "ready");
+		retryOperationButton.hidden = !(topOperationSnapshot && topOperationSnapshot.state === "failed");
+	}
+
+	function setComposerBusy(pending) {
+		const busy = Boolean(pending) || Boolean(topOperationSnapshot && ["pending", "unknown"].includes(topOperationSnapshot.state));
+		comment.disabled = busy;
+		mentionSelect.disabled = busy;
+		submit.disabled = busy;
+		cancelComposer.disabled = false;
+	}
+
+	function showStaleIndicator(message, action) {
+		staleMessage.textContent = message;
+		if (action === "retry-mentions") {
+			staleRefresh.textContent = "Retry";
+			staleRefresh.setAttribute("aria-label", "Retry Mentions");
+		} else {
+			staleRefresh.textContent = "Refresh";
+			staleRefresh.setAttribute("aria-label", "Refresh comments");
+		}
+		staleIndicator.hidden = false;
+	}
+
+	function clearStaleIndicator() {
+		staleIndicator.hidden = true;
+		staleMessage.textContent = "";
+		staleRefresh.textContent = "Refresh";
+		staleRefresh.setAttribute("aria-label", "Refresh comments");
 	}
 
 	function createReplyMentionSelect(ticket) {
@@ -1568,6 +2401,57 @@ export function trustedReviewHostScript(): string {
 			x,
 			y,
 		};
+	}
+
+	function savedTargetForItem(item) {
+		if (!isRecord(item) || !isIdentifier(item.id) || !currentPageItem(item) || !isRecord(item.selected_element) || !boundedString(item.selected_element.selector, 1200) || !item.selected_element.selector || !boundedString(item.selected_element.tagName, 64) || !/^[A-Z][A-Z0-9-]{0,63}$/.test(item.selected_element.tagName)) return null;
+		return { feedbackId: item.id, selector: item.selected_element.selector, expectedTag: item.selected_element.tagName };
+	}
+
+	function liveReviewPinPoint(item) {
+		if (!isRecord(item) || !isIdentifier(item.id) || !currentPageItem(item)) return null;
+		const descriptor = savedTargetForItem(item);
+		if (descriptor) {
+			if (!bridgeGeometrySeen) return reviewCoordinates(item);
+			const geometry = savedTargetGeometry.get(item.id);
+			if (!geometry || geometry.eligible !== true || geometry.offscreen === true || !isRecord(geometry.coordinates)) return null;
+			const x = Number(geometry.coordinates.viewportX);
+			const y = Number(geometry.coordinates.viewportY);
+			return Number.isFinite(x) && Number.isFinite(y) ? { x, y } : null;
+		}
+		return reviewCoordinates(item);
+	}
+
+	function parseSavedTargetGeometry(data) {
+		if (!isRecord(data) || !hasExactKeys(data, ["protocol", "type", "channelNonce", "shipletId", "revisionId", "targets"]) || data.protocol !== "shiplet.artifact.saved-targets.geometry.v1" || data.type !== "update" || data.channelNonce !== artifactChannelNonce || data.shipletId !== shipletId || data.revisionId !== revisionId || !Array.isArray(data.targets) || data.targets.length > 250) return null;
+		const next = new Map();
+		for (const target of data.targets) {
+			if (!isRecord(target) || !hasExactKeys(target, ["feedbackId", "eligible", "offscreen", "coordinates", "targetRect"]) || !isIdentifier(target.feedbackId) || typeof target.eligible !== "boolean" || typeof target.offscreen !== "boolean" || (target.coordinates !== null && !isRecord(target.coordinates)) || (target.targetRect !== null && !isRecord(target.targetRect))) return null;
+			if (target.coordinates && (!hasExactKeys(target.coordinates, ["pageX", "pageY", "viewportX", "viewportY"]) || !finiteNumber(target.coordinates.pageX, -10000000, 10000000) || !finiteNumber(target.coordinates.pageY, -10000000, 10000000) || !finiteNumber(target.coordinates.viewportX, -100000, 100000) || !finiteNumber(target.coordinates.viewportY, -100000, 100000))) return null;
+			if (target.targetRect && (!hasExactKeys(target.targetRect, ["left", "top", "width", "height"]) || !finiteNumber(target.targetRect.left, -100000, 100000) || !finiteNumber(target.targetRect.top, -100000, 100000) || !finiteNumber(target.targetRect.width, 0, 100000) || !finiteNumber(target.targetRect.height, 0, 100000))) return null;
+			next.set(target.feedbackId, target);
+		}
+		return next;
+	}
+
+	function registerSavedTargets() {
+		if (!artifactPort || !artifactChannelConnected || !bridgeReady || !overlayVisible || !contextReady) return;
+		const candidates = renderedItems.filter((item) => savedTargetForItem(item));
+		const selected = activeFeedbackId ? candidates.find((item) => item.id === activeFeedbackId) : null;
+		const ordered = selected ? [selected, ...candidates.filter((item) => item !== selected)] : candidates;
+		savedTargetDescriptors = ordered.slice(0, 250).map((item) => savedTargetForItem(item)).filter(Boolean);
+		try { artifactPort.postMessage({ protocol: "shiplet.artifact.saved-targets.command.v1", type: "replace", channelNonce: artifactChannelNonce, shipletId, revisionId, targets: savedTargetDescriptors }); } catch {}
+	}
+
+	function requestSavedTargetReveal(id) {
+		if (!id || !bridgeReady || !artifactPort || !savedTargetDescriptors.some((descriptor) => descriptor.feedbackId === id)) {
+			pendingRevealId = "";
+			if (id && savedTargetForItem(threadViews.find((entry) => entry.id === id)?.item)) setStatus("Target unavailable", "ready");
+			return;
+		}
+		pendingRevealId = id;
+		setStatus("Revealing target…", "loading");
+		try { artifactPort.postMessage({ protocol: "shiplet.artifact.saved-target.reveal.v1", type: "reveal", channelNonce: artifactChannelNonce, shipletId, revisionId, feedbackId: id }); } catch { setStatus("Target unavailable", "ready"); }
 	}
 
 	function annotationCardSize(expanded) {
@@ -1716,13 +2600,14 @@ export function trustedReviewHostScript(): string {
 
 	function notifyEmbedView() {
 		if (!embeddedSiteOrigin || window === parent) return;
-		const view = annotationEditing ? "drawing" : annotationSelecting ? "selecting" : annotationActive ? (annotationExpanded ? "expanded" : "composer") : !panel.hidden ? "comments" : "toolbar";
+		const view = annotationEditing ? "drawing" : annotationSelecting ? "selecting" : annotationActive ? (annotationExpanded ? "expanded" : "composer") : activeThreadPresentation === "contextual" && activeFeedbackId ? "thread" : !panel.hidden ? "comments" : "toolbar";
 		page.setAttribute("data-shiplet-embed-view", view);
 		const coordinates = artifactCapture && artifactCapture.coordinates;
-		parent.postMessage({ protocol: "shiplet.embed.ui.v1", view, anchor: coordinates ? { x: coordinates.pageX, y: coordinates.pageY } : null }, embeddedSiteOrigin);
+		parent.postMessage({ protocol: "shiplet.embed.ui.v1", view, anchor: coordinates ? { x: coordinates.pageX, y: coordinates.pageY } : null, activeFeedbackId: activeThreadPresentation === "contextual" ? activeFeedbackId : "", overlayVisible }, embeddedSiteOrigin);
 	}
 
 	function setAnnotationMode(active, selecting) {
+		annotationPreparing = false;
 		annotationActive = Boolean(active);
 		annotationSelecting = Boolean(active && selecting);
 		annotationModeBar.hidden = !annotationActive;
@@ -1731,58 +2616,193 @@ export function trustedReviewHostScript(): string {
 		launcher.setAttribute("data-panel-open", annotationActive ? "true" : "false");
 		artifact.setAttribute("data-shiplet-selecting", annotationSelecting ? "true" : "false");
 		document.body.setAttribute("data-shiplet-annotating", annotationActive ? "true" : "false");
+		updateOverlayUi();
 		notifyEmbedView();
 	}
 
 	function cancelTargetSelection() {
-		if (artifactPort && pendingArtifactRequestId) {
+		if (artifactPort && pendingPageCaptureRequestId) {
+			try { artifactPort.postMessage({ protocol: "shiplet.artifact.page-capture.command.v1", type: "cancel", channelNonce: artifactChannelNonce, shipletId, revisionId, requestId: pendingPageCaptureRequestId, pageUrl: pendingPageCapturePageUrl }); } catch {}
+		}
+		pendingPageCaptureRequestId = "";
+		pendingPageCapturePageUrl = "";
+		if (artifactPort && pendingArtifactRequestId && artifactCapturePostedNonce === artifactChannelNonce) {
 			try { artifactPort.postMessage({ protocol: "shiplet.artifact.capture.command.v1", type: "cancel", channelNonce: artifactChannelNonce, shipletId, revisionId, requestId: pendingArtifactRequestId }); } catch {}
 		}
 		pendingArtifactRequestId = "";
+		artifactCaptureReadyRequestId = "";
+		artifactCapturePostedNonce = "";
+		annotationPreparing = false;
 		annotationSelecting = false;
 		artifact.setAttribute("data-shiplet-selecting", "false");
+		updateOverlayUi();
+		notifyEmbedView();
 		selectTarget.textContent = artifactCapture ? "Change element" : "Select element";
 	}
 
-	function cancelAnnotationFlow() {
+	function hasAnnotationDraft() {
+		return Boolean(comment.value.trim() || selectedMentions(mentionSelect).length || artifactCapture || annotationStrokes.length || composerMessageKind === "pending");
+	}
+
+	function closeAnnotationFlow() {
+		const wasPreparing = annotationPreparing;
 		cancelTargetSelection();
+		closeAnnotationEditor();
+		if (annotationLayer) annotationLayer.hidden = true;
 		form.hidden = true;
 		annotationTargetPin.hidden = true;
 		annotationTargetFocus.hidden = true;
 		setAnnotationExpanded(false);
 		setAnnotationMode(false, false);
-		clearArtifactCapture();
 		composeButton.setAttribute("aria-expanded", "false");
-		launcher.focus();
+		(wasPreparing ? commentsLauncher : launcher).focus();
+	}
+
+	function discardAnnotationDraft() {
+		composerOperation = null;
+		setComposerBusy(false);
+		comment.value = "";
+		for (const option of Array.from(mentionSelect.options || [])) option.selected = false;
+		setComposerMessage("", "");
+		clearArtifactCapture();
+	}
+
+	function cancelAnnotationFlow() {
+		const wasPreparing = annotationPreparing;
+		closeAnnotationFlow();
+		discardAnnotationDraft();
+		if (wasPreparing) {
+			commentsLauncher.focus();
+			if (typeof window.setTimeout === "function") window.setTimeout(() => commentsLauncher.focus(), 0);
+		}
 	}
 
 	function showComposer(open) {
 		if (!open) {
-			cancelAnnotationFlow();
+			closeAnnotationFlow();
 			return;
 		}
 		setAnnotationMode(true, false);
 		setAnnotationExpanded(false);
 		form.hidden = false;
+		if (annotationLayer && annotationStrokes.length > 0) {
+			annotationLayer.hidden = false;
+			renderAnnotationCanvas();
+		}
 		anchorAnnotationComposer(artifactCapture, true);
 		composeButton.setAttribute("aria-expanded", "true");
 		comment.focus();
 	}
 
-	function setActiveThread(next) {
+	function canonicalPinLabel(item, ticket) {
+		const ticketNumber = Number(item && item.ticket_number);
+		if (Number.isInteger(ticketNumber) && ticketNumber > 0) return String(ticketNumber);
+		const match = boundedString(ticket, 120) ? ticket.match(/(?:^|[^0-9])(\d{1,9})$/) : null;
+		return match ? match[1] : "•";
+	}
+
+	function positionContextualThread(entry) {
+		if (!entry || embeddedSiteOrigin) {
+			contextualThread.style.left = "";
+			contextualThread.style.top = "";
+			return;
+		}
+		const point = liveReviewPinPoint(entry.item);
+		if (!point) {
+			contextualThread.style.left = "8px";
+			contextualThread.style.top = "8px";
+			return;
+		}
+		const margin = 8;
+		const viewportWidth = Math.max(1, Number(window.innerWidth) || 1);
+		const viewportHeight = Math.max(1, Number(window.innerHeight) || 1);
+		const width = Math.min(440, Math.max(280, viewportWidth - margin * 2));
+		const height = Math.min(560, Math.max(240, viewportHeight - margin * 2));
+		const preferredLeft = point.x + width + 32 <= viewportWidth ? point.x + 24 : point.x - width - 24;
+		const left = Math.max(margin, Math.min(viewportWidth - width - margin, preferredLeft));
+		const top = Math.max(margin, Math.min(viewportHeight - height - margin, point.y - 40));
+		contextualThread.style.left = Math.round(left) + "px";
+		contextualThread.style.top = Math.round(top) + "px";
+	}
+
+	function setReviewSurfaceOpenState() {
+		launcherDock.setAttribute("data-review-surface-open", !panel.hidden || !contextualThread.hidden ? "true" : "false");
+	}
+
+	function setActiveThread(next, presentation, trigger) {
+		const nextPresentation = next ? (presentation === "contextual" ? "contextual" : "list") : "";
 		activeFeedbackId = next ? next.id : "";
+		activeThreadPresentation = nextPresentation;
+		contextualTrigger = nextPresentation === "contextual" ? (trigger || next.pin || contextualTrigger) : null;
+		contextualThread.hidden = nextPresentation !== "contextual";
+		for (const entry of threadViews) {
+			if (entry.details.parentElement === contextualThreadBody) entry.row.appendChild(entry.details);
+		}
+		contextualThreadBody.replaceChildren();
 		for (const entry of threadViews) {
 			const active = entry === next;
+			const contextual = active && nextPresentation === "contextual";
 			entry.details.hidden = !active;
-			entry.button.setAttribute("aria-expanded", active ? "true" : "false");
-			entry.preview.hidden = active;
+			entry.button.setAttribute("aria-expanded", active && !contextual ? "true" : "false");
+			entry.preview.hidden = active && !contextual;
 			entry.row.setAttribute("data-active", active ? "true" : "false");
 			if (entry.pin) {
 				entry.pin.setAttribute("data-active", active ? "true" : "false");
+				entry.pin.setAttribute("aria-expanded", contextual ? "true" : "false");
 				if (active) entry.pin.setAttribute("aria-current", "true");
 				else entry.pin.removeAttribute("aria-current");
 			}
 		}
+		if (next && nextPresentation === "contextual") {
+			const ticket = boundedString(next.item.ticket_label, 120) ? next.item.ticket_label : "Comment";
+			contextualThreadTitle.textContent = ticket;
+			contextualThread.setAttribute("aria-label", "Thread " + ticket);
+			contextualThread.setAttribute("data-feedback-id", next.id);
+			contextualThreadClose.setAttribute("aria-label", "Close thread " + ticket);
+			const targetUnavailable = Boolean(savedTargetForItem(next.item) && !liveReviewPinPoint(next.item));
+			contextualTargetStatus.textContent = targetUnavailable ? "Target unavailable" : "";
+			contextualTargetStatus.hidden = !targetUnavailable;
+			contextualThreadBody.appendChild(next.details);
+			next.details.hidden = false;
+			positionContextualThread(next);
+		} else {
+			contextualTargetStatus.hidden = true;
+			contextualTargetStatus.textContent = "";
+			contextualThread.removeAttribute("aria-label");
+			contextualThread.removeAttribute("data-feedback-id");
+		}
+		setReviewSurfaceOpenState();
+		const effectiveReviewOverlay = overlayVisible && !annotationSelecting;
+		pageCommentsButton.hidden = !effectiveReviewOverlay || pageCommentsItems.length === 0 || activeThreadPresentation === "contextual";
+		if (activeThreadPresentation === "contextual") { pageCommentsMenu.hidden = true; pageCommentsButton.setAttribute("aria-expanded", "false"); }
+		notifyEmbedView();
+	}
+
+	function contextualFocusTarget(feedbackId) {
+		const isConnectedVisible = (element) => {
+			if (!element || element.isConnected === false || element.hidden) return false;
+			const style = typeof window.getComputedStyle === "function" ? window.getComputedStyle(element) : null;
+			return !style || (style.display !== "none" && style.visibility !== "hidden");
+		};
+		const stack = overlapStacks.find((entry) => entry.entries.some((member) => member && member.id === feedbackId));
+		if (stack && isConnectedVisible(stack.trigger)) return stack.trigger;
+		const member = threadViews.find((entry) => entry.id === feedbackId);
+		if (member && isConnectedVisible(member.pin)) return member.pin;
+		if (isConnectedVisible(contextualTrigger)) return contextualTrigger;
+		return null;
+	}
+
+	function closeContextualThread(restoreFocus) {
+		if (activeThreadPresentation !== "contextual") return;
+		const feedbackId = activeFeedbackId;
+		const trigger = restoreFocus ? contextualFocusTarget(feedbackId) : null;
+		setActiveThread(null);
+		const focusTarget = trigger || (restoreFocus && (() => {
+			if (!commentsLauncher || commentsLauncher.isConnected === false || commentsLauncher.hidden) return null;
+			const style = typeof window.getComputedStyle === "function" ? window.getComputedStyle(commentsLauncher) : null;
+			return !style || (style.display !== "none" && style.visibility !== "hidden") ? commentsLauncher : null;
+		})());
+		if (focusTarget && typeof focusTarget.focus === "function") focusTarget.focus({ preventScroll: true });
 	}
 
 	function scrollToThread(index) {
@@ -1793,6 +2813,7 @@ export function trustedReviewHostScript(): string {
 		const next = threadViews[nextIndex];
 		if (!next) return;
 		setActiveThread(next);
+		requestSavedTargetReveal(next.id);
 		if (next.row && typeof next.row.scrollIntoView === "function") {
 			next.row.scrollIntoView({ block: "nearest", behavior: reducedMotion ? "auto" : "smooth" });
 		}
@@ -1800,9 +2821,10 @@ export function trustedReviewHostScript(): string {
 	}
 
 	function updateReviewPinPositions() {
+		const effectiveReviewOverlay = overlayVisible && !annotationSelecting;
 		for (const entry of threadViews) {
 			if (!entry.pin || !entry.item) continue;
-			const point = reviewCoordinates(entry.item);
+			const point = effectiveReviewOverlay ? liveReviewPinPoint(entry.item) : null;
 			if (!point) {
 				entry.pin.hidden = true;
 				continue;
@@ -1811,6 +2833,9 @@ export function trustedReviewHostScript(): string {
 			entry.pin.style.left = point.x + "px";
 			entry.pin.style.top = point.y + "px";
 		}
+		positionPinStacks();
+		pageCommentsButton.hidden = !effectiveReviewOverlay || pageCommentsItems.length === 0 || activeThreadPresentation === "contextual";
+		if (activeThreadPresentation === "contextual") positionContextualThread(threadViews.find((entry) => entry.id === activeFeedbackId));
 	}
 
 	async function loadMentionUsers() {
@@ -1832,33 +2857,136 @@ export function trustedReviewHostScript(): string {
 		}
 	}
 
+	let mentionSearchGeneration = 0;
+	let mentionSearchResults = [];
+	let mentionSearchIndex = 0;
+	let mentionComposing = false;
+	function activeMentionQuery() {
+		const caret = Number(comment.selectionStart);
+		if (!Number.isInteger(caret) || caret < 0) return null;
+		const prefix = String(comment.value || "").slice(0, caret);
+		const match = prefix.match(/(?:^|\s)@([\p{L}\p{N}._-]{1,80})$/u);
+		return match ? { query: match[1], start: caret - match[1].length - 1, end: caret } : null;
+	}
+	function renderMentionSearch(message) {
+		mentionListbox.replaceChildren();
+		if (message) {
+			const state = document.createElement("p"); state.textContent = message; state.setAttribute("role", "status"); mentionListbox.appendChild(state);
+		}
+		for (let index = 0; index < mentionSearchResults.length; index += 1) {
+			const user = mentionSearchResults[index];
+			const option = document.createElement("button"); option.type = "button"; option.setAttribute("role", "option"); option.setAttribute("aria-selected", index === mentionSearchIndex ? "true" : "false"); option.textContent = user.label; option.dataset.userId = user.id; mentionListbox.appendChild(option);
+		}
+		mentionListbox.hidden = !message && mentionSearchResults.length === 0;
+	}
+	async function searchMentions() {
+		if (mentionComposing) return;
+		const active = activeMentionQuery();
+		if (!active) { mentionSearchResults = []; renderMentionSearch(""); return; }
+		const generation = ++mentionSearchGeneration;
+		renderMentionSearch("Loading mention suggestions…");
+		const base = childApiUrl("mentions");
+		if (!base) { renderMentionSearch("Mentions unavailable."); return; }
+		try {
+			const url = new URL(base); url.searchParams.set("q", active.query); url.searchParams.set("limit", "20");
+			const users = [];
+			let cursor = "";
+			do {
+				if (cursor) url.searchParams.set("cursor", cursor); else url.searchParams.delete("cursor");
+				const response = await requestAt(url.toString(), "GET");
+				if (generation !== mentionSearchGeneration) return;
+				for (const user of isRecord(response) && Array.isArray(response.users) ? response.users : []) if (isRecord(user) && hasExactKeys(user, ["id", "label"]) && isIdentifier(user.id) && boundedString(user.label, 200) && user.label) users.push({ id: user.id, label: user.label });
+				cursor = isRecord(response) && boundedString(response.nextCursor, 1024) ? response.nextCursor : "";
+			} while (cursor && users.length < 200);
+			if (generation !== mentionSearchGeneration) return;
+			mentionSearchResults = users; mentionSearchIndex = 0; renderMentionSearch(users.length ? "" : "No matching reviewers.");
+		} catch (error) {
+			if (generation !== mentionSearchGeneration) return;
+			mentionSearchResults = []; renderMentionSearch(error && error.status === 409 ? "Mentions unavailable." : "Mention suggestions could not be loaded.");
+		}
+	}
+	function chooseMention(user) {
+		const active = activeMentionQuery();
+		if (!active || !user || !isIdentifier(user.id)) return;
+		comment.setRangeText("@" + user.label + " ", active.start, active.end, "end");
+		let option = Array.from(mentionSelect.options || []).find(candidate => candidate.value === user.id);
+		if (!option) { option = document.createElement("option"); option.value = user.id; option.textContent = user.label; mentionSelect.appendChild(option); mentionUsers.push({ id: user.id, name: user.label, email: "" }); }
+		option.selected = true;
+		mentionSearchResults = []; renderMentionSearch(""); comment.focus(); topDraftVersion += 1; void scheduleDraftSave(false);
+	}
+
+	function postEmbeddedPins() {
+		if (!embeddedSiteOrigin) return;
+		const candidates = threadViews.filter((view) => view.id && currentPageItem(view.item) && liveReviewPinPoint(view.item));
+		const selected = activeFeedbackId ? candidates.find((view) => view.id === activeFeedbackId) : null;
+		const ordered = selected ? [selected, ...candidates.filter((view) => view !== selected)] : candidates;
+		const pinnedIds = new Set(ordered.slice(0, 250).map((view) => view.id));
+		parent.postMessage({ protocol: "shiplet.embed.ui.v1", overlayVisible, pins: threadViews.map((view, index) => {
+			const point = liveReviewPinPoint(view.item);
+			const geometry = savedTargetGeometry.get(view.id);
+			return { index, feedbackId: view.id, ticket: boundedString(view.item.ticket_label, 120) ? view.item.ticket_label : "Comment", label: canonicalPinLabel(view.item, view.item.ticket_label), selector: view.item.selected_element?.selector || "", pageX: point ? point.x : Number.NaN, pageY: point ? point.y : Number.NaN, geometry: geometry && point ? { eligible: geometry.eligible, offscreen: geometry.offscreen, viewportX: point.x, viewportY: point.y } : null };
+		}).filter((pin) => pinnedIds.has(pin.feedbackId) && (pin.geometry || (Number.isFinite(pin.pageX) && Number.isFinite(pin.pageY)))).slice(0, 250) }, embeddedSiteOrigin);
+	}
+
 	if (embeddedSiteOrigin) window.addEventListener("message", event => {
 		if (event.source !== parent || event.origin !== embeddedSiteOrigin || !event.data) return;
+		if (event.data.protocol === "shiplet.embed.overlay.v1") {
+			if (!hasExactKeys(event.data, ["protocol", "type", "visible"]) || event.data.type !== "set" || typeof event.data.visible !== "boolean" || !contextReady) return;
+			setOverlayVisible(event.data.visible);
+			return;
+		}
+		if (event.data.protocol === "shiplet.embed.route-transition.v1") {
+			if (!hasExactKeys(event.data, ["protocol", "type", "pageUrl", "overlayVisible", "retained"]) || event.data.type !== "request" || !boundedString(event.data.pageUrl, 4096) || typeof event.data.overlayVisible !== "boolean" || typeof event.data.retained !== "boolean") return;
+			const candidate = trustedRouteCandidate(event.data.pageUrl);
+			if (!candidate || candidate === canonicalOperationPageUrl(reviewPageUrl)) return;
+			void handleArtifactRouteChange(candidate).finally(() => {
+				const retained = hasAnnotationDraft() || threadViews.some(view => Boolean(view.draft?.text || view.draft?.mentions?.length)) || Boolean(topOperationSnapshot && ["pending", "unknown"].includes(topOperationSnapshot.state));
+				try { parent.postMessage({ protocol: "shiplet.embed.route-transition.v1", type: "retained", pageUrl: candidate, retained, safeToReplace: contextReady }, embeddedSiteOrigin); } catch {}
+			});
+			return;
+		}
 		if (event.data.protocol === "shiplet.embed.dismiss.v1") {
-			cancelAnnotationFlow(); setPanelOpen(false); return;
+			if (activeThreadPresentation === "contextual") closeContextualThread(false);
+			else { closeAnnotationFlow(); setPanelOpen(false); }
+			return;
 		}
 		if (event.data.protocol !== "shiplet.embed.focus.v1") return;
+		const feedbackId = isIdentifier(event.data.feedbackId) ? event.data.feedbackId : "";
 		const index = event.data.index;
-		if (!Number.isInteger(index) || index < 0 || index >= threadViews.length) return;
-		setPanelOpen(true); setActiveThread(threadViews[index]);
+		const next = feedbackId ? threadViews.find((entry) => entry.id === feedbackId) : Number.isInteger(index) && index >= 0 && index < threadViews.length ? threadViews[index] : null;
+		if (!next) return;
+		if (activeThreadPresentation === "contextual" && activeFeedbackId === next.id) closeContextualThread(false);
+		else { setActiveThread(next, "contextual"); requestSavedTargetReveal(next.id); }
 	});
 
 	function render(items) {
 		const requestedActiveId = activeFeedbackId;
+		const requestedPresentation = activeThreadPresentation;
 		const editingThread = threadViews.find(view => view.replyInput && view.replyInput === document.activeElement);
 		const editingSelection = editingThread ? [editingThread.replyInput.selectionStart, editingThread.replyInput.selectionEnd] : null;
-		const drafts = new Map(threadViews.map(view => [view.id, { text: view.replyInput?.value || "", mentions: selectedMentions(view.replyMentions) }]));
-		renderedItems = Array.isArray(items) ? items.slice(0, 100) : [];
+		syncRenderedThreadDrafts();
+		renderedItems = Array.isArray(items) ? items.slice() : [];
 		list.replaceChildren();
 		pinLayer.replaceChildren();
+		contextualThreadBody.replaceChildren();
 		threadViews = [];
+		const eligiblePins = renderedItems.filter(item => isRecord(item) && isIdentifier(item.id) && currentPageItem(item) && liveReviewPinPoint(item));
+		pageCommentsItems = renderedItems.filter(item => isRecord(item) && isIdentifier(item.id) && currentPageItem(item) && !savedTargetForItem(item) && !reviewCoordinates(item));
+		const pinnedIds = new Set();
+		if (requestedActiveId && eligiblePins.some(item => item.id === requestedActiveId)) pinnedIds.add(requestedActiveId);
+		for (const item of eligiblePins) {
+			if (pinnedIds.size >= 250) break;
+			pinnedIds.add(item.id);
+		}
 		for (const item of renderedItems) {
 			if (!isRecord(item)) continue;
 			const row = document.createElement("li");
 			const feedbackId = isIdentifier(item.id) ? item.id : "";
 			const ticket = boundedString(item.ticket_label, 120) ? item.ticket_label : "Comment";
+			const state = threadState(feedbackId, item);
 			row.setAttribute("aria-label", itemText(item).slice(0, 6000));
 			row.setAttribute("data-shiplet-review-thread", feedbackId || ticket);
+			row.setAttribute("data-confirmed-status", state.confirmedStatus);
 			row.setAttribute("data-active", "false");
 			const summaryButton = document.createElement("button");
 			summaryButton.type = "button";
@@ -1875,56 +3003,82 @@ export function trustedReviewHostScript(): string {
 			const summaryComment = document.createElement("span");
 			summaryComment.className = "shiplet-review-thread-summary-comment";
 			summaryComment.textContent = boundedString(item.comment, 5000) ? item.comment : "Comment";
-			summaryButton.append(author, createdTime, summaryTicket, summaryComment);
+			const summaryStatus = document.createElement("span");
+			summaryStatus.className = "shiplet-review-thread-summary-status";
+			summaryStatus.setAttribute("data-shiplet-review-collapsed-status", "v1");
+			summaryStatus.textContent = state.confirmedStatus;
+			summaryButton.append(author, createdTime, summaryTicket, summaryStatus, summaryComment);
 			const details = document.createElement("div");
 			details.className = "shiplet-review-thread-details";
 			details.hidden = true;
-			const threadView = { id: feedbackId, item, row, button: summaryButton, details, preview: summaryComment, pin: null };
+			const threadView = { id: feedbackId, item, state, row, button: summaryButton, details, preview: summaryComment, pin: null };
 			summaryButton.addEventListener("click", (event) => {
 				if (!event || event.isTrusted !== true) return;
-				const open = details.hidden;
-				setActiveThread(open ? threadView : null);
+				const open = details.hidden || activeThreadPresentation === "contextual";
+				setActiveThread(open ? threadView : null, "list");
+				if (open) requestSavedTargetReveal(threadView.id);
+				if (open && currentPageItem(item) && eligiblePins.length > 250 && !pinnedIds.has(feedbackId)) render(renderedItems);
 			});
 			const meta = document.createElement("div");
 			meta.className = "shiplet-review-thread-meta";
 			const statusSelect = document.createElement("select");
 			statusSelect.setAttribute("aria-label", "Status " + ticket);
-			for (const statusValue of ["New", "In Progress", "Blocked", "Done", "Dropped"]) {
+			for (const statusValue of ["New", "In Progress", "Blocked", "Staging", "Done", "Dropped"]) {
 				const option = document.createElement("option");
 				option.value = statusValue;
 				option.textContent = statusValue;
 				statusSelect.appendChild(option);
 			}
-			statusSelect.value = boundedString(item.status, 40) ? item.status : "New";
-			statusSelect.disabled = !feedbackId;
-			const quickStatus = item.status === "Done" || item.status === "Dropped" ? "New" : "Done";
+			statusSelect.value = state.confirmedStatus;
+			statusSelect.disabled = !feedbackId || Boolean(state.statusOperation);
+			const quickStatus = state.confirmedStatus === "Done" || state.confirmedStatus === "Dropped" ? "New" : "Done";
 			const quickStatusButton = document.createElement("button");
 			quickStatusButton.type = "button";
 			quickStatusButton.className = "shiplet-review-thread-action";
 			quickStatusButton.textContent = quickStatus === "Done" ? "Resolve" : "Reopen";
 			quickStatusButton.setAttribute("aria-label", quickStatusButton.textContent + " " + ticket);
 			quickStatusButton.setAttribute("data-shiplet-review-quick-status", quickStatus);
-			quickStatusButton.disabled = !feedbackId;
-			quickStatusButton.addEventListener("click", async (event) => {
-				if (!event || event.isTrusted !== true || statusSelect.disabled || quickStatusButton.disabled) return;
-				statusSelect.disabled = true;
-				quickStatusButton.disabled = true;
+			quickStatusButton.disabled = !feedbackId || Boolean(state.statusOperation);
+			async function submitStatusChange(nextStatus) {
+				if (!feedbackId || state.statusOperation || !boundedString(nextStatus, 40)) return;
+				const token = crypto.randomUUID();
+				state.statusOperation = { token, value: nextStatus };
+				state.message = "Updating " + ticket + " status…";
+				state.messageKind = "pending";
+				render(renderedItems);
 				try {
-					const response = await requestAt(childApiUrl("status", feedbackId), "POST", { status: quickStatus });
-					if (response.pendingConfirmation) { setStatus("Confirm this status change in the secure Shiplet window.", "ready"); return; }
+					const response = await requestAt(childApiUrl("status", feedbackId), "POST", { status: nextStatus });
+					if (!state.statusOperation || state.statusOperation.token !== token) return;
+					state.statusOperation = null;
+					if (response.pendingConfirmation) {
+						state.message = "Awaiting confirmation for this status change. Use the status control to reopen confirmation.";
+						state.messageKind = "pending";
+						render(renderedItems);
+						return;
+					}
 					if (isRecord(response) && isRecord(response.feedback) && response.feedback.id === feedbackId) {
+						state.confirmedStatus = boundedString(response.feedback.status, 40) ? response.feedback.status : state.confirmedStatus;
+						state.message = ticket + " status updated.";
+						state.messageKind = "ready";
 						renderedItems = renderedItems.map((entry) => isRecord(entry) && entry.id === feedbackId ? response.feedback : entry);
+						if (!statusMatchesFilter(state.confirmedStatus)) renderedItems = renderedItems.filter((entry) => !isRecord(entry) || entry.id !== feedbackId);
 						render(renderedItems);
 					} else {
+						state.message = "";
+						state.messageKind = "";
 						await refresh();
 					}
-					setStatus(ticket + " status updated.", "ready");
 				} catch {
-					setStatus("Could not update " + ticket + ".", "error");
-				} finally {
-					statusSelect.disabled = false;
-					quickStatusButton.disabled = false;
+					if (!state.statusOperation || state.statusOperation.token !== token) return;
+					state.statusOperation = null;
+					state.message = "Could not update " + ticket + ". Try again.";
+					state.messageKind = "error";
+					render(renderedItems);
 				}
+			}
+			quickStatusButton.addEventListener("click", async (event) => {
+				if (!event || event.isTrusted !== true || quickStatusButton.disabled) return;
+				await submitStatusChange(quickStatus);
 			});
 			const statusMore = document.createElement("details");
 			statusMore.className = "shiplet-review-status-more";
@@ -1934,17 +3088,28 @@ export function trustedReviewHostScript(): string {
 			statusMore.append(statusMoreSummary, statusSelect);
 			statusSelect.addEventListener("change", async (event) => {
 				if (!event || event.isTrusted !== true || statusSelect.disabled) return;
-				statusSelect.disabled = true;
-				try {
-					const response = await requestAt(childApiUrl("status", feedbackId), "POST", { status: statusSelect.value });
-					if (response.pendingConfirmation) { setStatus("Confirm this status change in the secure Shiplet window.", "ready"); return; }
-					if (isRecord(response) && isRecord(response.feedback) && response.feedback.id === feedbackId) render(renderedItems.map((entry) => isRecord(entry) && entry.id === feedbackId ? response.feedback : entry));
-					else await refresh();
-					setStatus(ticket + " status updated.", "ready");
-				} catch { setStatus("Could not update " + ticket + ".", "error"); }
-				finally { statusSelect.disabled = false; }
+				const nextStatus = statusSelect.value;
+				statusSelect.value = state.confirmedStatus;
+				await submitStatusChange(nextStatus);
 			});
-			meta.append(quickStatusButton, statusMore);
+			const provenance = document.createElement("details");
+			provenance.className = "shiplet-review-provenance";
+			provenance.setAttribute("data-shiplet-review-provenance", "v1");
+			const provenanceSummary = document.createElement("summary");
+			const provenanceLabel = item.revision_id === null ? "Earlier feedback" : item.revision_id === revisionId ? "Current revision" : "Earlier revision";
+			provenanceSummary.textContent = provenanceLabel;
+			const provenanceBody = document.createElement("span");
+			provenanceBody.textContent = item.revision_id === null ? "Revision unknown" : provenanceLabel + " · " + item.revision_id;
+			provenance.append(provenanceSummary, provenanceBody);
+			const openFeedback = document.createElement("a");
+			const feedbackUrl = new URL("/shiplets/" + encodeURIComponent(shipletId), new URL(location.href).origin);
+			feedbackUrl.searchParams.set("feedback", feedbackId);
+			openFeedback.href = feedbackUrl.toString();
+			openFeedback.target = "_blank";
+			openFeedback.rel = "noopener noreferrer";
+			openFeedback.textContent = "Open feedback";
+			openFeedback.setAttribute("aria-label", "Open feedback " + ticket);
+			meta.append(quickStatusButton, statusMore, provenance, openFeedback);
 			const body = document.createElement("p");
 			body.className = "shiplet-review-thread-comment";
 			body.textContent = boundedString(item.comment, 5000) ? item.comment : "Comment";
@@ -1969,41 +3134,76 @@ export function trustedReviewHostScript(): string {
 			}
 			const replyForm = document.createElement("div");
 			replyForm.className = "shiplet-review-reply-form";
-			const replyInput = document.createElement("input");
-			replyInput.type = "text";
-			replyInput.value = drafts.get(feedbackId)?.text || "";
+			const replyInput = document.createElement("textarea");
+			replyInput.rows = 3;
+			replyInput.value = state.text;
 			threadView.replyInput = replyInput;
 			replyInput.maxLength = 5000;
 			replyInput.placeholder = "Reply to this thread…";
 			replyInput.setAttribute("aria-label", "Reply text for " + ticket);
+			replyInput.disabled = Boolean(state.replyOperation);
 			const replyButton = document.createElement("button");
 			replyButton.type = "button";
 			replyButton.textContent = "Send";
 			replyButton.setAttribute("aria-label", "Reply to " + ticket);
 			replyButton.setAttribute("data-shiplet-review-reply-submit", feedbackId);
-			replyButton.disabled = !feedbackId;
+			replyButton.disabled = !feedbackId || Boolean(state.replyOperation);
 			const replyMentions = createReplyMentionSelect(ticket);
 			threadView.replyMentions = replyMentions;
-			const draftMentions = drafts.get(feedbackId)?.mentions || [];
-			for (const option of Array.from(replyMentions.options || [])) option.selected = draftMentions.some(mention => mention.userId === option.value);
+			for (const option of Array.from(replyMentions.options || [])) option.selected = state.mentions.some(mention => mention.userId === option.value);
+			replyMentions.disabled = Boolean(state.replyOperation);
+			const threadMessage = document.createElement("p");
+			threadMessage.className = "shiplet-review-status shiplet-review-thread-message";
+			threadMessage.textContent = state.message;
+			threadMessage.hidden = !state.message;
+			threadMessage.setAttribute("role", state.messageKind === "error" ? "alert" : "status");
+			threadMessage.setAttribute("data-state", state.messageKind || "ready");
+			replyInput.addEventListener("input", () => {
+				state.text = String(replyInput.value || "").slice(0, 5000);
+			});
+			replyMentions.addEventListener("change", () => {
+				state.mentions = selectedMentions(replyMentions);
+			});
 			async function submitReply() {
-				const replyValue = String(replyInput.value || "").trim();
-				if (!replyValue || replyButton.disabled) return;
-				replyButton.disabled = true;
+				state.text = String(replyInput.value || "").slice(0, 5000);
+				state.mentions = selectedMentions(replyMentions);
+				const replyValue = state.text.trim();
+				if (!replyValue || state.replyOperation || !feedbackId) return;
+				const submittedMentions = state.mentions.map((mention) => ({ userId: mention.userId }));
+				const token = crypto.randomUUID();
+				state.replyOperation = { token, text: replyValue, mentions: submittedMentions };
+				state.message = "Sending reply to " + ticket + "…";
+				state.messageKind = "pending";
+				render(renderedItems);
 				try {
-					const response = await requestAt(childApiUrl("replies", feedbackId), "POST", { comment: replyValue, mentions: selectedMentions(replyMentions) });
-					if (response.pendingConfirmation) { replyInput.value = ""; setStatus("Confirm this reply in the secure Shiplet window.", "ready"); return; }
-					replyInput.value = "";
+					const response = await requestAt(childApiUrl("replies", feedbackId), "POST", { comment: replyValue, mentions: submittedMentions });
+					if (!state.replyOperation || state.replyOperation.token !== token) return;
+					state.replyOperation = null;
+					if (response.pendingConfirmation) {
+						state.message = "Reply awaiting confirmation. Use Send to reopen confirmation.";
+						state.messageKind = "pending";
+						render(renderedItems);
+						return;
+					}
+					const currentView = threadViews.find((view) => view.id === feedbackId);
+					if (currentView && currentView.replyInput) currentView.replyInput.value = "";
+					if (currentView && currentView.replyMentions) for (const option of Array.from(currentView.replyMentions.options || [])) option.selected = false;
+					state.text = "";
+					state.mentions = [];
+					state.message = "Reply added to " + ticket + ".";
+					state.messageKind = "ready";
 					if (isRecord(response) && isRecord(response.feedback) && response.feedback.id === feedbackId) {
-						render(renderedItems.map((entry) => isRecord(entry) && entry.id === feedbackId ? response.feedback : entry));
+						renderedItems = renderedItems.map((entry) => isRecord(entry) && entry.id === feedbackId ? response.feedback : entry);
+						render(renderedItems);
 					} else {
 						await refresh();
 					}
-					setStatus("Reply added to " + ticket + ".", "ready");
 				} catch {
-					setStatus("Could not reply to " + ticket + ".", "error");
-				} finally {
-					replyButton.disabled = false;
+					if (!state.replyOperation || state.replyOperation.token !== token) return;
+					state.replyOperation = null;
+					state.message = "Could not reply to " + ticket + ". Try again.";
+					state.messageKind = "error";
+					render(renderedItems);
 				}
 			}
 			replyButton.addEventListener("click", async (event) => {
@@ -2011,45 +3211,59 @@ export function trustedReviewHostScript(): string {
 				await submitReply();
 			});
 			replyInput.addEventListener("keydown", async (event) => {
-				if (!event || event.isTrusted !== true || event.key !== "Enter" || event.shiftKey || event.altKey || event.metaKey || event.ctrlKey) return;
+				if (!event || event.isTrusted !== true || event.key !== "Enter" || (!event.metaKey && !event.ctrlKey) || event.shiftKey || event.altKey || activeComposition || event.isComposing || event.keyCode === 229) return;
 				event.preventDefault();
 				await submitReply();
 			});
-			replyForm.append(replyInput, replyMentions, replyButton);
+			replyForm.append(replyInput, replyMentions, replyButton, threadMessage);
 			details.append(body, meta, replies, replyForm);
 			row.append(summaryButton, details);
 			list.appendChild(row);
 			threadViews.push(threadView);
-			const pinPoint = reviewCoordinates(item);
-			if (pinPoint && feedbackId && !embeddedSiteOrigin) {
+			const pinPoint = liveReviewPinPoint(item);
+			if (pinPoint && feedbackId && pinnedIds.has(feedbackId) && !embeddedSiteOrigin) {
 				const pin = document.createElement("button");
 				pin.type = "button";
 				pin.className = "shiplet-review-pin";
-				pin.textContent = String(threadViews.length);
+				pin.textContent = canonicalPinLabel(item, ticket);
 				pin.setAttribute("aria-label", "Open " + ticket);
+				pin.setAttribute("aria-controls", contextualThread.id);
+				pin.setAttribute("aria-expanded", "false");
 				pin.setAttribute("data-active", "false");
 				pin.style.left = pinPoint.x + "px";
 				pin.style.top = pinPoint.y + "px";
 				pin.addEventListener("click", (event) => {
 					if (!event || event.isTrusted !== true) return;
-					setPanelOpen(true);
-					setActiveThread(threadView);
-					summaryButton.focus();
+					if (activeThreadPresentation === "contextual" && activeFeedbackId === threadView.id) closeContextualThread(true);
+					else { setActiveThread(threadView, "contextual", pin); requestSavedTargetReveal(threadView.id); }
 				});
 				threadView.pin = pin;
 				pinLayer.appendChild(pin);
 			}
 		}
-		if (embeddedSiteOrigin) parent.postMessage({ protocol: "shiplet.embed.ui.v1", pins: threadViews.map((view, index) => ({ index, selector: view.item.selected_element?.selector || "", pageX: Number(view.item.coordinates?.pageX), pageY: Number(view.item.coordinates?.pageY) })).filter(pin => Number.isFinite(pin.pageX) && Number.isFinite(pin.pageY)) }, embeddedSiteOrigin);
+		postEmbeddedPins();
+		pinLimit.hidden = eligiblePins.length <= 250;
+		pinLimit.textContent = eligiblePins.length > 250 ? "250 of " + eligiblePins.length + " page pins shown. All comments remain in the list; selecting a comment reveals its pin." : "";
 		const restoredThread = requestedActiveId ? threadViews.find((entry) => entry.id === requestedActiveId) : null;
-		setActiveThread(restoredThread || null);
+		setActiveThread(restoredThread || null, requestedPresentation, restoredThread?.pin || null);
+		renderPinStacks();
+		updateReviewPinPositions();
+		registerSavedTargets();
+		pageCommentsButton.textContent = "Page comments (" + pageCommentsItems.length + ")";
+		const effectiveReviewOverlay = overlayVisible && !annotationSelecting;
+		pageCommentsButton.hidden = !effectiveReviewOverlay || pageCommentsItems.length === 0;
+		renderPageCommentsMenu();
 		const restoredEditor = editingThread && threadViews.find(view => view.id === editingThread.id)?.replyInput;
 		if (restoredEditor && restoredThread?.id === editingThread.id) {
 			restoredEditor.focus();
 			if (editingSelection && typeof restoredEditor.setSelectionRange === "function") restoredEditor.setSelectionRange(editingSelection[0], editingSelection[1]);
 		}
 		updateCount(list.childElementCount);
-		setStatus(list.childElementCount === 0 ? "No comments yet. Add the first comment." : list.childElementCount + (list.childElementCount === 1 ? " comment." : " comments."), "ready");
+		setStatus(list.childElementCount === 0 ? "No comments yet in this scope. Reset filters or add a comment." : list.childElementCount + (list.childElementCount === 1 ? " comment." : " comments."), "ready");
+		loadedCount.textContent = list.childElementCount + (list.childElementCount === 1 ? " comment loaded" : " comments loaded") + (nextCursor === null && !nextPageFailed ? " · End of results" : "");
+		loadMore.hidden = nextCursor === null || nextPageFailed;
+		loadMore.disabled = Boolean(nextPageInFlight);
+		retryPage.hidden = !nextPageFailed;
 	}
 
 	async function requestAt(url, method, body) {
@@ -2067,17 +3281,134 @@ export function trustedReviewHostScript(): string {
 		if (body !== undefined) options.body = JSON.stringify(body);
 		const response = await fetch(url, options);
 		if (!response.ok) {
+			let errorPayload = null;
+			if (response.status === 409) {
+				try { errorPayload = await response.json(); } catch {}
+			}
 			const error = new Error("Review request failed (" + response.status + ").");
 			error.status = response.status;
+			const unsupportedMentions = response.status === 409 && isRecord(errorPayload) && hasExactKeys(errorPayload, ["error", "filter"]) && errorPayload.error === "sandbox_filter_unsupported" && errorPayload.filter === "mentionedMe";
+			if (unsupportedMentions) error.sandboxCapability = "mentionedMe";
+			else if (error.status === 401 || error.status === 403 || error.status === 409) void fetchFreshReviewContext("authority");
 			throw error;
 		}
 		return response.json();
 	}
 
 	async function request(method, body) {
-		const url = new URL(apiUrl);
-		if (method === "GET") url.searchParams.set("includeClosed", "true");
-		return requestAt(url.toString(), method, body);
+		return requestAt(method === "GET" ? buildListUrl(null) : apiUrl, method, body);
+	}
+
+	function operationEndpoint(requestId, cancel = false) {
+		if (!draftContextUrl || !isIdentifier(requestId)) return "";
+		try {
+			const url = new URL(draftContextUrl);
+			if (url.pathname.endsWith("/draft-context")) url.pathname = url.pathname.replace(/\/draft-context$/, "/operations/" + encodeURIComponent(requestId));
+			else if (url.pathname.endsWith("/review-draft-context")) url.pathname = url.pathname.replace(/\/review-draft-context$/, "/review-operations/" + encodeURIComponent(requestId));
+			else return "";
+			if (cancel) url.pathname += "/cancel";
+			url.search = "";
+			return url.toString();
+		} catch { return ""; }
+	}
+
+	function operationReadUrl(snapshot) {
+		const endpoint = operationEndpoint(snapshot.requestId, false);
+		if (!endpoint) return "";
+		try {
+			const url = new URL(endpoint);
+			url.searchParams.set("revision_id", snapshot.binding.revisionId);
+			url.searchParams.set("page_url", snapshot.binding.pageUrl);
+			url.searchParams.set("effect", snapshot.effect);
+			if (snapshot.feedbackId) url.searchParams.set("feedback_id", snapshot.feedbackId);
+			if (embeddedSiteOrigin) url.searchParams.set("installation_id", snapshot.binding.installationId || "");
+			return url.toString();
+		} catch { return ""; }
+	}
+
+	function operationSnapshotFor(effect, feedbackId, draftVersion, immutablePayload) {
+		const requestId = "request_" + crypto.randomUUID().replace(/-/g, "");
+		const payload = JSON.parse(JSON.stringify(immutablePayload));
+		if (effect === "feedback.create" && isRecord(payload)) payload.clientFeedbackId = "client-" + crypto.randomUUID().replace(/-/g, "");
+		return { requestId, effect, feedbackId: feedbackId || null, draftVersion, immutablePayload: payload, state: "pending", submittedOn: new Date().toISOString(), lastCheckedOn: new Date().toISOString(), binding: { actor: reviewContext?.actor || null, projectId: shipletId, revisionId, pageUrl: reviewPageUrl, installationId: reviewContext?.installationId || (embeddedSiteOrigin ? new URL(apiUrl).searchParams.get("installation_id") || "" : "") } };
+	}
+
+	function saveOperationReceipt(snapshot) {
+		const persisted = { requestId: snapshot.requestId, effect: snapshot.effect, feedbackId: snapshot.feedbackId, draftVersion: snapshot.draftVersion, immutablePayload: snapshot.immutablePayload, state: snapshot.state, submittedOn: snapshot.submittedOn, lastCheckedOn: snapshot.lastCheckedOn };
+		const index = operationReceipts.findIndex((operation) => operation.requestId === persisted.requestId);
+		if (index >= 0) operationReceipts[index] = persisted; else operationReceipts.push(persisted);
+		while (operationReceipts.length > 64) operationReceipts.shift();
+		return scheduleDraftSave(true);
+	}
+
+	function showOperationState(state) {
+		if (!state) return;
+		const messages = { pending: "Awaiting confirmation. Reopen confirmation, check status, or cancel submission.", completed: "Feedback saved.", expired: "Confirmation expired. Retry the same submission.", failed: "Submission failed. Start a new attempt to try again.", unknown: "Submission status is unknown. Check status before retrying.", cancelled: "Submission cancelled." };
+		setComposerMessage(messages[state] || "", state === "failed" || state === "unknown" ? "error" : state === "pending" || state === "expired" ? "pending" : "ready");
+		if (state === "pending" || state === "unknown") setComposerBusy(true);
+	}
+
+	async function readOperationOutcome(snapshot) {
+		const url = operationReadUrl(snapshot);
+		if (!url || reviewSubmissionMode === "sandbox") return null;
+		try {
+			const response = await fetch(url, { method: "GET", credentials: "include", cache: "no-store" });
+			if (response.status === 404) return { state: "unknown", result: null };
+			if (!response.ok) return { state: "unknown", result: null };
+			const payload = await response.json();
+			if (!isRecord(payload) || !isRecord(payload.operation) || !hasExactKeys(payload.operation, ["requestId", "effect", "state", "result"]) || payload.operation.requestId !== snapshot.requestId || payload.operation.effect !== snapshot.effect || !["pending", "completed", "expired", "failed", "unknown", "cancelled"].includes(payload.operation.state)) return { state: "unknown", result: null };
+			return { state: payload.operation.state, result: payload.operation.result };
+		} catch { return { state: "unknown", result: null }; }
+	}
+
+	async function pollOperation(snapshot) {
+		if (!snapshot || operationPollRequestId === snapshot.requestId) return;
+		operationPollRequestId = snapshot.requestId;
+		const delays = [0, 1000, 2000, 4000, 8000];
+		try { for (const delay of delays) {
+			if (delay) await new Promise((resolve) => window.setTimeout(resolve, delay));
+			if (!topOperationSnapshot || topOperationSnapshot.requestId !== snapshot.requestId) return;
+			const outcome = await readOperationOutcome(snapshot);
+			if (!outcome) return;
+			snapshot.state = outcome.state;
+			snapshot.lastCheckedOn = new Date().toISOString();
+			await saveOperationReceipt(snapshot);
+			topOperationSnapshot = snapshot;
+			if (outcome.state !== "pending") {
+				showOperationState(outcome.state);
+				if (outcome.state === "completed" && isRecord(outcome.result) && isIdentifier(outcome.result.feedbackId)) void refresh("poll");
+				if (outcome.state === "completed" && topDraftVersion === snapshot.draftVersion) {
+					clearEditableDraftOnly();
+					topDraftVersion += 1;
+				}
+				setComposerBusy(false);
+				return;
+			}
+			showOperationState("pending");
+		}
+		showOperationState("pending");
+		} finally { if (operationPollRequestId === snapshot.requestId) operationPollRequestId = ""; }
+	}
+
+	async function cancelPendingOperation(snapshot) {
+		if (!snapshot || reviewSubmissionMode === "sandbox") return false;
+		const previousContextKey = reviewContextKey;
+		await fetchFreshReviewContext("cancel");
+		if (!contextReady || reviewContextKey !== previousContextKey) return false;
+		const endpoint = operationEndpoint(snapshot.requestId, true);
+		if (!endpoint) return false;
+		try {
+			const response = await fetch(endpoint, { method: "POST", credentials: "include", headers: { "content-type": "application/json" }, body: JSON.stringify({ revisionId: snapshot.binding.revisionId, pageUrl: snapshot.binding.pageUrl, effect: snapshot.effect, feedbackId: snapshot.feedbackId }) });
+			if (!response.ok) { snapshot.state = "unknown"; await saveOperationReceipt(snapshot); topOperationSnapshot = snapshot; showOperationState("unknown"); return false; }
+			const payload = await response.json();
+			const state = isRecord(payload) && isRecord(payload.operation) && payload.operation.state === "cancelled" ? "cancelled" : "unknown";
+			snapshot.state = state;
+			await saveOperationReceipt(snapshot);
+			topOperationSnapshot = snapshot;
+			showOperationState(state);
+			if (state === "cancelled" && topDraftVersion === snapshot.draftVersion) { clearEditableDraftOnly(); topDraftVersion += 1; setComposerBusy(false); }
+			return state === "cancelled";
+		} catch { snapshot.state = "unknown"; await saveOperationReceipt(snapshot); topOperationSnapshot = snapshot; showOperationState("unknown"); return false; }
 	}
 
 	function renderWatch() {
@@ -2097,33 +3428,133 @@ export function trustedReviewHostScript(): string {
 		}
 	}
 
-	async function refresh() {
+	async function refresh(mode) {
+		const generation = refreshGeneration;
+		const serial = ++firstPageSerial;
 		refreshButton.disabled = true;
+		staleRefresh.disabled = true;
 		list.setAttribute("aria-busy", "true");
-		setStatus("Loading comments…", "loading");
+		if (renderedItems.length === 0) setStatus("Loading comments…", "loading");
 		try {
-			const response = await request("GET");
-			render(response && response.feedback);
+			const response = validateListPayload(await request("GET"));
+			if (generation !== refreshGeneration || serial !== firstPageSerial) return;
+				if (mode === "poll") {
+				if (renderedItems.length <= 100) nextCursor = response.nextCursor;
+				render(mergeByFeedbackId(response.feedback, renderedItems));
+			} else {
+				const active = renderedItems.find(entry => isRecord(entry) && entry.id === activeFeedbackId);
+				nextCursor = response.nextCursor;
+				nextPageFailed = false;
+				pageError.hidden = true;
+				pageError.textContent = "";
+					const replacement = active && !response.feedback.some(entry => isRecord(entry) && entry.id === activeFeedbackId) ? [...response.feedback, active] : response.feedback;
+					render(replacement);
+				}
+				unsupportedFilter = "";
+				clearStaleIndicator();
 		} catch (error) {
-			if (error && (error.status === 401 || error.status === 403)) {
-				if (embeddedSiteOrigin && !annotationActive) returnToEmbedSignIn();
-				setStatus("Review access was denied. Reopen the review or ask the owner for access.", "error");
+			if (generation !== refreshGeneration || serial !== firstPageSerial) return;
+			if (error && error.sandboxCapability === "mentionedMe") {
+				unsupportedFilter = "mentionedMe";
+				showStaleIndicator("Mentions is unavailable in this sandbox. Showing comments from the previously loaded scope; these are not Mentions results.", "retry-mentions");
+				if (renderedItems.length === 0) setStatus("Mentions is unavailable in this sandbox. No previously loaded comments are available.", "error");
+			} else if (error && error.status === 400) {
+				showFilterError("These filters are not valid for the authorized review scope. Adjust them and try again.");
+			} else if (error && (error.status === 401 || error.status === 403)) {
+				if (embeddedSiteOrigin && !annotationActive && renderedItems.length === 0 && threadStates.size === 0 && !hasAnnotationDraft()) returnToEmbedSignIn();
+				else if (renderedItems.length === 0) setStatus("Review access was denied. Reopen the review or ask the owner for access.", "error");
+				showStaleIndicator(renderedItems.length > 0 ? "Review access changed. Showing saved comments and drafts." : "Review access was denied. Use Refresh after access is restored.");
 			} else if (typeof navigator === "object" && navigator && navigator.onLine === false) {
-				setStatus("You’re offline. Comments will be available when the connection returns.", "error");
+				if (renderedItems.length === 0) setStatus("You’re offline. Comments will be available when the connection returns.", "error");
+				showStaleIndicator(renderedItems.length > 0 ? "You’re offline. Showing saved comments and drafts." : "You’re offline. Use Refresh when the connection returns.");
 			} else if (renderedItems.length > 0) {
-				setStatus(renderedItems.length + (renderedItems.length === 1 ? " comment." : " comments."), "ready");
+				showStaleIndicator("Refresh failed. Showing saved comments and drafts.");
 			} else {
 				setStatus("Could not load comments. Use Refresh to try again.", "error");
+				showStaleIndicator("Could not load comments. Use Refresh to try again.");
 			}
 		} finally {
-			list.setAttribute("aria-busy", "false");
-			refreshButton.disabled = false;
+			if (generation === refreshGeneration && serial === firstPageSerial) {
+				list.setAttribute("aria-busy", "false");
+				refreshButton.disabled = false;
+				staleRefresh.disabled = false;
+			}
+		}
+	}
+
+	async function resetListAndRefresh(options = {}) {
+		const retainPrevious = options.retainPrevious !== false;
+		refreshGeneration += 1;
+		firstPageSerial += 1;
+		nextCursor = null;
+		nextPageInFlight = "";
+		nextPageFailed = false;
+		unsupportedFilter = "";
+		pageError.hidden = true;
+		pageError.textContent = "";
+		syncRenderedThreadDrafts();
+		clearStaleIndicator();
+		if (retainPrevious && renderedItems.length > 0) {
+			render(renderedItems);
+			showStaleIndicator("Loading the new filter. Showing comments from the previously loaded scope until it succeeds.");
+		} else {
+			render([]);
+			loadedCount.textContent = "Loading comments…";
+		}
+		loadMore.hidden = true;
+		retryPage.hidden = true;
+		await refresh("replace");
+	}
+
+	async function manualRefresh() {
+		refreshGeneration += 1;
+		firstPageSerial += 1;
+		nextPageInFlight = "";
+		nextPageFailed = false;
+		pageError.hidden = true;
+		pageError.textContent = "";
+		await refresh("replace");
+	}
+
+	async function loadNextPage() {
+		const cursor = nextCursor;
+		const generation = refreshGeneration;
+		if (!cursor || nextPageInFlight === cursor) return;
+		nextPageInFlight = cursor;
+		nextPageFailed = false;
+		pageError.hidden = true;
+		loadMore.disabled = true;
+		list.setAttribute("aria-busy", "true");
+		try {
+			const response = validateListPayload(await requestAt(buildListUrl(cursor), "GET"));
+			if (generation !== refreshGeneration || nextPageInFlight !== cursor) return;
+			nextCursor = response.nextCursor;
+			nextPageInFlight = "";
+			render(mergeByFeedbackId(renderedItems, response.feedback));
+		} catch {
+			if (generation !== refreshGeneration || nextPageInFlight !== cursor) return;
+			nextPageInFlight = "";
+			nextPageFailed = true;
+			pageError.textContent = "Could not load more comments. Existing comments and drafts are unchanged.";
+			pageError.hidden = false;
+			loadMore.hidden = true;
+			retryPage.hidden = false;
+		} finally {
+			if (generation === refreshGeneration) {
+				list.setAttribute("aria-busy", "false");
+				loadMore.disabled = false;
+			}
 		}
 	}
 
 	function setPanelOpen(open) {
+		if (open && activeThreadPresentation === "contextual") {
+			const active = threadViews.find((entry) => entry.id === activeFeedbackId);
+			setActiveThread(active || null, "list");
+		}
 		panel.hidden = !open;
 		commentsLauncher.setAttribute("aria-expanded", open ? "true" : "false");
+		setReviewSurfaceOpenState();
 		if (open) closeButton.focus();
 		else commentsLauncher.focus();
 		notifyEmbedView();
@@ -2150,8 +3581,224 @@ export function trustedReviewHostScript(): string {
 		return typeof value === "string" && value.length <= maximum;
 	}
 
+	function canonicalOperationPageUrl(value) {
+		try {
+			const url = new URL(String(value || ""));
+			if (!/^https?:$/.test(url.protocol) || url.username || url.password) return "";
+			const hash = url.hash;
+			url.hash = "";
+			if (hash.startsWith("#/") && !hash.startsWith("#//")) {
+				try {
+					const nested = new URL(hash.slice(1), url.origin);
+					if (nested.origin === url.origin) {
+						url.hash = "#" + nested.pathname + nested.search;
+					}
+				} catch {}
+			} else if (hash && !hash.startsWith("#")) {
+				url.hash = "";
+			}
+			return url.toString();
+		} catch { return ""; }
+	}
+
+	function contextKeyFor(value) {
+		if (!isRecord(value) || !isRecord(value.actor) || !isIdentifier(value.actor.id) || !boundedString(value.actor.kind, 32) || !isIdentifier(value.projectId) || !isIdentifier(value.revisionId) || !boundedString(value.pageUrl, 4096)) return "";
+		const pageUrl = canonicalOperationPageUrl(value.pageUrl);
+		if (!pageUrl) return "";
+		return ["v1", value.actor.kind, value.actor.id, value.projectId, value.revisionId, pageUrl, value.installationId || ""].join("|");
+	}
+
+	function localContextKeyFor(value) {
+		if (!isRecord(value) || !isIdentifier(value.actorKind) || !isIdentifier(value.actorId) || !isIdentifier(value.projectId) || !isIdentifier(value.revisionId) || !boundedString(value.pageUrl, 4096)) return "";
+		const pageUrl = canonicalOperationPageUrl(value.pageUrl);
+		if (!pageUrl) return "";
+		return ["v1", value.actorKind, value.actorId, value.projectId, value.revisionId, pageUrl, value.installationId || ""].join("|");
+	}
+
+	function validStoredCapture(value) {
+		if (value === null) return true;
+		if (!isRecord(value) || !hasExactKeys(value, ["screenshotDataUrl", "screenshotFailureNote", "screenshotMode", "viewport", "coordinates", "selectedElement", "captureContext"]) || value.screenshotMode !== "element" || !isRecord(value.viewport) || !isRecord(value.coordinates) || !isRecord(value.selectedElement) || !isRecord(value.captureContext)) return false;
+		if (value.screenshotDataUrl !== null && (!boundedString(value.screenshotDataUrl, 13400000) || !/^data:image\/(?:png|jpeg|webp);base64,[A-Za-z0-9+/=]+$/.test(value.screenshotDataUrl))) return false;
+		if (value.screenshotFailureNote !== null && !boundedString(value.screenshotFailureNote, 500)) return false;
+		if (!hasExactKeys(value.viewport, ["width", "height", "devicePixelRatio"]) || !finiteNumber(value.viewport.width, 1, 100000) || !finiteNumber(value.viewport.height, 1, 100000) || !finiteNumber(value.viewport.devicePixelRatio, .1, 10)) return false;
+		if (!hasExactKeys(value.coordinates, ["pageX", "pageY", "viewportX", "viewportY"]) || !finiteNumber(value.coordinates.pageX, -10000000, 10000000) || !finiteNumber(value.coordinates.pageY, -10000000, 10000000) || !finiteNumber(value.coordinates.viewportX, -100000, 100000) || !finiteNumber(value.coordinates.viewportY, -100000, 100000)) return false;
+		if (!hasExactKeys(value.selectedElement, ["selector", "tagName", "text"]) || !boundedString(value.selectedElement.selector, 1200) || !value.selectedElement.selector || !boundedString(value.selectedElement.tagName, 64) || !/^[A-Z][A-Z0-9-]{0,63}$/.test(value.selectedElement.tagName) || !boundedString(value.selectedElement.text, 500)) return false;
+		return hasExactKeys(value.captureContext, ["documentWidth", "documentHeight", "scrollX", "scrollY"]) && finiteNumber(value.captureContext.documentWidth, 1, 100000) && finiteNumber(value.captureContext.documentHeight, 1, 100000) && finiteNumber(value.captureContext.scrollX, -10000000, 10000000) && finiteNumber(value.captureContext.scrollY, -10000000, 10000000);
+	}
+
+	function exactDraftRecord(value) {
+		if (!isRecord(value) || !hasExactKeys(value, ["version", "key", "context", "updatedOn", "overlayVisible", "topDraft", "threadDrafts", "operations"]) || value.version !== 1 || typeof value.key !== "string" || value.key.length > 2000 || !isRecord(value.context) || localContextKeyFor(value.context) !== value.key || !boundedString(value.updatedOn, 64) || typeof value.overlayVisible !== "boolean" || !isRecord(value.topDraft) || !isRecord(value.threadDrafts) || !Array.isArray(value.operations)) return null;
+		if (Object.keys(value.threadDrafts).length > 256 || value.operations.length > 64) return null;
+		for (const [id, draft] of Object.entries(value.threadDrafts)) {
+			if (!isIdentifier(id) || !isRecord(draft) || !hasExactKeys(draft, ["version", "text", "mentionIds", "desiredStatus"]) || draft.version !== 1 || !boundedString(draft.text, 5000) || !Array.isArray(draft.mentionIds) || draft.mentionIds.length > 20 || !["New", "In Progress", "Blocked", "Staging", "Done", "Dropped"].includes(draft.desiredStatus)) return null;
+			if (draft.mentionIds.some((mention) => !isIdentifier(mention))) return null;
+		}
+		if (!hasExactKeys(value.topDraft, ["version", "text", "mentionIds", "target", "capture", "screenshotDataUrl", "annotationStrokes", "mode"]) || value.topDraft.version !== 1 || !boundedString(value.topDraft.text, 5000) || !Array.isArray(value.topDraft.mentionIds) || value.topDraft.mentionIds.length > 20 || value.topDraft.mentionIds.some((mention) => !isIdentifier(mention)) || (value.topDraft.target !== null && (!isRecord(value.topDraft.target) || !hasExactKeys(value.topDraft.target, ["selector", "tagName", "text"]))) || !validStoredCapture(value.topDraft.capture) || (value.topDraft.screenshotDataUrl !== null && (!boundedString(value.topDraft.screenshotDataUrl, 13400000) || !/^data:image\/(?:png|jpeg|webp);base64,[A-Za-z0-9+/=]+$/.test(value.topDraft.screenshotDataUrl))) || !Array.isArray(value.topDraft.annotationStrokes) || value.topDraft.annotationStrokes.length > 256 || value.topDraft.annotationStrokes.some((stroke) => !Array.isArray(stroke) || stroke.length > 512 || stroke.some((point) => !isRecord(point) || !hasExactKeys(point, ["pageX", "pageY"]) || !finiteNumber(point.pageX, -10000000, 10000000) || !finiteNumber(point.pageY, -10000000, 10000000))) || !["closed", "composer", "expanded"].includes(value.topDraft.mode)) return null;
+		for (const operation of value.operations) {
+			if (!isRecord(operation) || !hasExactKeys(operation, ["requestId", "effect", "feedbackId", "draftVersion", "immutablePayload", "state", "submittedOn", "lastCheckedOn"]) || !isIdentifier(operation.requestId) || !boundedString(operation.effect, 64) || (operation.feedbackId !== null && !isIdentifier(operation.feedbackId)) || !Number.isInteger(operation.draftVersion) || operation.draftVersion < 1 || !isRecord(operation.immutablePayload) || !["pending", "completed", "expired", "failed", "unknown", "cancelled"].includes(operation.state) || !boundedString(operation.submittedOn, 64) || !boundedString(operation.lastCheckedOn, 64)) return null;
+		}
+		let serialized = "";
+		try { serialized = JSON.stringify(value); } catch { return null; }
+		if (new TextEncoder().encode(serialized).byteLength > 20971520) return null;
+		return value;
+	}
+
+	function storageDisclosure(message) {
+		if (!message) return;
+		storageMessage.textContent = message;
+		storageNotice.hidden = false;
+		storageRetry.hidden = false;
+		draftStorageState = "memory";
+	}
+
+	function storageReady() {
+		storageNotice.hidden = true;
+		storageMessage.textContent = "";
+		storageRetry.hidden = true;
+		draftStorageState = "ready";
+	}
+
+	function clearEditableDraftOnly() {
+		comment.value = "";
+		for (const option of Array.from(mentionSelect.options || [])) option.selected = false;
+		setComposerMessage("", "");
+		clearArtifactCapture();
+		annotationStrokes = [];
+		for (const state of threadStates.values()) { state.text = ""; state.mentions = []; }
+	}
+
+	function currentDraftRecord() {
+		if (!reviewContext || !reviewContextKey) return null;
+		const threadDrafts = {};
+		for (const [key, state] of threadStates.entries()) {
+			const id = key.split("\n").at(-1);
+			if (!id || !isIdentifier(id) || (!state.text && !state.mentions.length)) continue;
+			threadDrafts[id] = { version: 1, text: String(state.text || "").slice(0, 5000), mentionIds: state.mentions.slice(0, 20).map((mention) => mention.userId), desiredStatus: String(state.confirmedStatus || "New").slice(0, 40) };
+		}
+		const topDraft = { version: 1, text: String(comment.value || "").slice(0, 5000), mentionIds: selectedMentions(mentionSelect).slice(0, 20).map((mention) => mention.userId), target: artifactCapture && artifactCapture.selectedElement ? artifactCapture.selectedElement : null, capture: artifactCapture ? { ...artifactCapture, screenshotDataUrl: null } : null, screenshotDataUrl: artifactCapture?.screenshotDataUrl || null, annotationStrokes: annotationStrokes.slice(0, 256), mode: annotationExpanded ? "expanded" : annotationActive ? "composer" : "closed" };
+		const operations = [];
+		for (const operation of operationReceipts.slice(-64)) operations.push(operation);
+		return { version: 1, key: reviewContextKey, context: { actorKind: reviewContext.actor.kind, actorId: reviewContext.actor.id, projectId: reviewContext.projectId, revisionId: reviewContext.revisionId, pageUrl: reviewContext.pageUrl, installationId: reviewContext.installationId || "" }, updatedOn: new Date().toISOString(), overlayVisible, topDraft, threadDrafts, operations };
+	}
+
+	function draftRecordNeedsRetention(record) {
+		if (!record || !isRecord(record.topDraft) || !isRecord(record.threadDrafts) || !Array.isArray(record.operations)) return true;
+		if (record.topDraft.text || record.topDraft.mentionIds?.length || record.topDraft.capture || record.topDraft.screenshotDataUrl || record.topDraft.annotationStrokes?.length) return true;
+		if (Object.keys(record.threadDrafts).length > 0) return true;
+		return record.operations.some((operation) => operation && ["pending", "unknown"].includes(operation.state));
+	}
+
+	function scheduleDraftSave(immediate) {
+		if (!reviewContextKey || draftStorageState === "blocked") return Promise.resolve(false);
+		if (draftSaveTimer) { clearTimeout(draftSaveTimer); draftSaveTimer = 0; }
+		const save = async () => {
+			const record = exactDraftRecord(currentDraftRecord());
+			if (!record) return false;
+			if (!draftDb) { storageDisclosure("Persistence is unavailable; a full reload can lose unsaved work."); return false; }
+			try {
+				await new Promise((resolve, reject) => {
+					const transaction = draftDb.transaction("drafts", "readwrite");
+					transaction.oncomplete = resolve;
+					transaction.onerror = () => reject(transaction.error || new Error("storage"));
+					transaction.onabort = () => reject(transaction.error || new Error("storage"));
+					const store = transaction.objectStore("drafts");
+					store.put(record);
+					const all = store.getAll();
+					all.onsuccess = () => {
+						const clean = (Array.isArray(all.result) ? all.result : []).filter((entry) => !draftRecordNeedsRetention(entry)).sort((left, right) => String(left.updatedOn || "").localeCompare(String(right.updatedOn || "")));
+						for (const entry of clean.slice(0, Math.max(0, clean.length - 32))) if (entry && entry.key !== record.key) store.delete(entry.key);
+					};
+				});
+				storageReady();
+				return true;
+			} catch { storageDisclosure("Persistence is unavailable; a full reload can lose unsaved work."); return false; }
+		};
+		if (immediate) { draftSaveInFlight = save(); return draftSaveInFlight; }
+		return new Promise((resolve) => { draftSaveTimer = window.setTimeout(() => { draftSaveTimer = 0; draftSaveInFlight = save().then(resolve); }, 150); });
+	}
+
+	function openDraftStorage() {
+		if (typeof indexedDB !== "object" || !indexedDB) { storageDisclosure("Persistence is unavailable; a full reload can lose unsaved work."); return Promise.resolve(false); }
+		return new Promise((resolve) => {
+			try {
+				const request = indexedDB.open("shiplet-review-drafts-v1", 1);
+				request.onupgradeneeded = () => { const database = request.result; if (!database.objectStoreNames.contains("drafts")) database.createObjectStore("drafts", { keyPath: "key" }); };
+				request.onerror = () => { storageDisclosure("Persistence is unavailable; a full reload can lose unsaved work."); resolve(false); };
+				request.onsuccess = () => { draftDb = request.result; draftDb.onversionchange = () => draftDb.close(); storageReady(); resolve(true); };
+			} catch { storageDisclosure("Persistence is unavailable; a full reload can lose unsaved work."); resolve(false); }
+		});
+	}
+
+	function restoreDraftRecord() {
+		if (!draftDb || !reviewContextKey) return Promise.resolve(false);
+		return new Promise((resolve) => {
+			try {
+				const request = draftDb.transaction("drafts", "readonly").objectStore("drafts").get(reviewContextKey);
+				request.onerror = () => resolve(false);
+				request.onsuccess = () => {
+					const record = exactDraftRecord(request.result);
+					if (!record) { if (request.result) storageDisclosure("Saved review state was corrupt and was not restored."); resolve(false); return; }
+					restoredDraft = record;
+					overlayVisible = record.overlayVisible;
+					const top = record.topDraft;
+					comment.value = top.text;
+					for (const option of Array.from(mentionSelect.options || [])) option.selected = top.mentionIds.includes(option.value);
+					if (top.capture) { artifactCapture = { ...top.capture, screenshotDataUrl: top.screenshotDataUrl }; artifactCaptureRequestId = ""; artifactScreenshotBase = top.screenshotDataUrl || null; selectedTarget.textContent = top.capture.selectedElement?.tagName + (top.capture.selectedElement?.text ? " · " + top.capture.selectedElement.text : ""); clearTarget.hidden = false; drawOnScreenshot.hidden = !top.screenshotDataUrl; quickDraw.hidden = !top.screenshotDataUrl; }
+					annotationStrokes = Array.isArray(top.annotationStrokes) ? top.annotationStrokes : [];
+					for (const [id, value] of Object.entries(record.threadDrafts)) { const state = threadState(id, { status: value.desiredStatus }); state.text = value.text; state.mentions = value.mentionIds.map((userId) => ({ userId })); }
+					for (const operation of record.operations) operationReceipts.push(operation);
+					const latest = record.operations[record.operations.length - 1];
+					if (latest && ["pending", "unknown", "expired", "failed"].includes(latest.state)) topOperationSnapshot = { ...latest, binding: { actor: reviewContext.actor, projectId: reviewContext.projectId, revisionId: reviewContext.revisionId, pageUrl: reviewContext.pageUrl, installationId: reviewContext.installationId || "" } };
+					updateOverlayUi();
+					resolve(true);
+				};
+			} catch { resolve(false); }
+		});
+	}
+
+	async function fetchFreshReviewContext(reason) {
+		if (!draftContextUrl || typeof fetch !== "function") { contextReady = true; return true; }
+		const generation = ++contextGeneration;
+		contextReady = false;
+		contextFailure = "";
+		try {
+			const url = new URL(draftContextUrl);
+			url.searchParams.set("revision_id", revisionId);
+			url.searchParams.set("page_url", reviewPageUrl);
+			if (embeddedSiteOrigin) url.searchParams.set("installation_id", new URL(apiUrl).searchParams.get("installation_id") || "");
+			const response = await fetch(url.toString(), { method: "GET", credentials: "include", cache: "no-store" });
+			if (generation !== contextGeneration) return false;
+			if (!response.ok) throw new Error("Review context unavailable (" + response.status + ").");
+			const payload = await response.json();
+			const value = isRecord(payload) && isRecord(payload.context) ? payload.context : null;
+			if (!value || !hasExactKeys(value, ["actor", "projectId", "revisionId", "pageUrl", "installationId", "expiresOn", "durableOperations"]) || !isRecord(value.actor) || !hasExactKeys(value.actor, ["kind", "id"]) || !["human", "sandbox"].includes(value.actor.kind) || !isIdentifier(value.actor.id) || value.projectId !== shipletId || value.revisionId !== revisionId || canonicalOperationPageUrl(value.pageUrl) !== canonicalOperationPageUrl(reviewPageUrl) || (embeddedSiteOrigin ? value.installationId !== (new URL(apiUrl).searchParams.get("installation_id") || "") : value.installationId !== null) || (value.expiresOn !== null && !boundedString(value.expiresOn, 64)) || typeof value.durableOperations !== "boolean") throw new Error("Review context binding was rejected.");
+			const nextContextKey = contextKeyFor({ actor: value.actor, projectId: value.projectId, revisionId: value.revisionId, pageUrl: value.pageUrl, installationId: value.installationId || "" });
+			if (!nextContextKey) throw new Error("Review context binding was rejected.");
+			const contextChanged = nextContextKey !== reviewContextKey;
+			reviewContext = value;
+			reviewContextKey = nextContextKey;
+			contextReady = true;
+			await openDraftStorage();
+			if (contextChanged) await restoreDraftRecord();
+			if (contextChanged) hydrateReviewPreferences();
+			return true;
+		} catch (error) {
+			if (generation !== contextGeneration) return false;
+			contextFailure = error instanceof Error ? error.message : "Review context unavailable.";
+			contextReady = reviewSubmissionMode === "sandbox";
+			if (reviewSubmissionMode !== "sandbox") { storageDisclosure("Review identity is unavailable. Saved review content stays private until access is restored."); setStatus("Review identity is unavailable. Use Refresh after access is restored.", "error"); }
+			return false;
+		}
+	}
+
+	async function hydrateForContext(options = {}) {
+		if (!contextReady) return;
+		updateFilterUi();
+		await resetListAndRefresh(options);
+	}
+
 	function parseArtifactCapture(data) {
-		if (!pendingArtifactRequestId || !isRecord(data) || !hasExactKeys(data, ["protocol", "type", "channelNonce", "shipletId", "revisionId", "requestId", "status", "payload"])) return null;
+		if (!pendingArtifactRequestId || artifactCaptureReadyRequestId !== pendingArtifactRequestId || !isRecord(data) || !hasExactKeys(data, ["protocol", "type", "channelNonce", "shipletId", "revisionId", "requestId", "status", "payload"])) return null;
 		if (data.protocol !== "shiplet.artifact.capture.result.v1" || data.type !== "result" || data.channelNonce !== artifactChannelNonce || data.shipletId !== shipletId || data.revisionId !== revisionId || data.requestId !== pendingArtifactRequestId || data.status !== "captured" || !isRecord(data.payload)) return null;
 		const value = data.payload;
 		if (!hasExactKeys(value, ["screenshotDataUrl", "screenshotFailureNote", "screenshotMode", "viewport", "coordinates", "selectedElement", "captureContext"]) || value.screenshotMode !== "element" || !isRecord(value.viewport) || !isRecord(value.coordinates) || !isRecord(value.selectedElement) || !isRecord(value.captureContext)) return null;
@@ -2161,6 +3808,33 @@ export function trustedReviewHostScript(): string {
 		if (!hasExactKeys(value.coordinates, ["pageX", "pageY", "viewportX", "viewportY"]) || !finiteNumber(value.coordinates.pageX, -10000000, 10000000) || !finiteNumber(value.coordinates.pageY, -10000000, 10000000) || !finiteNumber(value.coordinates.viewportX, -100000, 100000) || !finiteNumber(value.coordinates.viewportY, -100000, 100000)) return null;
 		if (!hasExactKeys(value.selectedElement, ["selector", "tagName", "text"]) || !boundedString(value.selectedElement.selector, 1200) || !value.selectedElement.selector || !boundedString(value.selectedElement.tagName, 64) || !/^[A-Z][A-Z0-9-]{0,63}$/.test(value.selectedElement.tagName) || !boundedString(value.selectedElement.text, 500)) return null;
 		if (!hasExactKeys(value.captureContext, ["documentWidth", "documentHeight", "scrollX", "scrollY"]) || !finiteNumber(value.captureContext.documentWidth, 1, 100000) || !finiteNumber(value.captureContext.documentHeight, 1, 100000) || !finiteNumber(value.captureContext.scrollX, -10000000, 10000000) || !finiteNumber(value.captureContext.scrollY, -10000000, 10000000)) return null;
+		return value;
+	}
+
+	function fidelityText(fidelity, failureNote) {
+		if (fidelity === null || fidelity === undefined) return "Capture method unavailable for this earlier feedback.";
+		if (fidelity.kind === "raster-source") return "Captured from the selected image.";
+		if (fidelity.kind === "sanitized-dom") {
+			const labels = { images: "images", canvas: "canvas", media: "media", "form-values": "form values", "external-styles": "external styles" };
+			const limitations = Array.isArray(fidelity.limitations) ? fidelity.limitations.map(value => labels[value]).filter(Boolean) : [];
+			return "Reconstructed from the visible page" + (limitations.length ? "; " + limitations.join(", ") + " may be omitted." : ".");
+		}
+		if (fidelity.kind === "fallback") return "Approximate fallback capture." + (failureNote ? " " + failureNote : "");
+		return "No image attached.";
+	}
+
+	function parsePageCapture(data) {
+		if (!pendingPageCaptureRequestId || !isRecord(data) || !hasExactKeys(data, ["protocol", "type", "channelNonce", "shipletId", "revisionId", "requestId", "pageUrl", "status", "payload"])) return null;
+		if (data.protocol !== "shiplet.artifact.page-capture.result.v1" || data.type !== "result" || data.channelNonce !== artifactChannelNonce || data.shipletId !== shipletId || data.revisionId !== revisionId || data.requestId !== pendingPageCaptureRequestId || data.pageUrl !== pendingPageCapturePageUrl || data.status !== "captured" || !isRecord(data.payload)) return null;
+		const value = data.payload;
+		if (!hasExactKeys(value, ["screenshotDataUrl", "screenshotFailureNote", "screenshotMode", "viewport", "captureContext", "fidelity"]) || value.screenshotMode !== "page" || !isRecord(value.viewport) || !isRecord(value.captureContext) || !isRecord(value.fidelity)) return null;
+		if (value.screenshotDataUrl !== null && (!boundedString(value.screenshotDataUrl, 13400000) || !/^data:image\/(?:png|jpeg|webp);base64,[A-Za-z0-9+/=]+$/.test(value.screenshotDataUrl))) return null;
+		if (value.screenshotFailureNote !== null && !boundedString(value.screenshotFailureNote, 500)) return null;
+		if (!hasExactKeys(value.viewport, ["width", "height", "devicePixelRatio"]) || !finiteNumber(value.viewport.width, 1, 100000) || !finiteNumber(value.viewport.height, 1, 100000) || !finiteNumber(value.viewport.devicePixelRatio, .1, 10)) return null;
+		if (!hasExactKeys(value.captureContext, ["documentWidth", "documentHeight", "scrollX", "scrollY"]) || !finiteNumber(value.captureContext.documentWidth, 1, 100000) || !finiteNumber(value.captureContext.documentHeight, 1, 100000) || !finiteNumber(value.captureContext.scrollX, -10000000, 10000000) || !finiteNumber(value.captureContext.scrollY, -10000000, 10000000)) return null;
+		if (!hasExactKeys(value.fidelity, ["version", "kind", "limitations"]) || value.fidelity.version !== 1 || !["raster-source", "sanitized-dom", "fallback", "none"].includes(value.fidelity.kind) || !Array.isArray(value.fidelity.limitations)) return null;
+		const allowed = ["images", "canvas", "media", "form-values", "external-styles"];
+		if (value.fidelity.limitations.length > 5 || new Set(value.fidelity.limitations).size !== value.fidelity.limitations.length || value.fidelity.limitations.some(item => !allowed.includes(item)) || (value.fidelity.kind === "none" && value.fidelity.limitations.length)) return null;
 		return value;
 	}
 
@@ -2192,6 +3866,8 @@ export function trustedReviewHostScript(): string {
 		artifactScreenshotBase = null;
 		annotationComposerOffset = null;
 		pendingArtifactRequestId = "";
+		artifactCaptureReadyRequestId = "";
+		artifactCapturePostedNonce = "";
 		selectedTarget.textContent = "Page · " + reviewPath;
 		selectedTarget.title = reviewPath;
 		annotationTargetPin.hidden = true;
@@ -2352,6 +4028,7 @@ export function trustedReviewHostScript(): string {
 			});
 			cancelDrawing.addEventListener("click", (event) => { if (event && event.isTrusted === true) closeAnnotationEditor(); });
 		}
+		annotationLayer.hidden = false;
 		annotationStrokeCheckpoint = annotationStrokes.length;
 		annotationEditing = true;
 		notifyEmbedView();
@@ -2387,7 +4064,7 @@ export function trustedReviewHostScript(): string {
 		return { requestId: data.requestId, operation: "feedback.create", payload: { comment: value } };
 	}
 
-	function submitTopLevelConfirmation(requestValue, captureValue, mentionValues) {
+	function submitTopLevelConfirmation(requestValue, captureValue, mentionValues, clientFeedbackId) {
 		if (!isRecord(requestValue) || !hasExactKeys(requestValue, ["requestId", "operation", "payload"])) return false;
 		if (!isIdentifier(requestValue.requestId) || !isRecord(requestValue.payload)) return false;
 		const workflowOperation = requestValue.operation === "workflow.event.create";
@@ -2430,7 +4107,7 @@ export function trustedReviewHostScript(): string {
 			appendField("workflow_fields_json", JSON.stringify(requestValue.payload.fields));
 		} else {
 			appendField("comment", confirmationComment);
-			appendField("client_feedback_id", "embed-" + crypto.randomUUID());
+			appendField("client_feedback_id", isIdentifier(clientFeedbackId) ? clientFeedbackId : "embed-" + crypto.randomUUID());
 		}
 		appendField("page_url", reviewPageUrl);
 		if (embeddedSiteOrigin) appendField("installation_id", new URL(apiUrl).searchParams.get("installation_id") || "");
@@ -2554,10 +4231,152 @@ export function trustedReviewHostScript(): string {
 		widget.src = widgetFrameUrl;
 	}
 
+	function stopArtifactLifecycle(sendDisconnect) {
+		if (bridgeLifecycleTimer && typeof window.clearInterval === "function") window.clearInterval(bridgeLifecycleTimer);
+		if (bridgeLeaseTimer && typeof window.clearTimeout === "function") window.clearTimeout(bridgeLeaseTimer);
+		if (bridgeReconnectTimer && typeof window.clearTimeout === "function") window.clearTimeout(bridgeReconnectTimer);
+		bridgeLifecycleTimer = 0;
+		bridgeLeaseTimer = 0;
+		bridgeReconnectTimer = 0;
+		if (sendDisconnect && artifactPort) {
+			try { artifactPort.postMessage({ protocol: "shiplet.artifact.lifecycle.command.v1", type: "disconnect", channelNonce: artifactChannelNonce, shipletId, revisionId }); } catch {}
+		}
+		bridgeReady = false;
+		artifactChannelConnected = false;
+		bridgeGeneration += 1;
+		savedTargetGeometry = new Map();
+		bridgeGeometrySeen = false;
+		selectTarget.disabled = true;
+	}
+
+	function sendArtifactLifecycleRenewal(generation) {
+		if (!artifactPort || !artifactChannelConnected || generation !== bridgeGeneration || !contextReady) return;
+		bridgeLifecycleSequence = Math.min(2147483647, bridgeLifecycleSequence + 1);
+		try { artifactPort.postMessage({ protocol: "shiplet.artifact.lifecycle.command.v1", type: "renew", channelNonce: artifactChannelNonce, shipletId, revisionId, sequence: bridgeLifecycleSequence }); } catch {}
+	}
+
+	function startArtifactLifecycle() {
+		if (!draftContextUrl) return;
+		const generation = bridgeGeneration;
+		bridgeLifecycleSequence = 0;
+		bridgeLastAlive = Date.now();
+		if (bridgeLifecycleTimer && typeof window.clearInterval === "function") window.clearInterval(bridgeLifecycleTimer);
+		sendArtifactLifecycleRenewal(generation);
+		if (typeof window.setInterval === "function") bridgeLifecycleTimer = window.setInterval(() => sendArtifactLifecycleRenewal(generation), 1000);
+		if (bridgeLeaseTimer && typeof window.clearTimeout === "function") window.clearTimeout(bridgeLeaseTimer);
+		if (typeof window.setTimeout === "function") bridgeLeaseTimer = window.setTimeout(() => {
+			if (generation !== bridgeGeneration || Date.now() - bridgeLastAlive < 3000) return;
+			bridgeReady = false;
+			artifactChannelConnected = false;
+			selectTarget.disabled = true;
+			if (annotationPreparing) cancelTargetSelection();
+			showStaleIndicator("Artifact tracking disconnected. Use Retry to reconnect.");
+		}, 3200);
+	}
+
+	function enableArtifactShortcuts() {
+		if (!artifactPort || !bridgeReady || !contextReady) return;
+		try { artifactPort.postMessage({ protocol: "shiplet.artifact.shortcuts.command.v1", type: "enable", channelNonce: artifactChannelNonce, shipletId, revisionId }); } catch {}
+	}
+
+	function disableArtifactShortcuts() {
+		if (!artifactPort) return;
+		try { artifactPort.postMessage({ protocol: "shiplet.artifact.shortcuts.command.v1", type: "disable", channelNonce: artifactChannelNonce, shipletId, revisionId }); } catch {}
+	}
+
+	function trustedRouteCandidate(value) {
+		try {
+			const candidate = new URL(value);
+			const initialPublic = new URL(page.getAttribute("data-review-page-url") || reviewPageUrl);
+			const initialArtifact = new URL(artifactInitialUrl || candidate.toString());
+			if (candidate.origin !== (embeddedSiteOrigin || initialArtifact.origin)) return "";
+			if (embeddedSiteOrigin) return canonicalOperationPageUrl(candidate.toString());
+			const marker = "/artifact-frame";
+			const artifactPath = initialArtifact.pathname;
+			const markerIndex = artifactPath.indexOf(marker);
+			if (markerIndex < 0) return candidate.origin === initialPublic.origin ? canonicalOperationPageUrl(candidate.toString()) : "";
+			const deliveryBase = artifactPath.slice(0, markerIndex + marker.length);
+			const initialSuffix = artifactPath.slice(markerIndex + marker.length).replace(/^\/+/, "");
+			const initialPublicPath = initialPublic.pathname;
+			if (initialSuffix && !initialPublicPath.endsWith("/" + initialSuffix) && initialPublicPath !== "/" + initialSuffix) return "";
+			const publicBase = initialSuffix ? initialPublicPath.slice(0, initialPublicPath.length - initialSuffix.length).replace(/\/$/, "") : initialPublicPath.replace(/\/$/, "");
+			let suffix = "";
+			if (candidate.pathname.startsWith(deliveryBase + "/")) suffix = candidate.pathname.slice(deliveryBase.length + 1);
+			else if (candidate.origin === initialArtifact.origin && candidate.pathname.startsWith("/")) suffix = candidate.pathname.replace(/^\/+/, "");
+			if (suffix.includes("..") || /%2f|%5c|\\/i.test(suffix)) return "";
+			const mapped = new URL(initialPublic.origin + (publicBase || "") + (suffix ? "/" + suffix : ""));
+			mapped.search = candidate.search;
+			mapped.hash = candidate.hash.startsWith("#/") ? candidate.hash : "";
+			return canonicalOperationPageUrl(mapped.toString());
+		} catch { return ""; }
+	}
+
+	async function handleArtifactRouteChange(value) {
+		const candidate = trustedRouteCandidate(value);
+		if (!candidate || candidate === canonicalOperationPageUrl(reviewPageUrl)) return;
+		const previousContext = reviewContext;
+		const previousKey = reviewContextKey;
+		syncRenderedThreadDrafts();
+		await scheduleDraftSave(true);
+		refreshGeneration += 1;
+		firstPageSerial += 1;
+		nextCursor = null;
+		nextPageInFlight = "";
+		nextPageFailed = false;
+		unsupportedFilter = "";
+		pageError.hidden = true;
+		pageError.textContent = "";
+		clearStaleIndicator();
+		savedTargetDescriptors = [];
+		pendingRevealId = "";
+		pageCommentsMenu.hidden = true;
+		pageCommentsButton.setAttribute("aria-expanded", "false");
+		if (artifactPort && artifactChannelConnected) {
+			try { artifactPort.postMessage({ protocol: "shiplet.artifact.saved-targets.command.v1", type: "replace", channelNonce: artifactChannelNonce, shipletId, revisionId, targets: [] }); } catch {}
+		}
+		render([]);
+		list.setAttribute("aria-busy", "true");
+		loadedCount.textContent = "Loading comments…";
+		setStatus("Loading comments…", "loading");
+		reviewPageUrl = candidate;
+		try { reviewPath = new URL(candidate).pathname || "/"; } catch { reviewPath = "/"; }
+		contextGeneration += 1;
+		contextReady = false;
+		savedTargetGeometry = new Map();
+		await fetchFreshReviewContext("route");
+		if (!contextReady) {
+			reviewContext = previousContext;
+			reviewContextKey = previousKey;
+			reviewPageUrl = previousContext?.pageUrl || reviewPageUrl;
+			showStaleIndicator("This page route cannot be reviewed until it is reopened through Shiplet.");
+			return;
+		}
+		page.setAttribute("data-review-page-url", reviewPageUrl);
+		contextDisclosure.querySelector?.("p") && (context.textContent = "Shiplet " + shipletId + " · Revision " + revisionId + " · " + reviewPath);
+		await hydrateForContext({ retainPrevious: false });
+	}
+
 	function offerArtifactChannel() {
 		if (!artifact || (!embeddedSiteOrigin && !artifact.contentWindow) || typeof MessageChannel !== "function") return;
+		const wasPreparing = annotationPreparing;
+		stopArtifactLifecycle(true);
 		if (artifactPort && pendingArtifactRequestId) {
-			try { artifactPort.postMessage({ protocol: "shiplet.artifact.capture.command.v1", type: "cancel", channelNonce: artifactChannelNonce, shipletId, revisionId, requestId: pendingArtifactRequestId }); } catch {}
+			if (artifactCapturePostedNonce === artifactChannelNonce) {
+				try { artifactPort.postMessage({ protocol: "shiplet.artifact.capture.command.v1", type: "cancel", channelNonce: artifactChannelNonce, shipletId, revisionId, requestId: pendingArtifactRequestId }); } catch {}
+			}
+			pendingArtifactRequestId = "";
+			annotationSelecting = false;
+			selectTarget.textContent = artifactCapture ? "Change element" : "Select element";
+		}
+		artifactCaptureReadyRequestId = "";
+		artifactCapturePostedNonce = "";
+		if (wasPreparing) pendingArtifactRequestId = "";
+		annotationPreparing = wasPreparing;
+		if (wasPreparing) {
+			annotationSelecting = false;
+			artifact.setAttribute("data-shiplet-selecting", "false");
+			updateOverlayUi();
+			setStatus("Connecting to the artifact…", "loading");
 		}
 		try { if (artifactPort && typeof artifactPort.close === "function") artifactPort.close(); } catch {}
 		artifactPort = null;
@@ -2565,11 +4384,9 @@ export function trustedReviewHostScript(): string {
 		artifactChannelConnected = false;
 		if (followingId) stopFollowing();
 		closeAnnotationEditor();
-		form.hidden = true;
-		setAnnotationExpanded(false);
-		setAnnotationMode(false, false);
-		clearArtifactCapture();
 		selectTarget.disabled = true;
+		savedTargetGeometry = new Map();
+		savedTargetDescriptors = [];
 		artifactSourceWindow = embeddedSiteOrigin ? parent : artifact.contentWindow;
 		artifactChannelNonce = crypto.randomUUID();
 		artifactSourceWindow.postMessage({ protocol: "shiplet.artifact.channel.v1", type: "offer", channelNonce: artifactChannelNonce, shipletId, revisionId }, embeddedSiteOrigin || "*");
@@ -2587,6 +4404,64 @@ export function trustedReviewHostScript(): string {
 		artifactPort = connectedPort;
 		connectedPort.addEventListener("message", (portEvent) => {
 			if (artifactPort !== connectedPort || artifactChannelNonce !== connectedNonce) return;
+			const pageCaptureValue = parsePageCapture(portEvent.data);
+			if (pageCaptureValue) {
+				pendingPageCaptureRequestId = "";
+				pendingPageCapturePageUrl = "";
+				artifactCapture = { ...pageCaptureValue, coordinates: { pageX: pageCaptureValue.captureContext.scrollX, pageY: pageCaptureValue.captureContext.scrollY, viewportX: 0, viewportY: 0 }, selectedElement: null };
+				artifactCaptureRequestId = "";
+				artifactScreenshotBase = pageCaptureValue.screenshotDataUrl;
+				selectedTarget.textContent = "Page · " + reviewPath;
+				selectedTarget.title = reviewPath;
+				fidelityDisclosure.textContent = fidelityText(pageCaptureValue.fidelity, pageCaptureValue.screenshotFailureNote);
+				showComposer(true);
+				if (pageCaptureValue.screenshotDataUrl) {
+					void structuredEditor.open({ screenshotDataUrl: pageCaptureValue.screenshotDataUrl, defaults: reviewPreferences.annotation });
+					setStatus("Visible page captured. Add annotations or continue with a page comment.", "ready");
+				} else setComposerMessage("Visible page capture was unavailable. Your text-only page comment is still available.", "error");
+				return;
+			}
+			const lifecycle = portEvent.data;
+			if (isRecord(lifecycle) && hasExactKeys(lifecycle, ["protocol", "type", "channelNonce", "shipletId", "revisionId", "sequence"]) && lifecycle.protocol === "shiplet.artifact.lifecycle.v1" && lifecycle.type === "alive" && lifecycle.channelNonce === connectedNonce && lifecycle.shipletId === shipletId && lifecycle.revisionId === revisionId && Number.isInteger(lifecycle.sequence) && lifecycle.sequence === bridgeLifecycleSequence) {
+				bridgeLastAlive = Date.now();
+				bridgeReady = true;
+				if (bridgeLeaseTimer && typeof window.clearTimeout === "function") window.clearTimeout(bridgeLeaseTimer);
+				if (typeof window.setTimeout === "function") bridgeLeaseTimer = window.setTimeout(() => { if (Date.now() - bridgeLastAlive >= 3000 && artifactPort === connectedPort) { bridgeReady = false; selectTarget.disabled = true; if (annotationPreparing) cancelTargetSelection(); showStaleIndicator("Artifact tracking disconnected. Use Retry to reconnect."); } }, 3200);
+				registerSavedTargets();
+				enableArtifactShortcuts();
+				return;
+			}
+			const geometry = parseSavedTargetGeometry(portEvent.data);
+			if (geometry) {
+				bridgeGeometrySeen = true;
+				savedTargetGeometry = geometry;
+				const needsHostedPinRender = !embeddedSiteOrigin && threadViews.some((entry) => !entry.pin && savedTargetForItem(entry.item) && liveReviewPinPoint(entry.item));
+				if (needsHostedPinRender) render(renderedItems);
+				else {
+					updateReviewPinPositions();
+					postEmbeddedPins();
+				}
+				if (pendingRevealId) {
+					const target = geometry.get(pendingRevealId);
+					if (target?.eligible && !target.offscreen) { pendingRevealId = ""; setStatus("Target revealed.", "ready"); }
+					else if (target && (!target.eligible || target.offscreen)) { pendingRevealId = ""; setStatus("Target unavailable", "ready"); }
+				}
+				return;
+			}
+			const route = portEvent.data;
+			if (isRecord(route) && hasExactKeys(route, ["protocol", "type", "channelNonce", "shipletId", "revisionId", "pageUrl"]) && route.protocol === "shiplet.artifact.route.v1" && route.type === "change" && route.channelNonce === connectedNonce && route.shipletId === shipletId && route.revisionId === revisionId && boundedString(route.pageUrl, 4096)) {
+				currentArtifactRouteUrl = route.pageUrl;
+				void handleArtifactRouteChange(route.pageUrl);
+				return;
+			}
+			const shortcut = portEvent.data;
+			if (isRecord(shortcut) && hasExactKeys(shortcut, ["protocol", "type", "channelNonce", "shipletId", "revisionId", "action"]) && shortcut.protocol === "shiplet.artifact.shortcuts.v1" && shortcut.type === "action" && shortcut.channelNonce === connectedNonce && shortcut.shipletId === shipletId && shortcut.revisionId === revisionId && (shortcut.action === "comment" || shortcut.action === "cancel")) {
+				if (shortcut.action === "comment") void beginAnnotation();
+				else if (annotationSelecting || annotationActive || annotationPreparing) cancelAnnotationFlow();
+				else if (activeThreadPresentation === "contextual") closeContextualThread(true);
+				else if (!panel.hidden) setPanelOpen(false);
+				return;
+			}
 			const viewportValue = parseArtifactViewport(portEvent.data);
 			if (viewportValue) {
 				artifactViewport = viewportValue;
@@ -2605,6 +4480,34 @@ export function trustedReviewHostScript(): string {
 			}
 			if (parseArtifactFollowInterrupt(portEvent.data)) {
 				stopFollowing();
+				return;
+			}
+			const captureReady = portEvent.data;
+			if (
+				annotationPreparing &&
+				!annotationSelecting &&
+				!artifactCaptureReadyRequestId &&
+				pendingArtifactRequestId &&
+				isRecord(captureReady) &&
+				hasExactKeys(captureReady, ["protocol", "type", "channelNonce", "shipletId", "revisionId", "requestId"]) &&
+				captureReady.protocol === "shiplet.artifact.capture.state.v1" &&
+				captureReady.type === "ready" &&
+				captureReady.channelNonce === connectedNonce &&
+				captureReady.shipletId === shipletId &&
+				captureReady.revisionId === revisionId &&
+				captureReady.requestId === pendingArtifactRequestId &&
+				isIdentifier(captureReady.requestId)
+			) {
+				artifactCaptureReadyRequestId = captureReady.requestId;
+				annotationPreparing = false;
+				setPanelOpen(false);
+				form.hidden = true;
+				annotationTargetPin.hidden = true;
+				annotationTargetFocus.hidden = true;
+				setAnnotationExpanded(false);
+				setAnnotationMode(true, true);
+				selectTarget.textContent = "Selecting…";
+				setStatus("Select an element to annotate. Press Escape to cancel.", "ready");
 				return;
 			}
 			const anchorValue = parseArtifactAnchor(portEvent.data);
@@ -2630,6 +4533,8 @@ export function trustedReviewHostScript(): string {
 			};
 			annotationComposerOffset = null;
 			pendingArtifactRequestId = "";
+			artifactCaptureReadyRequestId = "";
+			artifactCapturePostedNonce = "";
 			setAnnotationMode(true, false);
 			selectedTarget.textContent = captureValue.selectedElement.tagName + (captureValue.selectedElement.text ? " · " + captureValue.selectedElement.text : "") + " · " + captureValue.selectedElement.selector;
 			selectedTarget.title = captureValue.selectedElement.selector;
@@ -2638,13 +4543,15 @@ export function trustedReviewHostScript(): string {
 			drawOnScreenshot.hidden = !captureValue.screenshotDataUrl;
 			quickDraw.hidden = !captureValue.screenshotDataUrl;
 			selectTarget.textContent = "Change element";
+			if (embeddedSiteOrigin) setPanelOpen(true);
 			showComposer(true);
 			setStatus("Element context captured. Add an annotation and continue to secure confirmation.", "ready");
 		});
 		connectedPort.start();
 		artifactSourceWindow.postMessage({ protocol: "shiplet.artifact.channel.v1", type: "connect", channelNonce: artifactChannelNonce, shipletId, revisionId }, embeddedSiteOrigin || "*", [channel.port2]);
 		selectTarget.disabled = false;
-		if (annotationSelecting && !pendingArtifactRequestId) startTargetSelection();
+		startArtifactLifecycle();
+		if (annotationPreparing) sendPendingArtifactCaptureStart();
 	});
 
 	window.addEventListener("message", (event) => {
@@ -2688,52 +4595,74 @@ export function trustedReviewHostScript(): string {
 
 	async function submitReviewFeedback() {
 		const value = comment.value.trim();
-		if (!value || submit.disabled) return;
-		submit.disabled = true;
+		if (!value || composerOperation || !contextReady || (topOperationSnapshot && ["pending", "unknown", "failed"].includes(topOperationSnapshot.state))) return;
+		if (draftContextUrl) {
+			const previousContextKey = reviewContextKey;
+			await fetchFreshReviewContext("submit");
+			if (!contextReady || reviewContextKey !== previousContextKey) { setComposerMessage("Review identity is unavailable. Use Refresh after access is restored.", "error"); return; }
+		}
+		const token = crypto.randomUUID();
+		const submittedMentions = selectedMentions(mentionSelect).map((mention) => ({ userId: mention.userId }));
+		const submittedCapture = artifactCapture;
+		composerOperation = { token, value };
+		setComposerBusy(true);
 		if (reviewSubmissionMode === "sandbox") {
 			setStatus("Adding feedback to this sandbox…", "loading");
+			setComposerMessage("Adding this feedback…", "pending");
 			try {
 				const payload = {
 					comment: value,
 					pageUrl: reviewPageUrl,
 					clientFeedbackId: "client-" + Date.now().toString(36) + "-" + crypto.randomUUID().replace(/-/g, "").slice(0, 12),
-					mentions: selectedMentions(mentionSelect),
-					...(artifactCapture || {}),
+					mentions: submittedMentions,
+					...(submittedCapture || {}),
 				};
 				const response = await request("POST", payload);
-				comment.value = "";
-				clearArtifactCapture();
+				if (!composerOperation || composerOperation.token !== token) return;
+				composerOperation = null;
+				discardAnnotationDraft();
 				if (isRecord(response) && isRecord(response.feedback)) {
 					render([response.feedback, ...renderedItems.filter((entry) => !isRecord(entry) || entry.id !== response.feedback.id)]);
 				} else {
 					await refresh();
 				}
-					setStatus("Feedback added to this sandbox.", "ready");
-					showComposer(false);
-					if (typeof window.matchMedia === "function" && window.matchMedia("(max-width: 640px)").matches) setPanelOpen(false);
+				setStatus("Feedback added to this sandbox.", "ready");
+				showComposer(false);
+				if (typeof window.matchMedia === "function" && window.matchMedia("(max-width: 640px)").matches) setPanelOpen(false);
 			} catch {
+				if (!composerOperation || composerOperation.token !== token) return;
+				composerOperation = null;
 				setStatus("Sandbox feedback could not be added. Try again.", "error");
+				setComposerMessage("Sandbox feedback could not be added. Try again.", "error");
 			} finally {
-				submit.disabled = false;
+				if (!composerOperation || composerOperation.token === token) setComposerBusy(false);
 			}
 			return;
 		}
 		setStatus("Opening secure confirmation…", "loading");
+		setComposerMessage("Opening secure confirmation…", "pending");
+		const snapshot = topOperationSnapshot && ["expired"].includes(topOperationSnapshot.state) ? topOperationSnapshot : operationSnapshotFor("feedback.create", null, topDraftVersion, { comment: value, mentions: submittedMentions, capture: submittedCapture });
+		snapshot.immutablePayload = snapshot.immutablePayload || { comment: value, mentions: submittedMentions, capture: submittedCapture };
+		if (!topOperationSnapshot || topOperationSnapshot.requestId !== snapshot.requestId) { topOperationSnapshot = snapshot; await saveOperationReceipt(snapshot); }
 		const submitted = submitTopLevelConfirmation({
-			requestId: "request_" + crypto.randomUUID().replace(/-/g, ""),
+			requestId: snapshot.requestId,
 			operation: "feedback.create",
-			payload: { comment: value },
-		}, artifactCapture, selectedMentions(mentionSelect));
+			payload: { comment: String(snapshot.immutablePayload.comment || value) },
+		}, submittedCapture, submittedMentions, snapshot.immutablePayload.clientFeedbackId);
+		if (!composerOperation || composerOperation.token !== token) return;
+		composerOperation = null;
+		setComposerBusy(false);
 		if (!submitted) {
+			snapshot.state = "failed";
+			await saveOperationReceipt(snapshot);
+			topOperationSnapshot = snapshot;
 			setStatus("Secure confirmation could not be opened. Try again.", "error");
-			submit.disabled = false;
+			setComposerMessage("Secure confirmation could not be opened. Try again.", "error");
 			return;
 		}
-		comment.value = "";
-		setStatus("Complete this action in the secure confirmation window.", "ready");
-		showComposer(false);
-		if (typeof window.matchMedia === "function" && window.matchMedia("(max-width: 640px)").matches) setPanelOpen(false);
-		submit.disabled = false;
+		setStatus("Awaiting secure confirmation. This draft has been retained.", "ready");
+		showOperationState("pending");
+		void pollOperation(snapshot);
 	}
 
 	form.addEventListener("submit", async (event) => {
@@ -2741,6 +4670,20 @@ export function trustedReviewHostScript(): string {
 		if (!event || event.isTrusted !== true) return;
 		await submitReviewFeedback();
 	});
+	comment.addEventListener("compositionstart", () => { mentionComposing = true; mentionSearchGeneration += 1; });
+	comment.addEventListener("compositionend", () => { mentionComposing = false; void searchMentions(); });
+	comment.addEventListener("input", () => { topDraftVersion += 1; void scheduleDraftSave(false); if (!mentionComposing) void searchMentions(); });
+	comment.addEventListener("keydown", event => {
+		if (mentionListbox.hidden || mentionComposing || event.isComposing || event.keyCode === 229) return;
+		if (event.key === "ArrowDown" || event.key === "ArrowUp") { event.preventDefault(); const delta = event.key === "ArrowDown" ? 1 : -1; mentionSearchIndex = (mentionSearchIndex + delta + mentionSearchResults.length) % Math.max(1, mentionSearchResults.length); renderMentionSearch(""); }
+		else if ((event.key === "Enter" || event.key === "Tab") && mentionSearchResults[mentionSearchIndex]) { event.preventDefault(); chooseMention(mentionSearchResults[mentionSearchIndex]); }
+		else if (event.key === "Escape") { event.preventDefault(); mentionSearchGeneration += 1; mentionSearchResults = []; renderMentionSearch(""); }
+	});
+	mentionListbox.addEventListener("click", event => { if (!event || event.isTrusted !== true || !(event.target instanceof Element)) return; const option = event.target.closest("button[role=option]"); if (!option) return; chooseMention(mentionSearchResults.find(user => user.id === option.dataset.userId)); });
+	mentionSelect.addEventListener("change", () => { topDraftVersion += 1; void scheduleDraftSave(false); });
+	window.addEventListener("focus", () => { void (async () => { await fetchFreshReviewContext("focus"); if (topOperationSnapshot && ["pending", "unknown"].includes(topOperationSnapshot.state)) void pollOperation(topOperationSnapshot); })(); });
+	window.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible" || document.visibilityState === undefined) { void (async () => { await fetchFreshReviewContext("visibility"); if (topOperationSnapshot && ["pending", "unknown"].includes(topOperationSnapshot.state)) void pollOperation(topOperationSnapshot); })(); if (artifactChannelConnected) startArtifactLifecycle(); } else void scheduleDraftSave(true); });
+	window.addEventListener("pagehide", () => { void scheduleDraftSave(true); });
 
 	function returnToEmbedSignIn() {
 		const start = new URL("/embed/review/start", location.href);
@@ -2750,6 +4693,10 @@ export function trustedReviewHostScript(): string {
 	}
 
 	async function beginAnnotation() {
+		if (hasAnnotationDraft()) {
+			showComposer(true);
+			return;
+		}
 		if (embeddedSiteOrigin) {
 			try { await request("GET"); }
 			catch (error) {
@@ -2761,22 +4708,30 @@ export function trustedReviewHostScript(): string {
 		startTargetSelection();
 	}
 
-	function startTargetSelection() {
-		if (pendingArtifactRequestId) return;
-		setPanelOpen(false);
-		form.hidden = true;
-		annotationTargetPin.hidden = true;
-		annotationTargetFocus.hidden = true;
-		setAnnotationExpanded(false);
-		setAnnotationMode(true, true);
-		if (!artifactPort) {
-			setStatus("Connecting to the artifact…", "loading");
-			return;
+	function sendPendingArtifactCaptureStart() {
+		if (!annotationPreparing || annotationSelecting || !artifactPort) return;
+		if (!pendingArtifactRequestId) pendingArtifactRequestId = "capture_request_" + crypto.randomUUID().replace(/-/g, "");
+		if (artifactCapturePostedNonce === artifactChannelNonce) return;
+		artifactCaptureReadyRequestId = "";
+		artifactCapturePostedNonce = artifactChannelNonce;
+		selectTarget.textContent = "Preparing…";
+		try {
+			artifactPort.postMessage({ protocol: "shiplet.artifact.capture.command.v1", type: "start", channelNonce: artifactChannelNonce, shipletId, revisionId, requestId: pendingArtifactRequestId });
+		} catch {
+			artifactCapturePostedNonce = "";
+			setStatus("Artifact tracking disconnected. Use Retry to reconnect.", "error");
 		}
+	}
+
+	function startTargetSelection() {
+		if (pendingArtifactRequestId || annotationPreparing || annotationSelecting) return;
+		annotationPreparing = true;
 		pendingArtifactRequestId = "capture_request_" + crypto.randomUUID().replace(/-/g, "");
-		selectTarget.textContent = "Selecting…";
-		setStatus("Select an element to annotate. Press Escape to cancel.", "ready");
-		artifactPort.postMessage({ protocol: "shiplet.artifact.capture.command.v1", type: "start", channelNonce: artifactChannelNonce, shipletId, revisionId, requestId: pendingArtifactRequestId });
+		artifactCaptureReadyRequestId = "";
+		artifactCapturePostedNonce = "";
+		selectTarget.textContent = "Preparing…";
+		setStatus(artifactPort ? "Preparing element selection…" : "Connecting to the artifact…", "loading");
+		sendPendingArtifactCaptureStart();
 	}
 
 	selectTarget.addEventListener("click", async (event) => {
@@ -2868,7 +4823,42 @@ export function trustedReviewHostScript(): string {
 		if (!event || event.isTrusted !== true || widgetRetry.disabled) return;
 		reloadWidget();
 	});
-	refreshButton.addEventListener("click", async () => { await refresh(); });
+	refreshButton.addEventListener("click", async (event) => { if (event && event.isTrusted === true) await manualRefresh(); });
+	staleRefresh.addEventListener("click", async (event) => { if (event && event.isTrusted === true) await manualRefresh(); });
+	loadMore.addEventListener("click", async (event) => { if (event && event.isTrusted === true) await loadNextPage(); });
+	retryPage.addEventListener("click", async (event) => { if (event && event.isTrusted === true) await loadNextPage(); });
+	async function applyFilterChange(key, value) {
+		showFilterError("");
+		if (key === "prefix") {
+			const prefix = normalizedPrefix(value);
+			if (!prefix) { showFilterError("Enter a path on the authorized review origin without query parameters or a fragment."); return; }
+			filterPreferences.prefix = prefix;
+			filterPreferences.scope = "prefix";
+		} else filterPreferences[key] = value;
+		persistFilterPreferences();
+		updateFilterUi();
+		await resetListAndRefresh();
+	}
+	scopeSelect.addEventListener("change", async (event) => {
+		if (!event || event.isTrusted !== true) return;
+		if (scopeSelect.value === "prefix") {
+			const prefix = normalizedPrefix(prefixInput.value) || normalizedPrefix(reviewPageUrl);
+			await applyFilterChange("prefix", prefix);
+		} else await applyFilterChange("scope", scopeSelect.value);
+	});
+	stateSelect.addEventListener("change", async (event) => { if (event && event.isTrusted === true) await applyFilterChange("state", stateSelect.value); });
+	actorSelect.addEventListener("change", async (event) => { if (event && event.isTrusted === true) await applyFilterChange("actor", actorSelect.value); });
+	revisionSelect.addEventListener("change", async (event) => { if (event && event.isTrusted === true) await applyFilterChange("revision", revisionSelect.value); });
+	applyPrefix.addEventListener("click", async (event) => { if (event && event.isTrusted === true) await applyFilterChange("prefix", prefixInput.value); });
+	prefixInput.addEventListener("keydown", async (event) => {
+		if (!event || event.isTrusted !== true || event.key !== "Enter" || event.isComposing || event.keyCode === 229) return;
+		event.preventDefault(); await applyFilterChange("prefix", prefixInput.value);
+	});
+	resetFilters.addEventListener("click", async (event) => {
+		if (!event || event.isTrusted !== true) return;
+		filterPreferences = { ...defaultFilters };
+		persistFilterPreferences(); updateFilterUi(); showFilterError(""); await resetListAndRefresh();
+	});
 	watchButton.addEventListener("click", async (event) => {
 		if (!event || event.isTrusted !== true || watchButton.disabled) return;
 		watchButton.disabled = true;
@@ -2884,17 +4874,75 @@ export function trustedReviewHostScript(): string {
 	});
 	previousButton.addEventListener("click", (event) => { if (event && event.isTrusted === true) scrollToThread(-1); });
 	nextButton.addEventListener("click", (event) => { if (event && event.isTrusted === true) scrollToThread(1); });
+	pageComment.addEventListener("click", (event) => {
+		if (!event || event.isTrusted !== true) return;
+		creationMenu.hidden = true;
+		clearArtifactCapture();
+		fidelityDisclosure.textContent = "No image attached.";
+		setPanelOpen(false);
+		showComposer(true);
+	});
+	drawOnPage.addEventListener("click", (event) => {
+		if (!event || event.isTrusted !== true || !artifactPort || !bridgeReady || pendingPageCaptureRequestId) return;
+		creationMenu.hidden = true;
+		pendingPageCaptureRequestId = "page_capture_" + crypto.randomUUID().replace(/-/g, "");
+		pendingPageCapturePageUrl = currentArtifactRouteUrl;
+		setStatus("Capturing the visible page…", "loading");
+		try { artifactPort.postMessage({ protocol: "shiplet.artifact.page-capture.command.v1", type: "capture", channelNonce: artifactChannelNonce, shipletId, revisionId, requestId: pendingPageCaptureRequestId, pageUrl: pendingPageCapturePageUrl }); }
+		catch { pendingPageCaptureRequestId = ""; pendingPageCapturePageUrl = ""; showComposer(true); setComposerMessage("Visible page capture was unavailable. Your text-only page comment is still available.", "error"); }
+	});
+	selectElement.addEventListener("click", (event) => { if (event && event.isTrusted === true) { creationMenu.hidden = true; startTargetSelection(); } });
 	composeButton.addEventListener("click", async (event) => {
 		if (!event || event.isTrusted !== true) return;
-		await beginAnnotation();
+		if (embeddedSiteOrigin) { await beginAnnotation(); return; }
+		creationMenu.hidden = !creationMenu.hidden;
+		composeButton.setAttribute("aria-expanded", creationMenu.hidden ? "false" : "true");
 	});
-	cancelComposer.addEventListener("click", (event) => { if (event && event.isTrusted === true) cancelAnnotationFlow(); });
+	dockSelect.addEventListener("change", event => { if (event && event.isTrusted === true && ["top-left", "top-right", "bottom-left", "bottom-right"].includes(dockSelect.value)) { reviewPreferences.dock = dockSelect.value; persistReviewPreferences(); } });
+	launchSelect.addEventListener("change", event => { if (event && event.isTrusted === true && ["manual", "open-comments"].includes(launchSelect.value)) { reviewPreferences.launch = launchSelect.value; persistReviewPreferences(); } });
+	motionSelect.addEventListener("change", event => { if (event && event.isTrusted === true && ["system", "reduced"].includes(motionSelect.value)) { reviewPreferences.motion = motionSelect.value; persistReviewPreferences(); } });
+	copyRequestsToggle.addEventListener("change", event => { if (event && event.isTrusted === true) { reviewPreferences.copyRequestsEnabled = Boolean(copyRequestsToggle.checked); persistReviewPreferences(); } });
+	copyHiddenReview.addEventListener("click", event => { if (event && event.isTrusted === true) void copyCleanReviewLink("review"); });
+	copyHiddenComments.addEventListener("click", event => { if (event && event.isTrusted === true) void copyCleanReviewLink("comments"); });
+	restoreVisibility.addEventListener("click", event => { if (!event || event.isTrusted !== true) return; launcherDock.hidden = false; restoreVisibility.hidden = true; setOverlayVisible(reviewPreferences.overlaysVisible); });
+	cancelComposer.addEventListener("click", async (event) => {
+		if (!event || event.isTrusted !== true) return;
+		if (topOperationSnapshot && ["pending", "unknown"].includes(topOperationSnapshot.state)) {
+			const cancelled = await cancelPendingOperation(topOperationSnapshot);
+			if (!cancelled) return;
+		}
+		cancelAnnotationFlow();
+	});
 	cancelAnnotationMode.addEventListener("click", (event) => { if (event && event.isTrusted === true) cancelAnnotationFlow(); });
+	retryOperationButton.addEventListener("click", async (event) => {
+		if (!event || event.isTrusted !== true || !topOperationSnapshot || topOperationSnapshot.state !== "failed") return;
+		await fetchFreshReviewContext("retry");
+		if (!contextReady) { setComposerMessage("Review identity is unavailable. Use Refresh after access is restored.", "error"); return; }
+		topOperationSnapshot = null;
+		setComposerBusy(false);
+		setComposerMessage("", "");
+		void scheduleDraftSave(true);
+	});
+	overlayToggle.addEventListener("click", (event) => { if (event && event.isTrusted === true) setOverlayVisible(!overlayVisible); });
+	pageCommentsButton.addEventListener("click", (event) => {
+		if (!event || event.isTrusted !== true || !(overlayVisible && !annotationSelecting) || pageCommentsItems.length === 0) return;
+		renderPageCommentsMenu();
+		pageCommentsMenu.hidden = !pageCommentsMenu.hidden;
+		pageCommentsButton.setAttribute("aria-expanded", pageCommentsMenu.hidden ? "false" : "true");
+		if (!pageCommentsMenu.hidden) pageCommentsMenu.querySelector?.("button")?.focus?.();
+	});
+	storageRetry.addEventListener("click", async (event) => {
+		if (!event || event.isTrusted !== true) return;
+		if (await openDraftStorage()) { await scheduleDraftSave(true); await restoreDraftRecord(); }
+	});
 	closeButton.addEventListener("click", (event) => { if (event && event.isTrusted === true) setPanelOpen(false); });
+	contextualThreadClose.addEventListener("click", (event) => { if (event && event.isTrusted === true) closeContextualThread(true); });
 	commentsLauncher.addEventListener("click", (event) => { if (event && event.isTrusted === true) setPanelOpen(panel.hidden); });
 	launcher.addEventListener("click", async (event) => { if (event && event.isTrusted === true) await beginAnnotation(); });
+	window.addEventListener("compositionstart", () => { activeComposition = true; });
+	window.addEventListener("compositionend", () => { activeComposition = false; });
 	window.addEventListener("keydown", (event) => {
-		if (event && event.key === "Escape" && followingId) stopFollowing();
+		if (event && event.key === "Escape" && followingId && !activeComposition && !event.isComposing && event.keyCode !== 229) stopFollowing();
 	});
 	window.addEventListener("keydown", async (event) => {
 		if (!event || event.isTrusted !== true) return;
@@ -2902,6 +4950,12 @@ export function trustedReviewHostScript(): string {
 		const tagName = target && typeof target.tagName === "string" ? target.tagName.toUpperCase() : "";
 		const editable = tagName === "INPUT" || tagName === "TEXTAREA" || tagName === "SELECT" || Boolean(target && target.isContentEditable);
 		if (event.key === "Escape") {
+			if (activeComposition || event.isComposing || event.keyCode === 229) return;
+			if (activeThreadPresentation === "contextual") {
+				event.preventDefault();
+				closeContextualThread(true);
+				return;
+			}
 			if (annotationEditing) {
 				event.preventDefault();
 				closeAnnotationEditor();
@@ -2912,7 +4966,7 @@ export function trustedReviewHostScript(): string {
 				setAnnotationExpanded(false);
 				return;
 			}
-			if (!form.hidden || annotationActive) {
+			if (!form.hidden || annotationActive || annotationPreparing) {
 				event.preventDefault();
 				cancelAnnotationFlow();
 				return;
@@ -2923,7 +4977,7 @@ export function trustedReviewHostScript(): string {
 			}
 			return;
 		}
-		if ((event.metaKey || event.ctrlKey) && event.key === "Enter" && target === comment) {
+		if ((event.metaKey || event.ctrlKey) && event.key === "Enter" && target === comment && !activeComposition && !event.isComposing && event.keyCode !== 229) {
 			event.preventDefault();
 			await submitReviewFeedback();
 			return;
@@ -2935,18 +4989,19 @@ export function trustedReviewHostScript(): string {
 	});
 	window.addEventListener("resize", () => {
 		renderAnnotationCanvas();
+		updateReviewPinPositions();
 		if (form.hidden) return;
 		if (artifactCapture) anchorAnnotationComposer(artifactCapture, true);
 		else moveAnnotationComposer(parseFloat(form.style.left || "8"), parseFloat(form.style.top || "8"));
 	});
-	window.addEventListener("online", () => { void refresh(); });
+	window.addEventListener("online", () => { void refresh("poll"); });
 	window.addEventListener("beforeunload", () => {
 		presenceStopped = true;
 		window.clearTimeout(presenceReconnectTimer);
 		clearWidgetHandshakeTimer();
 		try { if (presenceSocket) presenceSocket.close(1000, "page unloading"); } catch {}
 	});
-	if (typeof window.setInterval === "function") window.setInterval(() => { if (!document.hidden) void refresh(); }, 5000);
+	if (typeof window.setInterval === "function") window.setInterval(() => { if (!document.hidden) void refresh("poll"); }, 5000);
 
 	if (embeddedSiteOrigin) {
 		// Intent is written only inside the trusted frame by a real launcher click.
@@ -2956,10 +5011,15 @@ export function trustedReviewHostScript(): string {
 		else if (intent === "comments") setPanelOpen(true);
 		else notifyEmbedView();
 	}
-	void refresh();
+	filterPreferences = readFilterPreferences();
+	if (filterPreferences.scope === "prefix" && !filterPreferences.prefix) filterPreferences.scope = "page";
+	updateFilterUi();
+	updateOverlayUi();
+	void (async () => { await fetchFreshReviewContext("initial"); if (contextReady) await hydrateForContext(); else { list.setAttribute("aria-busy", "false"); setStatus("Review identity is unavailable. Use Refresh after access is restored.", "error"); } })();
 	void loadWatch();
 	void loadMentionUsers();
 	connectPresence();
+	applyTransientVisibility();
 })();`;
 }
 
@@ -2967,7 +5027,7 @@ export function trustedReviewHostStyles(): string {
   return String.raw`
 :root{color-scheme:light;font:14px/1.45 ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;color:#20293a;background:#fff;--shiplet-ink:#20293a;--shiplet-muted:#5d6b85;--shiplet-line:#c8cbd3;--shiplet-surface:#fbf9f4;--shiplet-raised:#fff;--shiplet-action:#b44729;--shiplet-accent:#2f6e88}
 *{box-sizing:border-box}body{margin:0;min-height:100vh}main{height:100vh;background:#fff}iframe[data-shiplet-artifact-frame]{display:block;width:100%;height:100%;border:0;background:#fff;color-scheme:light dark}
-.shiplet-review-launcher-dock{position:fixed;right:16px;bottom:16px;z-index:31;display:flex;align-items:stretch;gap:6px;transition:opacity .14s ease,transform .14s ease}.shiplet-review-launcher-dock[data-annotation-active="true"]{visibility:hidden;opacity:0;pointer-events:none;transform:translateY(8px)}
+.shiplet-review-launcher-dock{position:fixed;right:16px;bottom:16px;z-index:31;display:flex;align-items:stretch;gap:6px;transition:opacity .14s ease,transform .14s ease}.shiplet-review-launcher-dock[data-annotation-active="true"],.shiplet-review-launcher-dock[data-review-surface-open="true"]{visibility:hidden;opacity:0;pointer-events:none;transform:translateY(8px)}
 .shiplet-review-launcher,.shiplet-review-comments-launcher{appearance:none;display:inline-flex;align-items:center;justify-content:center;min-height:40px;border:1px solid rgba(255,255,255,.34);background:#20293a;box-shadow:0 4px 16px rgba(0,0,0,.32),0 0 0 1px rgba(0,0,0,.32);color:#fff;font:750 12px/1 ui-sans-serif,system-ui,sans-serif;cursor:pointer}.shiplet-review-launcher{padding:0 13px;border-radius:9px}.shiplet-review-launcher::before{content:"+";display:grid;place-items:center;width:17px;height:17px;margin-right:7px;border:1.5px solid #fff;border-radius:999px;font:800 14px/1 ui-sans-serif}.shiplet-review-launcher[data-panel-open="true"]{visibility:hidden;opacity:0;pointer-events:none;transform:translateY(8px)}.shiplet-review-comments-launcher{width:40px;padding:0;border-radius:9px}
 .shiplet-review-count{display:inline-grid;place-items:center;min-width:20px;height:20px;padding:0 5px;border-radius:999px;background:#fff;color:var(--shiplet-ink);font-size:10px;font-weight:800}
 .shiplet-annotation-modebar{position:fixed;top:12px;left:50%;z-index:2147483550;display:flex;align-items:center;gap:10px;max-width:calc(100vw - 24px);min-height:42px;padding:5px 6px 5px 12px;transform:translateX(-50%);border:1px solid var(--shiplet-accent);border-radius:10px;background:var(--shiplet-surface);box-shadow:0 7px 22px rgba(0,0,0,.26);color:var(--shiplet-ink);font:800 12px/1.2 ui-sans-serif,system-ui,sans-serif;white-space:nowrap}.shiplet-annotation-mode-label{min-width:0;overflow:hidden;text-overflow:ellipsis}.shiplet-annotation-modebar[hidden]{display:none}.shiplet-annotation-modebar button{min-width:34px;min-height:32px;border:1px solid var(--shiplet-line);border-radius:7px;background:#fff;color:var(--shiplet-ink);font:750 11px/1 ui-sans-serif,system-ui;cursor:pointer}
@@ -2975,6 +5035,9 @@ export function trustedReviewHostStyles(): string {
 .shiplet-review-visually-hidden{position:absolute!important;width:1px!important;height:1px!important;padding:0!important;margin:-1px!important;overflow:hidden!important;clip:rect(0,0,0,0)!important;white-space:nowrap!important;border:0!important}
 iframe[data-shiplet-artifact-frame][data-shiplet-selecting="true"]{outline:3px solid #1677ff;outline-offset:-3px;filter:saturate(.96) brightness(.94)}
 .shiplet-review-pin-layer{position:fixed;inset:0;z-index:28;pointer-events:none}.shiplet-review-pin{position:absolute;transform:translate(-50%,-50%);display:grid;place-items:center;width:28px;height:28px;padding:0;border:2px solid #fff;border-radius:999px;background:#fff;box-shadow:0 0 0 2px #20293a,0 3px 10px rgba(0,0,0,.32);color:var(--shiplet-ink);font:800 11px/1 ui-sans-serif,system-ui,sans-serif;cursor:pointer;pointer-events:auto;transition:background .14s ease,color .14s ease,box-shadow .14s ease,transform .14s ease}.shiplet-review-pin[data-active="true"]{transform:translate(-50%,-50%) scale(1.12);background:var(--shiplet-action);box-shadow:0 0 0 3px #20293a,0 5px 14px rgba(0,0,0,.36);color:#fff}
+.shiplet-review-pin-stack{position:absolute;transform:translate(-50%,-50%);display:grid;place-items:center;width:32px;height:32px;padding:0;border:2px solid #fff;border-radius:999px;background:var(--shiplet-action);box-shadow:0 0 0 2px #20293a,0 4px 12px rgba(0,0,0,.36);color:#fff;font:800 11px/1 ui-sans-serif,system-ui,sans-serif;cursor:pointer;pointer-events:auto}.shiplet-review-pin-stack:focus-visible{outline:3px solid var(--shiplet-accent);outline-offset:3px}.shiplet-review-pin-stack-menu{position:fixed;z-index:34;display:grid;gap:4px;width:min(320px,calc(100vw - 16px));max-height:min(220px,calc(100vh - 16px));padding:6px;overflow:auto;border:1px solid var(--shiplet-line);border-radius:9px;background:#fff;box-shadow:0 10px 28px rgba(32,41,58,.28);pointer-events:auto}.shiplet-review-pin-stack-menu[hidden]{display:none}.shiplet-review-pin-stack-menu button{min-height:36px;padding:6px 8px;border:1px solid transparent;border-radius:6px;background:#fff;color:var(--shiplet-ink);font:700 11px/1.3 ui-sans-serif,system-ui,sans-serif;text-align:left;cursor:pointer}.shiplet-review-pin-stack-menu button:hover,.shiplet-review-pin-stack-menu button:focus-visible{border-color:var(--shiplet-accent);background:#edf5f7;outline:0}
+.shiplet-review-page-comments{position:fixed;right:16px;top:16px;z-index:33;min-height:36px;padding:0 10px;border:1px solid var(--shiplet-line);border-radius:8px;background:var(--shiplet-surface);box-shadow:0 4px 14px rgba(32,41,58,.2);color:var(--shiplet-ink);font:750 11px/1 ui-sans-serif,system-ui,sans-serif;cursor:pointer;pointer-events:auto}.shiplet-review-page-comments[hidden]{display:none}.shiplet-review-page-comments-menu{position:fixed;right:16px;top:58px;z-index:34;display:grid;gap:4px;width:min(320px,calc(100vw - 16px));max-height:min(260px,calc(100vh - 76px));padding:6px;overflow:auto;border:1px solid var(--shiplet-line);border-radius:9px;background:#fff;box-shadow:0 10px 28px rgba(32,41,58,.28);pointer-events:auto}.shiplet-review-page-comments-menu[hidden]{display:none}.shiplet-review-page-comments-menu button{min-height:36px;padding:6px 8px;border:1px solid transparent;border-radius:6px;background:#fff;color:var(--shiplet-ink);font:700 11px/1.3 ui-sans-serif,system-ui,sans-serif;text-align:left;cursor:pointer}.shiplet-review-page-comments-menu button:hover,.shiplet-review-page-comments-menu button:focus-visible{border-color:var(--shiplet-accent);background:#edf5f7;outline:0}
+.shiplet-contextual-thread{position:fixed;z-index:32;display:grid;grid-template-rows:auto minmax(0,1fr);width:min(440px,calc(100vw - 16px));max-height:min(560px,calc(100dvh - 16px));overflow:hidden;border:1px solid var(--shiplet-line);border-radius:12px;background:var(--shiplet-surface);box-shadow:0 14px 42px rgba(32,41,58,.26)}.shiplet-contextual-thread[hidden]{display:none}.shiplet-contextual-thread-header{display:flex;align-items:center;justify-content:space-between;gap:12px;min-height:48px;padding:8px 10px;border-bottom:1px solid var(--shiplet-line);background:var(--shiplet-raised)}.shiplet-contextual-thread-title{color:var(--shiplet-action);font:800 12px/1.2 ui-sans-serif,system-ui,sans-serif}.shiplet-contextual-thread-close{min-width:56px;min-height:36px;padding:0 10px;border:1px solid var(--shiplet-line);border-radius:7px;background:#fff;color:var(--shiplet-ink);font:750 11px/1 ui-sans-serif,system-ui,sans-serif;cursor:pointer}.shiplet-contextual-thread-body{min-height:0;overflow:auto;overscroll-behavior:contain}.shiplet-contextual-thread-body>.shiplet-review-thread-details{border-top:0;padding:12px}.shiplet-contextual-thread-body .shiplet-review-thread-comment{font-size:14px}
 .shiplet-review-presence{position:fixed;top:16px;left:16px;z-index:30;display:flex;align-items:center;gap:6px;min-height:38px;padding:4px 7px 4px 10px;border:1px solid var(--shiplet-line);border-radius:999px;background:var(--shiplet-surface);box-shadow:0 3px 12px rgba(32,41,58,.18)}.shiplet-review-presence[hidden]{display:none}.shiplet-review-presence-summary{margin-right:3px;color:var(--shiplet-muted);font-size:11px;font-weight:700}.shiplet-review-presence-avatar{display:inline-grid;place-items:center;width:28px;height:28px;border:2px solid var(--shiplet-ink);border-radius:999px;background:#fff;color:var(--shiplet-ink);font:800 10px/1 ui-monospace,SFMono-Regular,Menlo,monospace}
 .shiplet-review-presence-viewer{appearance:none;position:relative;display:inline-grid;place-items:center;padding:0;border:0;border-radius:999px;background:transparent;color:var(--shiplet-ink);font:inherit}.shiplet-review-presence-viewer::after{content:attr(data-shiplet-presence-name);position:absolute;top:calc(100% + 9px);left:50%;z-index:1;padding:6px 9px;border-radius:7px;background:var(--shiplet-ink);color:#fff;font:700 11px/1 ui-sans-serif,system-ui,sans-serif;white-space:nowrap;box-shadow:0 4px 12px rgba(32,41,58,.24);opacity:0;transform:translate(-50%,-3px);pointer-events:none;transition:opacity .12s ease,transform .12s ease}.shiplet-review-presence-viewer:first-of-type::after,.shiplet-review-presence-viewer:nth-of-type(2)::after{left:0;transform:translate(0,-3px)}.shiplet-review-presence-viewer:hover::after,.shiplet-review-presence-viewer:focus-visible::after{opacity:1;transform:translate(-50%,0)}.shiplet-review-presence-viewer:first-of-type:hover::after,.shiplet-review-presence-viewer:nth-of-type(2):hover::after,.shiplet-review-presence-viewer:first-of-type:focus-visible::after,.shiplet-review-presence-viewer:nth-of-type(2):focus-visible::after{transform:translate(0,0)}button.shiplet-review-presence-viewer{cursor:pointer;transition:transform .14s ease,box-shadow .14s ease}button.shiplet-review-presence-viewer:hover,button.shiplet-review-presence-viewer:focus-visible{transform:translateY(-1px);box-shadow:0 0 0 3px color-mix(in srgb,currentColor 28%,transparent);outline:0}button.shiplet-review-presence-viewer[aria-pressed="true"]{box-shadow:0 0 0 3px currentColor}button.shiplet-review-presence-viewer[aria-pressed="true"] .shiplet-review-presence-avatar{border-color:#fff}.shiplet-review-presence-viewer[data-shiplet-presence-self]{opacity:.82}
 .shiplet-review-cursor-layer{position:fixed;inset:0;z-index:29;overflow:hidden;pointer-events:none}.shiplet-review-remote-cursor{position:absolute;left:0;top:0;display:flex;align-items:flex-start;gap:0;will-change:transform;transition:transform .09s linear}.shiplet-review-remote-cursor[hidden]{display:none}.shiplet-review-remote-cursor-arrow{position:relative;display:block;width:20px;height:22px;filter:drop-shadow(0 0 1px #fff) drop-shadow(0 0 1px #fff) drop-shadow(0 2px 3px rgba(0,0,0,.35))}.shiplet-review-remote-cursor-arrow::before{content:"";position:absolute;inset:0;background:currentColor;clip-path:polygon(0 0,100% 58%,56% 64%,38% 100%)}.shiplet-review-remote-cursor-label{display:inline-flex;align-items:center;gap:6px;max-width:220px;margin:14px 0 0 -4px;padding:3px 9px 3px 3px;border-radius:999px;background:#20293a;color:#fff;font:750 11px/1 ui-sans-serif,system-ui,sans-serif;white-space:nowrap;box-shadow:0 2px 8px rgba(0,0,0,.3)}.shiplet-review-remote-cursor-avatar{display:inline-grid;place-items:center;flex:0 0 auto;width:18px;height:18px;border:1.5px solid #fff;border-radius:999px;background:#fff;background-repeat:no-repeat;color:var(--shiplet-ink);font:800 8px/1 ui-monospace,SFMono-Regular,Menlo,monospace;overflow:hidden}.shiplet-review-remote-cursor-name{overflow:hidden;text-overflow:ellipsis}
@@ -2983,21 +5046,28 @@ iframe[data-shiplet-artifact-frame][data-shiplet-selecting="true"]{outline:3px s
 .shiplet-review-head{position:sticky;top:0;z-index:2;display:flex;align-items:flex-start;justify-content:space-between;gap:8px;padding:9px 9px 8px 11px;border-bottom:1px solid #d7dbe3;background:rgba(251,249,244,.97);backdrop-filter:blur(8px)}.shiplet-review-heading{min-width:0}.shiplet-review-head h2{margin:0;font-size:14px;line-height:1.2}.shiplet-review-context-disclosure{position:relative;max-width:100%;margin-top:2px}.shiplet-review-context-disclosure summary{display:block;max-width:100%;overflow:hidden;color:var(--shiplet-muted);font:700 10px/1.3 ui-sans-serif,system-ui,sans-serif;text-overflow:ellipsis;white-space:nowrap;cursor:pointer;list-style:none}.shiplet-review-context-disclosure summary::-webkit-details-marker{display:none}.shiplet-review-context-disclosure summary::before{content:"↳ ";color:var(--shiplet-action)}.shiplet-review-context{position:absolute;top:18px;left:0;z-index:4;width:min(294px,calc(100vw - 44px));margin:0;padding:7px 8px;border:1px solid var(--shiplet-line);border-radius:7px;background:#fff;box-shadow:0 6px 18px rgba(32,41,58,.18);color:var(--shiplet-muted);font:650 10px/1.35 ui-monospace,SFMono-Regular,Menlo,monospace;overflow-wrap:anywhere}.shiplet-review-composer-context{margin:3px 0 0;color:var(--shiplet-muted);font:650 10px/1.3 ui-monospace,SFMono-Regular,Menlo,monospace;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.shiplet-review-actions{display:flex;align-items:center;gap:4px;flex:0 0 auto}
 .shiplet-review-secondary,.shiplet-review-icon,.shiplet-review-primary,.shiplet-review-thread-action,.shiplet-review-status-more summary,.shiplet-review-options summary,.shiplet-review-reply-form button{min-height:32px;padding:0 8px;border:1px solid var(--shiplet-line);border-radius:7px;background:var(--shiplet-raised);color:var(--shiplet-ink);font:700 11px/1 ui-sans-serif,system-ui,sans-serif;cursor:pointer}.shiplet-review-primary{border-color:#8f321c;background:var(--shiplet-action);color:#fff}.shiplet-review-icon{font-size:0;width:32px;padding:0}.shiplet-review-icon::before{content:"×";font-size:20px;font-weight:400}.shiplet-review-nav{width:30px;font-size:13px}.shiplet-review-nav::before{content:none}.shiplet-review-compose{width:32px;padding:0;font-size:17px;color:var(--shiplet-muted)}.shiplet-review-options,.shiplet-review-status-more{position:relative}.shiplet-review-options summary,.shiplet-review-status-more summary{display:grid;place-items:center;padding:0;list-style:none}.shiplet-review-options summary{width:30px}.shiplet-review-status-more summary{width:auto;padding:0 7px;color:var(--shiplet-muted)}.shiplet-review-options summary::-webkit-details-marker,.shiplet-review-status-more summary::-webkit-details-marker{display:none}.shiplet-review-options>div{position:absolute;top:36px;right:0;display:grid;gap:5px;min-width:126px;padding:6px;border:1px solid var(--shiplet-line);border-radius:8px;background:#fff;box-shadow:0 8px 22px rgba(32,41,58,.2)}
 .shiplet-review-status{min-height:0;margin:0;padding:6px 11px;color:var(--shiplet-muted);font-size:10px}.shiplet-review-status[hidden]{display:none}.shiplet-review-status[data-state="error"]{border-bottom:1px solid #e5b7ad;background:#f8e9e5;color:#8c2a1c}
-.shiplet-review-list{display:grid;min-width:0;gap:6px;margin:0;padding:7px 8px 8px;list-style:none}.shiplet-review-list>li{min-width:0;padding:0;border:1px solid #d7dbe3;border-radius:8px;background:var(--shiplet-raised);color:#3a4459;overflow-wrap:anywhere;transition:border-color .14s ease,box-shadow .14s ease,background .14s ease}.shiplet-review-list>li[data-active="true"]{border-color:#a7b9c3;box-shadow:inset 2px 0 0 var(--shiplet-accent);background:#f8fbfc}.shiplet-review-thread-summary{display:grid;grid-template-columns:auto minmax(0,1fr) auto;gap:2px 8px;width:100%;max-width:100%;min-width:0;min-height:48px;padding:8px 9px;border:0;border-radius:7px;background:transparent;color:var(--shiplet-ink);text-align:left;cursor:pointer}.shiplet-review-thread-author{grid-column:1/3;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:11px;font-weight:800}.shiplet-review-thread-time{grid-column:3;color:var(--shiplet-muted);font-size:10px}.shiplet-review-thread-summary strong{grid-column:1;font-size:10px;color:var(--shiplet-action)}.shiplet-review-thread-summary-comment{grid-column:2/4;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#3a4459;font-size:12px}.shiplet-review-thread-summary-comment[hidden]{display:none}.shiplet-review-thread-details{display:grid;gap:8px;padding:8px 9px 9px;border-top:1px solid #e5e7eb}.shiplet-review-thread-details[hidden],.shiplet-review-form[hidden]{display:none}.shiplet-review-thread-meta{display:flex;align-items:center;justify-content:flex-start;gap:5px;flex-wrap:wrap}.shiplet-review-status-more select{position:absolute;right:0;z-index:2;width:130px;padding:6px;border:1px solid var(--shiplet-line);border-radius:7px;background:#fff}.shiplet-review-thread-comment{margin:0;font-size:13px;white-space:pre-wrap}.shiplet-review-replies{display:grid;gap:6px;margin:0;padding:0 0 0 12px;list-style:none}.shiplet-review-replies:empty{display:none}.shiplet-review-replies li{padding:7px 8px;border-left:2px solid #d7dbe3;background:#f7f8fa}.shiplet-review-reply-meta{display:flex;gap:7px;color:var(--shiplet-muted);font-size:10px}.shiplet-review-reply-author{font-weight:800;color:#3a4459}.shiplet-review-replies p{margin:3px 0 0;font-size:12px}.shiplet-review-reply-form{display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:center;gap:5px;padding-top:8px;border-top:1px solid #e5e7eb}.shiplet-review-reply-form input{min-width:0;min-height:34px;width:100%;padding:0 8px;border:1px solid #9ca3af;border-radius:7px;background:#fff;color:var(--shiplet-ink)}.shiplet-review-reply-form button{border-color:#8f321c;background:var(--shiplet-action);color:#fff}.shiplet-review-reply-form select{grid-column:1/-1;max-width:100%}
+.shiplet-review-create-menu{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:6px;padding:8px;border-bottom:1px solid var(--shiplet-line);background:#fff}.shiplet-review-create-menu[hidden]{display:none}.shiplet-review-create-menu button{min-height:44px;padding:7px;border:1px solid var(--shiplet-line);border-radius:8px;background:#fff;color:var(--shiplet-ink);font:750 11px/1.25 ui-sans-serif,system-ui;cursor:pointer}.shiplet-review-create-menu button:first-child{border-color:var(--shiplet-action);background:var(--shiplet-action);color:#fff}
+.shiplet-review-settings>summary,.shiplet-review-custom-actions>summary{min-height:32px;padding:9px;border:1px solid var(--shiplet-line);border-radius:7px;background:#fff;font:750 11px/1 ui-sans-serif,system-ui;cursor:pointer}.shiplet-review-settings>div{display:grid;gap:8px;width:min(300px,calc(100vw - 32px));padding:9px}.shiplet-review-settings label{display:grid;gap:4px;font-size:11px}.shiplet-review-settings select,.shiplet-review-settings button,.shiplet-review-settings input[readonly]{min-height:38px;max-width:100%;padding:7px;border:1px solid var(--shiplet-line);border-radius:7px;background:#fff;color:var(--shiplet-ink)}.shiplet-review-custom-actions p{max-width:260px;margin:0;padding:8px;font-size:11px}.shiplet-review-mention-listbox{display:grid;max-height:180px;overflow:auto;border:1px solid var(--shiplet-line);border-radius:8px;background:#fff}.shiplet-review-mention-listbox[hidden]{display:none}.shiplet-review-mention-listbox button{min-height:38px;padding:7px 9px;border:0;border-bottom:1px solid var(--shiplet-line);background:#fff;text-align:left}.shiplet-review-mention-listbox button[aria-selected="true"]{background:#e3edf2}.shiplet-review-fidelity{margin:0;padding:8px;border-radius:7px;background:#edf5f7;color:#245b72;font-size:11px}.shiplet-review-rich-tools,.shiplet-review-copy-request,.shiplet-review-structured-editor{grid-column:1/-1}.shiplet-review-copy-request{padding:8px;border:1px solid var(--shiplet-line);border-radius:8px}.shiplet-review-copy-request p{font-size:11px}.shiplet-review-copy-request textarea{width:100%}body[data-review-dock="top-left"] #shiplet-kernel-review-panel,body[data-review-dock="top-right"] #shiplet-kernel-review-panel{top:max(12px,env(safe-area-inset-top));bottom:auto}body[data-review-dock="top-left"] #shiplet-kernel-review-panel,body[data-review-dock="bottom-left"] #shiplet-kernel-review-panel{left:max(12px,env(safe-area-inset-left));right:auto}body[data-review-dock="top-right"] #shiplet-kernel-review-panel,body[data-review-dock="bottom-right"] #shiplet-kernel-review-panel{right:max(12px,env(safe-area-inset-right));left:auto}.shiplet-review-launcher-dock[data-review-dock="top-left"],.shiplet-review-launcher-dock[data-review-dock="top-right"]{top:max(12px,env(safe-area-inset-top));bottom:auto}.shiplet-review-launcher-dock[data-review-dock="top-left"],.shiplet-review-launcher-dock[data-review-dock="bottom-left"]{left:max(12px,env(safe-area-inset-left));right:auto}.shiplet-review-launcher-dock[data-review-dock="top-right"],.shiplet-review-launcher-dock[data-review-dock="bottom-right"]{right:max(12px,env(safe-area-inset-right));left:auto}body[data-review-reduced-motion="true"] *,body[data-review-reduced-motion="true"] *::before,body[data-review-reduced-motion="true"] *::after{scroll-behavior:auto!important;transition:none!important;animation:none!important}
+.shiplet-review-filter-bar{display:grid;grid-template-columns:auto minmax(0,1fr) auto;align-items:center;gap:6px;padding:7px 9px;border-bottom:1px solid #e5e7eb;background:#fff}.shiplet-review-filters{position:relative}.shiplet-review-filters>summary{min-height:34px;padding:9px 10px;border:1px solid var(--shiplet-line);border-radius:7px;background:#fff;font-size:11px;font-weight:800;cursor:pointer;list-style:none}.shiplet-review-filter-fields{position:absolute;top:40px;left:0;z-index:5;display:grid;width:min(330px,calc(100vw - 32px));gap:9px;padding:11px;border:1px solid var(--shiplet-line);border-radius:9px;background:#fff;box-shadow:0 8px 24px rgba(32,41,58,.2)}.shiplet-review-filter-fields label{display:grid;gap:4px;color:var(--shiplet-muted);font-size:10px;font-weight:800}.shiplet-review-filter-fields select,.shiplet-review-filter-fields input{min-height:38px;width:100%;padding:7px 8px;border:1px solid #9ca3af;border-radius:7px;background:#fff;color:var(--shiplet-ink);font:inherit}.shiplet-review-filter-help{font-size:10px;font-weight:500;line-height:1.35}.shiplet-review-filter-error,.shiplet-review-page-error{margin:0;color:#8c2a1c;font-size:11px}.shiplet-review-scope-summary{min-width:0;overflow:hidden;color:var(--shiplet-muted);font-size:10px;font-weight:700;text-overflow:ellipsis;white-space:nowrap}.shiplet-review-pin-limit{margin:7px 9px 0;padding:7px 8px;border-radius:7px;background:#edf5f7;color:#245b72;font-size:10px}.shiplet-review-pagination{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:4px 9px 10px}.shiplet-review-pagination p{margin:0;color:var(--shiplet-muted);font-size:10px}.shiplet-review-pagination .shiplet-review-page-error{flex:1;color:#8c2a1c}.shiplet-review-pagination button{min-height:36px}
+.shiplet-review-list{display:grid;min-width:0;gap:6px;margin:0;padding:7px 8px 8px;list-style:none}.shiplet-review-list>li{min-width:0;padding:0;border:1px solid #d7dbe3;border-radius:8px;background:var(--shiplet-raised);color:#3a4459;overflow-wrap:anywhere;transition:border-color .14s ease,box-shadow .14s ease,background .14s ease}.shiplet-review-list>li[data-active="true"]{border-color:#a7b9c3;box-shadow:inset 2px 0 0 var(--shiplet-accent);background:#f8fbfc}.shiplet-review-thread-summary{display:grid;grid-template-columns:auto minmax(0,1fr) auto;gap:2px 8px;width:100%;max-width:100%;min-width:0;min-height:48px;padding:8px 9px;border:0;border-radius:7px;background:transparent;color:var(--shiplet-ink);text-align:left;cursor:pointer}.shiplet-review-thread-author{grid-column:1/3;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:11px;font-weight:800}.shiplet-review-thread-time{grid-column:3;color:var(--shiplet-muted);font-size:10px}.shiplet-review-thread-summary strong{grid-column:1;font-size:10px;color:var(--shiplet-action)}.shiplet-review-thread-summary-status{grid-column:2;color:var(--shiplet-muted);font-size:10px;font-weight:750}.shiplet-review-thread-summary-comment{grid-column:2/4;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#3a4459;font-size:12px}.shiplet-review-thread-summary-comment[hidden]{display:none}.shiplet-review-thread-details{display:grid;gap:8px;padding:8px 9px 9px;border-top:1px solid #e5e7eb}.shiplet-review-thread-details[hidden],.shiplet-review-form[hidden]{display:none}.shiplet-review-thread-meta{display:flex;align-items:center;justify-content:flex-start;gap:5px;flex-wrap:wrap}.shiplet-review-thread-meta>a{color:#245b72;font-size:11px;font-weight:750}.shiplet-review-provenance{font-size:10px}.shiplet-review-provenance summary{cursor:pointer;font-weight:750}.shiplet-review-provenance span{display:block;max-width:220px;margin-top:4px;overflow-wrap:anywhere;color:var(--shiplet-muted)}.shiplet-review-status-more select{position:absolute;right:0;z-index:2;width:130px;padding:6px;border:1px solid var(--shiplet-line);border-radius:7px;background:#fff}.shiplet-review-thread-comment{margin:0;font-size:13px;white-space:pre-wrap}.shiplet-review-replies{display:grid;gap:6px;margin:0;padding:0 0 0 12px;list-style:none}.shiplet-review-replies:empty{display:none}.shiplet-review-replies li{padding:7px 8px;border-left:2px solid #d7dbe3;background:#f7f8fa}.shiplet-review-reply-meta{display:flex;gap:7px;color:var(--shiplet-muted);font-size:10px}.shiplet-review-reply-author{font-weight:800;color:#3a4459}.shiplet-review-replies p{margin:3px 0 0;font-size:12px}.shiplet-review-reply-form{display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:center;gap:5px;padding-top:8px;border-top:1px solid #e5e7eb}.shiplet-review-reply-form textarea{min-width:0;min-height:54px;width:100%;padding:7px 8px;border:1px solid #9ca3af;border-radius:7px;background:#fff;font:inherit;resize:vertical}.shiplet-review-reply-form button{border-color:#8f321c;background:var(--shiplet-action);color:#fff}.shiplet-review-reply-form select,.shiplet-review-thread-message,.shiplet-review-composer-message{grid-column:1/-1}.shiplet-review-stale{position:fixed;right:12px;bottom:68px;z-index:2147483540;max-width:calc(100vw - 24px);border:1px solid #b8a978;border-radius:9px;background:#fff8df}
 .shiplet-review-form{position:fixed;z-index:2147483530;display:grid;width:min(360px,calc(100vw - 16px));max-width:calc(100vw - 16px);margin:0;border:1px solid var(--shiplet-accent);background:var(--shiplet-surface);box-shadow:0 16px 42px rgba(32,41,58,.28),0 0 0 1px rgba(255,255,255,.75);color:var(--shiplet-ink);font:13px/1.4 ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;overflow:hidden}.shiplet-review-form[data-annotation-state="compact"]{grid-template-columns:minmax(0,1fr) auto;align-items:stretch;gap:0;padding:0;border-color:var(--shiplet-line);border-radius:10px;box-shadow:0 3px 8px rgba(32,41,58,.18)}.shiplet-review-form[data-annotation-state="compact"]:focus-within{border-color:var(--shiplet-accent)}.shiplet-review-form[data-annotation-state="expanded"]{gap:10px;max-height:min(520px,calc(100dvh - 16px));padding:0 12px 12px;border-radius:12px;overflow-x:hidden;overflow-y:auto}.shiplet-review-form[hidden]{display:none}
 .shiplet-annotation-card-header{position:sticky;top:0;z-index:2;display:flex;align-items:center;justify-content:space-between;gap:8px;margin:0 -12px;padding:10px 10px 9px 12px;border-bottom:1px solid #d7dbe3;background:rgba(251,249,244,.97);backdrop-filter:blur(8px)}.shiplet-annotation-card-heading{display:grid;min-width:0;gap:2px}.shiplet-annotation-card-title{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:13px}.shiplet-annotation-exact-context{color:var(--shiplet-muted);font:700 10px/1.3 ui-sans-serif,system-ui,sans-serif;overflow-wrap:anywhere}.shiplet-annotation-card-controls{display:flex;flex:0 0 auto;gap:5px}.shiplet-annotation-drag-handle,.shiplet-annotation-card-close{min-height:32px;padding:0 9px;border:1px solid var(--shiplet-line);border-radius:7px;background:#fff;color:var(--shiplet-muted)}.shiplet-annotation-drag-handle{display:inline-flex;align-items:center;gap:6px;cursor:grab;touch-action:none;font:750 10px/1 ui-sans-serif,system-ui}.shiplet-annotation-drag-handle::before{content:"⠿";font-size:16px;letter-spacing:-2px}.shiplet-annotation-card-close{width:34px;padding:0;cursor:pointer;font-size:0}.shiplet-annotation-card-close::before{content:"×";font:400 20px/1 ui-sans-serif}.shiplet-review-form[data-dragging="true"] .shiplet-annotation-drag-handle{cursor:grabbing;border-color:var(--shiplet-accent);background:#e3edf2;color:var(--shiplet-accent)}
 .shiplet-review-form textarea{grid-column:1;min-width:0;width:100%;min-height:46px;max-height:120px;resize:none;padding:11px 10px;border:1px solid #aeb5c2;border-radius:8px;background:#fff;color:var(--shiplet-ink);font:inherit;line-height:1.35}.shiplet-review-form textarea::placeholder{color:#748097}.shiplet-review-form textarea:focus{border-color:var(--shiplet-accent);outline:2px solid rgba(47,110,136,.18)}.shiplet-review-form[data-annotation-state="expanded"] textarea{grid-column:auto;min-height:92px;resize:vertical}.shiplet-review-composer-context{display:none}.shiplet-review-mentions{padding:7px 8px;border:1px solid #d7dbe3;border-radius:7px;background:#fff}.shiplet-review-mentions summary{cursor:pointer;font-size:11px;font-weight:700}.shiplet-review-mentions select{width:100%;margin-top:7px}.shiplet-review-capture-tools,.shiplet-review-composer-actions{display:flex;flex-wrap:wrap;gap:6px}.shiplet-review-capture-tools{padding-top:2px}.shiplet-review-composer-actions{grid-column:2;align-items:center;justify-content:flex-end}.shiplet-review-composer-actions button{min-height:40px;padding:0 10px;border:1px solid var(--shiplet-line);border-radius:8px;background:#fff;color:var(--shiplet-ink);font:750 11px/1 ui-sans-serif,system-ui;cursor:pointer}.shiplet-review-composer-actions button[type="submit"],[data-shiplet-widget-confirm]{border-color:#8f321c;background:var(--shiplet-action);color:#fff}.shiplet-review-composer-actions .shiplet-annotation-settings{width:44px;padding:0;background:var(--shiplet-surface);color:var(--shiplet-muted);font-size:0}.shiplet-annotation-settings::before{content:"⚙";font-size:24px;line-height:1}.shiplet-review-form[data-annotation-state="compact"] .shiplet-review-composer-actions{align-items:stretch;flex-wrap:nowrap;gap:0}.shiplet-review-form[data-annotation-state="compact"] .shiplet-review-composer-actions [data-shiplet-review-cancel-compose]{display:none}.shiplet-review-form[data-annotation-state="compact"] .shiplet-annotation-card-header,.shiplet-review-form[data-annotation-state="compact"] .shiplet-review-composer-context,.shiplet-review-form[data-annotation-state="compact"] .shiplet-review-target,.shiplet-review-form[data-annotation-state="compact"] .shiplet-annotation-properties,.shiplet-review-form[data-annotation-state="compact"] .shiplet-review-mentions,.shiplet-review-form[data-annotation-state="compact"] .shiplet-review-capture-tools{display:none}.shiplet-review-form[data-annotation-state="expanded"] .shiplet-review-composer-actions{grid-column:auto}.shiplet-review-form[data-annotation-state="expanded"] .shiplet-annotation-settings{display:none}.shiplet-review-target{justify-self:start;max-width:100%;min-height:28px;margin:0;padding:6px 9px;border:1px solid #9cb8c4;border-radius:999px;background:#edf5f7;color:#245b72;font-size:11px;font-weight:750;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.shiplet-annotation-properties{margin:0;border:1px solid #d7dbe3;border-radius:8px;background:#fff;color:var(--shiplet-ink);overflow:hidden}.shiplet-annotation-properties summary{min-height:38px;padding:10px 12px;color:#3a4459;font-size:11px;font-weight:800;cursor:pointer;list-style:none}.shiplet-annotation-properties summary::after{content:"+";float:right;color:var(--shiplet-accent);font-size:16px;line-height:12px}.shiplet-annotation-properties[open] summary::after{content:"−"}.shiplet-annotation-property-rows{display:grid;grid-template-columns:auto minmax(0,1fr);gap:7px 12px;margin:0;padding:10px 12px;border-top:1px solid #e5e7eb;font:11px/1.35 ui-sans-serif,system-ui,sans-serif}.shiplet-annotation-property-label{margin:0;color:var(--shiplet-muted);font-weight:700}.shiplet-annotation-property-value{min-width:0;margin:0;color:var(--shiplet-ink);text-align:right;overflow-wrap:anywhere}
 .shiplet-review-annotation-editor{position:fixed;inset:0;z-index:2147483510;pointer-events:none}.shiplet-review-annotation-editor[data-drawing="true"]{z-index:2147483600;background:rgba(32,41,58,.08);pointer-events:auto}.shiplet-review-annotation-editor canvas{position:absolute;inset:0;width:100%;height:100%;pointer-events:none;touch-action:none}.shiplet-review-annotation-editor[data-drawing="true"] canvas{pointer-events:auto;cursor:crosshair}.shiplet-review-annotation-toolbar{position:absolute;top:14px;left:50%;display:flex;gap:8px;transform:translateX(-50%);padding:8px;border:1px solid var(--shiplet-ink);border-radius:9px;background:var(--shiplet-surface);box-shadow:0 6px 24px rgba(32,41,58,.28);pointer-events:auto}.shiplet-review-annotation-toolbar button{min-height:38px;padding:0 12px;border:1px solid var(--shiplet-line);border-radius:7px;background:#fff;color:var(--shiplet-ink);font-weight:750}
 .shiplet-widget-recovery{display:grid;gap:8px;margin:0 10px 10px;padding:10px;border:1px solid #e5b7ad;border-radius:8px;background:#f8e9e5;color:#8c2a1c}.shiplet-widget-recovery[hidden]{display:none}.shiplet-widget-recovery p{margin:0;overflow-wrap:anywhere}iframe[data-shiplet-widget-frame]{width:calc(100% - 20px);min-height:220px;margin:0 10px 10px;border:1px solid #d7dbe3;border-radius:8px;background:#fff}[data-shiplet-widget-confirmation]{display:grid;gap:8px;margin:0 10px 10px;padding:10px;border:2px solid var(--shiplet-accent);border-radius:8px;background:#fff}[data-shiplet-widget-confirmation][hidden]{display:none}[data-shiplet-widget-confirmation] h3,[data-shiplet-widget-confirmation] p{margin:0;overflow-wrap:anywhere}[data-shiplet-widget-cancel]{justify-self:start;min-height:34px;padding:0 10px;border:1px solid var(--shiplet-line);border-radius:7px;background:#fff;color:var(--shiplet-ink);font:700 11px/1 ui-sans-serif,system-ui,sans-serif;cursor:pointer}
-.shiplet-review-form[data-annotation-state="compact"] textarea{min-height:60px;margin:0;padding:12px;border:0;border-radius:9px 0 0 9px;background:transparent}.shiplet-review-form[data-annotation-state="compact"] textarea::placeholder{color:var(--shiplet-muted)}.shiplet-review-form[data-annotation-state="compact"] textarea:focus{outline:2px solid var(--shiplet-accent);outline-offset:-2px}
+.shiplet-review-form[data-annotation-state="compact"] textarea{min-height:60px;margin:0;padding:12px;border:0;border-radius:9px 0 0 9px;background:transparent}.shiplet-review-form[data-annotation-state="compact"] textarea:focus{outline:2px solid var(--shiplet-accent);outline-offset:-2px}
 .shiplet-review-form[data-annotation-state="compact"] .shiplet-review-composer-actions button{min-width:44px;min-height:44px;margin:0;border:0;border-left:1px solid var(--shiplet-line);border-radius:0}.shiplet-review-form[data-annotation-state="compact"] .shiplet-review-composer-actions button[type="submit"]{min-width:60px;padding:0 14px;font-size:12px}.shiplet-review-form[data-annotation-state="compact"] .shiplet-review-composer-actions button:focus-visible{outline:3px solid var(--shiplet-accent);outline-offset:-3px}.shiplet-review-form[data-annotation-state="compact"] .shiplet-review-composer-actions button[type="submit"]:focus-visible{outline-color:#fff}
 .shiplet-review-composer-actions .shiplet-annotation-settings:hover:not(:disabled){background:color-mix(in srgb,var(--shiplet-surface),var(--shiplet-ink) 6%);color:var(--shiplet-ink)}.shiplet-review-composer-actions .shiplet-annotation-settings:active:not(:disabled){background:color-mix(in srgb,var(--shiplet-surface),var(--shiplet-ink) 12%)}.shiplet-review-form[data-annotation-state="compact"] button[type="submit"]:hover:not(:disabled){background:color-mix(in srgb,var(--shiplet-action),var(--shiplet-ink) 12%)}.shiplet-review-form[data-annotation-state="compact"] button[type="submit"]:active:not(:disabled){background:color-mix(in srgb,var(--shiplet-action),var(--shiplet-ink) 22%)}
 button:disabled{cursor:wait;opacity:.58}:focus-visible{outline:3px solid #2f6e88;outline-offset:2px}
-@media (max-width:480px){#shiplet-kernel-review-panel{right:8px;bottom:8px;width:calc(100vw - 16px);max-height:min(68dvh,560px);border-radius:12px}.shiplet-review-launcher-dock{right:10px;bottom:10px}.shiplet-review-launcher,.shiplet-review-comments-launcher{min-height:44px}.shiplet-review-comments-launcher{width:44px}.shiplet-annotation-modebar{top:8px;width:calc(100vw - 16px);min-height:44px;justify-content:space-between}.shiplet-annotation-modebar button{min-width:44px;min-height:44px}.shiplet-review-form{width:calc(100vw - 16px);max-width:calc(100vw - 16px)}.shiplet-review-form[data-annotation-state="compact"]{grid-template-columns:minmax(0,1fr) auto}.shiplet-review-form[data-annotation-state="expanded"]{max-height:calc(100dvh - 16px)}.shiplet-review-form textarea{min-height:52px;font-size:16px}.shiplet-annotation-drag-handle,.shiplet-annotation-card-close,.shiplet-review-composer-actions button{min-width:44px;min-height:44px}.shiplet-review-presence{top:10px;left:10px;max-width:calc(100vw - 20px)}.shiplet-review-presence-summary{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0,0,0,0)}.shiplet-review-head{flex-wrap:wrap}.shiplet-review-heading{flex-basis:100%}.shiplet-review-context-disclosure summary{display:flex;align-items:center;min-height:44px}.shiplet-review-actions{width:100%;justify-content:flex-end}.shiplet-review-compose{width:44px;padding:0;font-size:18px}.shiplet-review-secondary,.shiplet-review-icon,.shiplet-review-primary,.shiplet-review-thread-action,.shiplet-review-status-more summary,.shiplet-review-options summary,.shiplet-review-reply-form button,.shiplet-review-composer-actions button,.shiplet-review-capture-tools button{min-width:44px;min-height:44px}.shiplet-review-reply-form input{min-height:44px}.shiplet-review-thread-summary{min-height:52px}.shiplet-review-annotation-toolbar{top:8px;left:8px;right:8px;transform:none;justify-content:center}}
+@media (max-width:480px){#shiplet-kernel-review-panel{right:8px;bottom:8px;width:calc(100vw - 16px);max-height:min(68dvh,560px);border-radius:12px}.shiplet-contextual-thread{left:8px!important;top:8px!important;width:calc(100vw - 16px);max-height:calc(100dvh - 16px)}.shiplet-contextual-thread-close{min-width:64px;min-height:44px}.shiplet-review-launcher-dock{right:10px;bottom:10px}.shiplet-review-launcher,.shiplet-review-comments-launcher{min-height:44px}.shiplet-review-comments-launcher{width:44px}.shiplet-annotation-modebar{top:8px;width:calc(100vw - 16px);min-height:44px;justify-content:space-between}.shiplet-annotation-modebar button{min-width:44px;min-height:44px}.shiplet-review-form{width:calc(100vw - 16px);max-width:calc(100vw - 16px)}.shiplet-review-form[data-annotation-state="compact"]{grid-template-columns:minmax(0,1fr) auto}.shiplet-review-form[data-annotation-state="expanded"]{max-height:calc(100dvh - 16px)}.shiplet-review-form textarea{min-height:52px;font-size:16px}.shiplet-annotation-drag-handle,.shiplet-annotation-card-close,.shiplet-review-composer-actions button{min-width:44px;min-height:44px}.shiplet-review-presence{top:10px;left:10px;max-width:calc(100vw - 20px)}.shiplet-review-presence-summary{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0,0,0,0)}.shiplet-review-head{flex-wrap:wrap}.shiplet-review-heading{flex-basis:100%}.shiplet-review-context-disclosure summary{display:flex;align-items:center;min-height:44px}.shiplet-review-actions{width:100%;justify-content:flex-end}.shiplet-review-compose{width:44px;padding:0;font-size:18px}.shiplet-review-secondary,.shiplet-review-icon,.shiplet-review-primary,.shiplet-review-thread-action,.shiplet-review-status-more summary,.shiplet-review-options summary,.shiplet-review-reply-form button,.shiplet-review-composer-actions button,.shiplet-review-capture-tools button{min-width:44px;min-height:44px}.shiplet-review-reply-form input{min-height:44px}.shiplet-review-thread-summary{min-height:52px}.shiplet-review-annotation-toolbar{top:8px;left:8px;right:8px;transform:none;justify-content:center}}
 @media (prefers-reduced-motion:reduce){*,*::before,*::after{scroll-behavior:auto!important;transition-duration:.01ms!important;animation-duration:.01ms!important;animation-iteration-count:1!important}}
 
 html[data-shiplet-embed-origin]:not([data-shiplet-embed-origin=""]),html[data-shiplet-embed-origin]:not([data-shiplet-embed-origin=""]) body,html[data-shiplet-embed-origin]:not([data-shiplet-embed-origin=""]) main{background:transparent}
 html[data-shiplet-embed-origin]:not([data-shiplet-embed-origin=""]) #shiplet-kernel-review-panel{inset:8px 8px 72px;width:auto;max-width:none;max-height:none}
+html[data-shiplet-embed-origin]:not([data-shiplet-embed-origin=""]) .shiplet-review-actions{position:relative}
+html[data-shiplet-embed-origin]:not([data-shiplet-embed-origin=""]) .shiplet-review-page-comments-embedded{position:static;top:auto;right:auto;z-index:auto;flex:0 1 auto;max-width:100%;white-space:nowrap}
+html[data-shiplet-embed-origin]:not([data-shiplet-embed-origin=""]) .shiplet-review-page-comments-menu-embedded{position:absolute;top:calc(100% + 4px);right:0;z-index:34}
+html[data-shiplet-embed-origin]:not([data-shiplet-embed-origin=""]) .shiplet-contextual-thread{inset:8px;width:auto;max-height:none}
 html[data-shiplet-embed-origin]:not([data-shiplet-embed-origin=""]) .shiplet-review-form{left:12px!important;top:auto!important;bottom:12px;width:calc(100% - 24px);max-height:calc(100dvh - 24px)}
 html[data-shiplet-embed-origin]:not([data-shiplet-embed-origin=""]) .shiplet-review-target{max-width:100%;white-space:normal;border-radius:8px}
 html[data-shiplet-embed-origin]:not([data-shiplet-embed-origin=""]) .shiplet-annotation-modebar{max-width:calc(100% - 24px);overflow:hidden;text-overflow:ellipsis}
@@ -3015,6 +5085,8 @@ html[data-shiplet-embed-view="expanded"] .shiplet-annotation-modebar{display:non
 .shiplet-embed-auth-status{position:fixed;inset:8px 8px 72px;margin:0;padding:12px;border:1px solid var(--shiplet-line);border-radius:10px;background:var(--shiplet-surface);color:var(--shiplet-ink);font:14px/1.4 system-ui;overflow:auto}.shiplet-embed-auth-status[hidden]{display:none}.shiplet-embed-auth-status button{min-height:44px;margin-left:8px;border:1px solid var(--shiplet-line);border-radius:7px;background:#fff;color:var(--shiplet-ink);cursor:pointer}
 @media(max-width:480px){html[data-shiplet-embed-view="comments"] #shiplet-kernel-review-panel{inset:0 0 72px;border-radius:12px 12px 0 0}}
 
+${reviewAnnotationEditorStyles()}
+${reviewAttachmentDraftStyles()}
 `;
 }
 
@@ -3269,7 +5341,7 @@ function trustedWidgetCompartmentScript(input: {
 	function renderTemplate() {
 		if (!root) return false;
 		const template = document.createElement("template");
-		template.innerHTML = decodeBase64(templateBase64);
+		template.content.appendChild(document.createRange().createContextualFragment(decodeBase64(templateBase64)));
 		const fragment = document.createDocumentFragment();
 		for (const child of Array.from(template.content.childNodes)) {
 			const safe = sanitizeNode(child, 0);

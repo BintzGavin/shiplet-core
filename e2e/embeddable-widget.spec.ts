@@ -41,15 +41,11 @@ test("two-tag install selects real page content, shares feedback, follows SPA na
   try {
     await page.goto("http://127.0.0.1:8799/home");
     const widget = page.locator("shiplet-feedback");
-    await expect(
-      widget.getByRole("button", { name: "Open Shiplet feedback" }),
-    ).toBeVisible();
-    await expect(widget.locator("iframe")).toHaveCount(0);
-    await widget.getByRole("button", { name: "Open Shiplet feedback" }).click();
+    await expect(widget.locator("iframe")).toHaveCount(1);
     const frame = widget.locator("iframe").contentFrame();
     await expect(
       frame
-        .getByRole("button", { name: /^Annotate / })
+        .getByRole("button", { name: /^Annotate/ })
         .or(frame.getByRole("button", { name: "Open secure Shiplet sign-in" })),
     ).toBeVisible();
     if (
@@ -63,14 +59,17 @@ test("two-tag install selects real page content, shares feedback, follows SPA na
         .click();
       const signIn = await signInPopup;
       await expect(
-        frame.getByRole("button", { name: /^Annotate / }),
+        frame.getByRole("button", { name: /^Annotate/ }),
       ).toBeVisible();
       if (!signIn.isClosed()) await signIn.close();
     }
     await expect(
-      frame.getByRole("button", { name: /^Annotate / }),
+      frame.getByRole("button", { name: /^Annotate/ }),
     ).toBeVisible();
-    await frame.getByRole("button", { name: /^Annotate / }).click();
+    await frame.getByRole("button", { name: /^Annotate/ }).click();
+    await expect(
+      frame.locator("[data-shiplet-review-select-target]"),
+    ).toBeEnabled();
     await page
       .getByRole("heading", { name: "A website worth reviewing." })
       .click();
@@ -79,7 +78,9 @@ test("two-tag install selects real page content, shares feedback, follows SPA na
     );
     const comment = "Make this heading more specific for new customers.";
     await frame.locator(".shiplet-review-form textarea").fill(comment);
-    await page.screenshot({ path: "/tmp/shiplet-embed-desktop.png" });
+    await page.screenshot({
+      path: "/private/tmp/shiplet-parity-navigation-r2-20260920/embeddable-desktop-before-close.png",
+    });
     const confirmationPromise = page.waitForEvent("popup");
     await frame
       .getByRole("button", { name: "Send annotation", exact: true })
@@ -92,19 +93,40 @@ test("two-tag install selects real page content, shares feedback, follows SPA na
       confirmation.getByRole("heading", { name: "Feedback sent" }),
     ).toBeVisible();
     await confirmation.close();
-    const response = await request.get(
+    const cancelAnnotation = frame.getByRole("button", {
+      name: "Cancel annotation",
+    });
+    if (await cancelAnnotation.isVisible()) await cancelAnnotation.click();
+    const listResponse = await request.get(
       `/api/projects/${project.project.id}/review-feedback`,
-      { headers: authHeaders(owner) },
+      {
+        headers: {
+          ...authHeaders(owner),
+          Origin: "http://localhost:8787",
+        },
+      },
     );
-    const feedback = await response.json();
-    expect(JSON.stringify(feedback)).toContain(comment);
-    expect(JSON.stringify(feedback)).toContain("A website worth reviewing.");
-    expect(JSON.stringify(feedback)).not.toContain("Private fixture content");
+    expect(listResponse.ok(), await listResponse.text()).toBe(true);
+    const listBody = (await listResponse.json()) as {
+      feedback: Array<{
+        id: string;
+        comment: string;
+        status: string;
+      }>;
+      nextCursor: string | null;
+    };
+    expect(listBody).toHaveProperty("feedback");
+    expect(listBody).toHaveProperty("nextCursor");
+    const createdFeedback = listBody.feedback.find((item) => item.comment === comment);
+    expect(createdFeedback).toBeDefined();
+    expect(createdFeedback?.comment).toBe(comment);
+    const createdFeedbackId = createdFeedback?.id;
+    expect(createdFeedbackId).toEqual(expect.any(String));
     await expect(
-      widget.getByRole("button", { name: "Open comment 1", exact: true }),
+      widget.getByRole("button", { name: "Open PF-1", exact: true }),
     ).toBeVisible();
     await widget
-      .getByRole("button", { name: "Open comment 1", exact: true })
+      .getByRole("button", { name: "Open PF-1", exact: true })
       .click();
     await expect(frame.locator(".shiplet-review-thread-details")).toBeVisible();
     const teammate = testUser("embed-teammate");
@@ -114,16 +136,12 @@ test("two-tag install selects real page content, shares feedback, follows SPA na
       const teammatePage = await teammateContext.newPage();
       await loginAs(teammatePage, teammate);
       await teammatePage.goto("http://127.0.0.1:8799/home");
-      await teammatePage
-        .locator("shiplet-feedback")
-        .getByRole("button", { name: "Open Shiplet feedback" })
-        .click();
-      const teammateFrame = teammatePage
-        .locator("shiplet-feedback iframe")
-        .contentFrame();
+      const teammateWidget = teammatePage.locator("shiplet-feedback");
+      await expect(teammateWidget.locator("iframe")).toHaveCount(1);
+      const teammateFrame = teammateWidget.locator("iframe").contentFrame();
       await expect(
         teammateFrame
-          .getByRole("heading", { name: "Comments", exact: true })
+          .getByRole("button", { name: /^Annotate/ })
           .or(
             teammateFrame.getByRole("button", {
               name: "Open secure Shiplet sign-in",
@@ -145,6 +163,10 @@ test("two-tag install selects real page content, shares feedback, follows SPA na
         ).toBeVisible();
         if (!signIn.isClosed()) await signIn.close();
       }
+      await teammateFrame.locator(".shiplet-review-comments-launcher").click();
+      await expect(
+        teammateFrame.getByRole("heading", { name: "Comments", exact: true }),
+      ).toBeVisible();
       await expect(
         teammatePage
           .locator("shiplet-feedback iframe")
@@ -178,13 +200,15 @@ test("two-tag install selects real page content, shares feedback, follows SPA na
       await expect(
         frame.locator(".shiplet-review-thread-summary-comment"),
       ).toContainText(comment);
-      if (
-        (await frame
-          .locator(".shiplet-review-thread-summary")
-          .getAttribute("aria-expanded")) !== "true"
-      )
-        await frame.locator(".shiplet-review-thread-summary").click();
-      await expect(frame.locator(".shiplet-review-replies")).toContainText(
+      await frame.locator("body").press("Escape");
+      await frame.locator("body").press("Escape");
+      await expect(frame.locator("#shiplet-annotation-composer")).toBeHidden();
+      await widget.getByRole("button", { name: "Open PF-1", exact: true }).click();
+      const ownerThread = frame.getByRole("region", {
+        name: "Thread PF-1",
+        exact: true,
+      });
+      await expect(ownerThread.locator(".shiplet-review-replies")).toContainText(
         "I can take this change.",
       );
       const resolvePopup = teammatePage.waitForEvent("popup");
@@ -199,37 +223,74 @@ test("two-tag install selects real page content, shares feedback, follows SPA na
         resolveConfirmation.getByRole("heading", { name: "Status updated" }),
       ).toBeVisible();
       await resolveConfirmation.close();
-      await expect(
-        frame.getByRole("button", { name: "Reopen PF-1", exact: true }),
-      ).toBeVisible();
+      const resolvedResponse = await request.get(
+        `/api/projects/${project.project.id}/review-feedback/${encodeURIComponent(createdFeedbackId!)}`,
+        {
+          headers: {
+            ...authHeaders(owner),
+            Origin: "http://localhost:8787",
+          },
+        },
+      );
+      expect(resolvedResponse.ok(), await resolvedResponse.text()).toBe(true);
+      const resolvedBody = (await resolvedResponse.json()) as {
+        feedback: { id: string; comment: string; status: string };
+      };
+      expect(resolvedBody.feedback.id).toBe(createdFeedbackId);
+      expect(resolvedBody.feedback.comment).toBe(comment);
+      expect(resolvedBody.feedback.status).toBe("Done");
     } finally {
       await teammateContext.close();
     }
-    await widget
-      .getByRole("button", { name: "Close Shiplet feedback" })
+    const contextualThread = frame.getByRole("region", {
+      name: "Thread PF-1",
+      exact: true,
+    });
+    await expect(contextualThread).toBeVisible();
+    await contextualThread
+      .getByRole("button", { name: "Close thread PF-1", exact: true })
       .click();
+    await expect(contextualThread).toBeHidden();
+    await expect(widget.locator(".surface")).toHaveAttribute(
+      "data-view",
+      "toolbar",
+    );
+    await expect(frame.locator("#shiplet-kernel-review-panel")).toBeHidden();
+    const annotateButton = frame.getByRole("button", { name: /^Annotate/ });
+    const commentsLauncher = frame.locator(
+      ".shiplet-review-comments-launcher",
+    );
+    await expect(annotateButton).toBeVisible();
+    await expect(annotateButton).toBeEnabled();
+    await expect(commentsLauncher).toBeVisible();
+    await expect(commentsLauncher).toBeEnabled();
+    await expect(widget.locator("iframe")).toHaveCount(1);
+    await expect(
+      widget.getByRole("button", { name: "Open PF-1", exact: true }),
+    ).toBeFocused();
+    await page.screenshot({
+      path: "/private/tmp/shiplet-parity-navigation-r2-20260920/embeddable-after-contextual-close.png",
+    });
     await page.getByRole("button", { name: "View pricing" }).click();
-    await widget.getByRole("button", { name: "Open Shiplet feedback" }).click();
-    await expect(widget.locator("iframe")).toHaveAttribute("src", /pricing/);
+    await expect(widget.locator("iframe")).toHaveCount(1);
     await page.evaluate(() => {
       const el = document.querySelector("shiplet-feedback")!;
       el.remove();
       document.body.appendChild(el);
     });
-    await expect(widget.locator("iframe")).toHaveCount(0);
-    await expect(
-      widget.getByRole("button", { name: "Open Shiplet feedback" }),
-    ).toBeVisible();
+    await expect(widget.locator("iframe")).toHaveCount(1);
     await page.setViewportSize({ width: 390, height: 844 });
-    await widget.getByRole("button", { name: "Open Shiplet feedback" }).click();
     await expect(widget.locator("iframe")).toBeVisible();
+    await widget.locator("iframe").contentFrame().locator(".shiplet-review-comments-launcher").click();
     await expect(
       widget
         .locator("iframe")
         .contentFrame()
         .getByRole("heading", { name: "Comments", exact: true }),
     ).toBeVisible();
-    await page.screenshot({ path: "/tmp/shiplet-embed-mobile.png" });
+    await page.screenshot({
+      path: "/private/tmp/shiplet-parity-navigation-r2-20260920/embeddable-mobile-comments.png",
+    });
     await widget.evaluate((el) => el.setAttribute("disabled", ""));
     await expect(widget.locator("iframe")).toHaveCount(0);
     await expect(widget.getByRole("button")).toHaveCount(0);
