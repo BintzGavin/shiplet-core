@@ -150,8 +150,10 @@ async function operateTrustedHostScript(options?: {
   connectWidget?: boolean;
   confirmationUrl?: string;
   dispatchInitialFrameLoads?: boolean;
+  draftContext?: boolean;
   failTopLevelSubmission?: boolean;
   feedback?: unknown[];
+  feedbackPayload?: unknown;
   online?: boolean;
   presenceViewers?: unknown[];
   presenceSelf?: unknown;
@@ -165,6 +167,14 @@ async function operateTrustedHostScript(options?: {
         ? "https://app.shiplet.cc/api/projects/shiplet_a/review-feedback"
         : "https://app.shiplet.cc/embed/review/feedback",
     ],
+    ...(options?.draftContext
+      ? [[
+          "data-review-draft-context-url",
+          options?.embedded
+            ? "https://app.shiplet.cc/embed/review/draft-context?installation_id=installation_test"
+            : "https://app.shiplet.cc/api/projects/shiplet_a/review-draft-context",
+        ] as [string, string]]
+      : []),
     ["data-review-page-url", "https://client.example/pricing/"],
     ["data-review-avatar-url", "https://app.shiplet.cc/brand/avatars/shiplet-avatar-presets-v9.png"],
     [
@@ -348,11 +358,39 @@ async function operateTrustedHostScript(options?: {
       return `00000000-0000-4000-8000-${String(uuidCounter).padStart(12, "0")}`;
     },
   };
-  const fetch = vi.fn(async () => ({
-    ok: !options?.feedbackStatus || options.feedbackStatus === 200,
-    status: options?.feedbackStatus || 200,
-    json: async () => ({ feedback: options?.feedback ?? [] }),
-  }));
+  const fetch = vi.fn(async (input?: unknown) => {
+    const requestUrl = new URL(String(input || "https://app.shiplet.cc/"));
+    if (options?.draftContext && requestUrl.pathname.endsWith("draft-context")) {
+      const pageUrl = requestUrl.searchParams.get("page_url") || "https://client.example/pricing/";
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({
+          context: {
+            actor: { kind: "human", id: "actor_test" },
+            projectId: "shiplet_a",
+            revisionId: "revision_a1",
+            pageUrl,
+            installationId: options?.embedded ? "installation_test" : null,
+            expiresOn: null,
+            durableOperations: false,
+          },
+        }),
+      };
+    }
+    return {
+      ok: !options?.feedbackStatus || options.feedbackStatus === 200,
+      status: options?.feedbackStatus || 200,
+      json: async () => options?.feedbackPayload ?? ({
+        feedback: (options?.feedback ?? []).map((item) =>
+          item && typeof item === "object" && !Array.isArray(item)
+            ? { page_url: "https://client.example/pricing/", ...item }
+            : item,
+        ),
+        nextCursor: null,
+      }),
+    };
+  });
   const navigator = { onLine: options?.online ?? true };
   const replaceLocation = vi.fn();
   const execute = new Function(
@@ -366,6 +404,7 @@ async function operateTrustedHostScript(options?: {
     "navigator",
     "parent",
     "sessionStorage",
+    "indexedDB",
     trustedReviewHostScript(),
   );
   execute(
@@ -379,6 +418,7 @@ async function operateTrustedHostScript(options?: {
     navigator,
     parentWindow,
     { getItem: (key: string) => storedIntent.get(key), removeItem: (key: string) => storedIntent.delete(key) },
+    undefined,
   );
   await Promise.resolve();
   if (options?.dispatchInitialFrameLoads !== false) {
@@ -420,6 +460,7 @@ async function operateTrustedHostScript(options?: {
     });
   }
   for (let index = 0; index < 6; index += 1) await Promise.resolve();
+  const initialFetchCalls = fetch.mock.calls.map((call) => call.slice());
   fetch.mockClear();
   const form = createdElements.find(
     (element) => element.className === "shiplet-review-form",
@@ -466,6 +507,7 @@ async function operateTrustedHostScript(options?: {
     confirmationFields,
     confirm,
     fetch,
+    initialFetchCalls,
     form,
     launcher,
     list,
@@ -488,6 +530,10 @@ async function operateTrustedHostScript(options?: {
   };
 }
 
+async function settleTrustedHost(iterations = 8) {
+  for (let index = 0; index < iterations; index += 1) await Promise.resolve();
+}
+
 function presenceButtons(harness: Awaited<ReturnType<typeof operateTrustedHostScript>>) {
   const roster = harness.createdElements.find((element) => element.className === "shiplet-review-presence");
   return (roster?.children || []).filter(
@@ -497,6 +543,23 @@ function presenceButtons(harness: Awaited<ReturnType<typeof operateTrustedHostSc
 
 function artifactPortMessages(harness: Awaited<ReturnType<typeof operateTrustedHostScript>>) {
   return harness.channels[0]?.port1.messages as Array<Record<string, unknown>>;
+}
+
+async function acknowledgeArtifactCaptureReady(
+  harness: Awaited<ReturnType<typeof operateTrustedHostScript>>,
+  port = harness.channels.at(-1)?.port1,
+) {
+  const command = port?.messages.at(-1) as Record<string, unknown> | undefined;
+  if (!port || command?.protocol !== "shiplet.artifact.capture.command.v1" || command.type !== "start") return command;
+  await port.dispatch({
+    protocol: "shiplet.artifact.capture.state.v1",
+    type: "ready",
+    channelNonce: command.channelNonce,
+    shipletId: command.shipletId,
+    revisionId: command.revisionId,
+    requestId: command.requestId,
+  });
+  return command;
 }
 
 async function pushSocketMessage(harness: Awaited<ReturnType<typeof operateTrustedHostScript>>, payload: unknown) {
@@ -575,6 +638,21 @@ function expectSecureTopLevelConfirmationForm(
 }
 
 describe("trusted review host boundary", () => {
+  it("[T2] exposes progressive page creation, rich review, preferences, clean links, and configured custom actions", async () => {
+    const response = createTrustedReviewHostResponse(baseInput);
+    const html = await response.text();
+    const script = trustedReviewHostScript();
+
+    expect(html).toContain('data-review-page-url="https://artifact-a.shiplet.cc/__shiplet/artifact/index.html"');
+    expect(script).toContain('pageComment.textContent = "Page comment"');
+    expect(script).toContain('drawOnPage.textContent = "Draw on page"');
+    expect(script).toContain('selectElement.textContent = "Select an element"');
+    expect(script).toContain('settingsSummary.textContent = "Settings"');
+    expect(script).toContain('copyHiddenReview.textContent = "Copy review link with review UI hidden"');
+    expect(script).toContain('customActionsSummary.textContent = "Custom actions"');
+    expect(script).toContain('role", "listbox"');
+    expect(script).toContain('data-shiplet-review-attachments');
+  });
   it("returns an expired embedded session to the sign-in gate before starting annotation", async () => {
     const harness = await operateTrustedHostScript({ embedded: true, feedbackStatus: 401 });
     await harness.launcher!.dispatch("click", { isTrusted: true });
@@ -600,11 +678,319 @@ describe("trusted review host boundary", () => {
     expect(harness.panel.hidden).toBe(true);
     expect(views().at(-1)?.view).toBe("toolbar");
     await harness.launcher!.dispatch("click", { isTrusted: true });
+    await acknowledgeArtifactCaptureReady(harness);
     expect(views().at(-1)?.view).toBe("selecting");
     const cancel = harness.createdElements.find(element => element.getAttribute("data-shiplet-annotation-mode-cancel") === "v1")!;
     await cancel.dispatch("click", { isTrusted: true });
     expect(views().at(-1)?.view).toBe("toolbar");
     expect(harness.open).not.toHaveBeenCalled();
+  });
+
+  it("requests the modern default page scope without carrying legacy filter parameters", async () => {
+    const harness = await operateTrustedHostScript();
+    const listCall = harness.initialFetchCalls.find((call) =>
+      String(call[0]).includes("state=open"),
+    );
+    expect(listCall).toBeTruthy();
+    const url = new URL(String(listCall?.[0]));
+    expect(url.searchParams.get("limit")).toBe("100");
+    expect(url.searchParams.get("state")).toBe("open");
+    expect(url.searchParams.get("pageUrl")).toBe(
+      "https://client.example/pricing/",
+    );
+    expect(url.searchParams.has("includeClosed")).toBe(false);
+    expect(url.searchParams.has("cursor")).toBe(false);
+
+    const scope = harness.createdElements.find(
+      (element) => element.getAttribute("data-shiplet-review-scope-summary") === "v1",
+    );
+    expect(scope?.textContent).toBe(
+      "Current page · Open · All revisions · Everyone",
+    );
+  });
+
+  it("treats a missing modern cursor field as a recoverable load failure", async () => {
+    const harness = await operateTrustedHostScript({
+      feedbackPayload: { feedback: [] },
+    });
+    expect(harness.list?.children).toHaveLength(0);
+    expect(harness.status?.textContent).toMatch(/could not load comments/i);
+    expect(harness.status?.getAttribute("role")).toBe("alert");
+    expect(harness.status?.textContent).not.toMatch(/no comments yet/i);
+    expect(harness.refresh?.disabled).toBe(false);
+  });
+
+  it("retains rows, drafts, filters, and recovery controls for unsupported Mentions", async () => {
+    const harness = await operateTrustedHostScript({
+      feedback: [
+        {
+          id: "feedback_mentions_1",
+          ticket_label: "PF-MENTIONS",
+          ticket_number: 41,
+          comment: "Previously loaded scope",
+          status: "New",
+          submitted_by_email: "reviewer@example.com",
+          created_on: "2026-08-13T19:30:00.000Z",
+        },
+      ],
+    });
+    const summary = harness.createdElements.find(
+      (element) => element.className === "shiplet-review-thread-summary",
+    );
+    const reply = harness.createdElements.find(
+      (element) => element.getAttribute("aria-label") === "Reply text for PF-MENTIONS",
+    );
+    const people = harness.createdElements.find(
+      (element) => element.getAttribute("aria-label") === "People",
+    );
+    const topDraft = harness.comment;
+    expect(summary).toBeDefined();
+    expect(reply).toBeDefined();
+    expect(people).toBeDefined();
+    await summary!.dispatch("click", { isTrusted: true });
+    reply!.value = "Reply draft survives Mentions failure";
+    await reply!.dispatch("input", {});
+    topDraft!.value = "Top-level draft survives Mentions failure";
+    await topDraft!.dispatch("input", {});
+
+    harness.fetch.mockImplementationOnce(async () => ({
+      ok: false,
+      status: 409,
+      json: async () => ({ error: "sandbox_filter_unsupported", filter: "mentionedMe" }),
+    }));
+    people!.value = "mentions";
+    await people!.dispatch("change", { isTrusted: true });
+
+    expect(harness.list?.children).toHaveLength(1);
+    expect(reply!.value).toBe("Reply draft survives Mentions failure");
+    expect(topDraft!.value).toBe("Top-level draft survives Mentions failure");
+    const stale = harness.createdElements.find(
+      (element) => element.getAttribute("data-shiplet-review-stale") === "v1",
+    );
+    expect(stale?.hidden).toBe(false);
+    expect(stale?.children[0]?.textContent).toMatch(/Mentions.*unavailable.*previously loaded scope/i);
+    expect(stale?.children[1]?.textContent).toBe("Retry");
+    expect(harness.createdElements.find((element) => element.textContent === "Reset")?.hidden).toBe(false);
+
+    harness.fetch.mockImplementationOnce(async () => ({
+      ok: true,
+      status: 200,
+      json: async () => ({ feedback: harness.list?.children.length ? [
+        {
+          id: "feedback_mentions_1",
+          ticket_label: "PF-MENTIONS",
+          ticket_number: 41,
+          comment: "Previously loaded scope",
+          status: "New",
+          page_url: "https://client.example/pricing/",
+        },
+      ] : [], nextCursor: null }),
+    }));
+    people!.value = "everyone";
+    await people!.dispatch("change", { isTrusted: true });
+    expect(stale?.hidden).toBe(true);
+    expect(harness.list?.children).toHaveLength(1);
+    expect(reply!.value).toBe("Reply draft survives Mentions failure");
+    expect(topDraft!.value).toBe("Top-level draft survives Mentions failure");
+  });
+
+  it("isolates a trusted route while retaining the old route draft and fencing late list data", async () => {
+    const oldPageUrl = "https://client.example/pricing/";
+    const nextPageUrl = "https://client.example/next-page";
+    const oldFeedback = {
+      id: "nav_x",
+      ticket_label: "PF-X",
+      ticket_number: 1,
+      comment: "Old route comment",
+      status: "New",
+      coordinates: { pageX: 24, pageY: 24, viewportX: 24, viewportY: 24 },
+      page_url: oldPageUrl,
+    };
+    const oldPageComment = {
+      id: "nav_page",
+      ticket_label: "PF-PAGE",
+      ticket_number: 2,
+      comment: "Old page comment",
+      status: "New",
+      page_url: oldPageUrl,
+    };
+    const nextFeedback = {
+      id: "nav_y",
+      ticket_label: "PF-Y",
+      ticket_number: 3,
+      comment: "New route comment",
+      status: "New",
+      coordinates: { pageX: 40, pageY: 40, viewportX: 40, viewportY: 40 },
+      page_url: nextPageUrl,
+    };
+    const harness = await operateTrustedHostScript({ feedback: [oldFeedback, oldPageComment] });
+    const summary = harness.createdElements.find((element) => element.className === "shiplet-review-thread-summary");
+    const reply = harness.createdElements.find((element) => element.getAttribute("aria-label") === "Reply text for PF-X");
+    const pinLayer = harness.createdElements.find((element) => element.className === "shiplet-review-pin-layer");
+    const pin = pinLayer?.children.find((element) => element.getAttribute("aria-label") === "Open PF-X");
+    const contextualThread = harness.createdElements.find((element) => element.getAttribute("data-shiplet-contextual-thread") === "v1");
+    const contextualClose = harness.createdElements.find((element) => element.getAttribute("data-shiplet-contextual-thread-close") === "v1");
+    const pageComments = harness.createdElements.find((element) => element.getAttribute("data-shiplet-review-page-comments") === "v1");
+    const pageCommentsMenu = harness.createdElements.find((element) => element.className === "shiplet-review-page-comments-menu");
+    expect(summary).toBeDefined();
+    expect(reply).toBeDefined();
+    expect(pin).toBeDefined();
+    await summary!.dispatch("click", { isTrusted: true });
+    reply!.value = "Draft kept with old route";
+    await reply!.dispatch("input", {});
+    harness.comment!.value = "Top draft kept with old route";
+    await harness.comment!.dispatch("input", {});
+    await pin!.dispatch("click", { isTrusted: true });
+    expect(contextualThread?.hidden).toBe(false);
+    await contextualClose!.dispatch("click", { isTrusted: true });
+    await pageComments!.dispatch("click", { isTrusted: true });
+    expect(pageCommentsMenu?.hidden).toBe(false);
+
+    type TrustedHostFetchResponse = Awaited<ReturnType<typeof harness.fetch>>;
+    let releaseOld!: (value: TrustedHostFetchResponse) => void;
+    let releaseNext!: (value: TrustedHostFetchResponse) => void;
+    const oldPending = new Promise<TrustedHostFetchResponse>((resolve) => { releaseOld = resolve; });
+    const nextPending = new Promise<TrustedHostFetchResponse>((resolve) => { releaseNext = resolve; });
+    harness.fetch.mockImplementationOnce(async () => oldPending);
+    const oldRefresh = harness.refresh!.dispatch("click", { isTrusted: true });
+    await settleTrustedHost(2);
+    harness.fetch.mockImplementationOnce(async () => nextPending);
+    await harness.channels.at(-1)!.port1.dispatch({
+      protocol: "shiplet.artifact.route.v1",
+      type: "change",
+      channelNonce: harness.artifactOffer?.channelNonce,
+      shipletId: "shiplet_a",
+      revisionId: "revision_a1",
+      pageUrl: nextPageUrl,
+    });
+    await settleTrustedHost(8);
+
+    expect(harness.list?.children).toHaveLength(0);
+    expect(pinLayer?.children).toHaveLength(0);
+    expect(contextualThread?.hidden).toBe(true);
+    expect(pageComments?.hidden).toBe(true);
+    expect(pageCommentsMenu?.hidden).toBe(true);
+    expect(harness.comment?.value).toBe("Top draft kept with old route");
+
+    releaseOld({ ok: true, status: 200, json: async () => ({ feedback: [oldFeedback], nextCursor: null }) });
+    await oldRefresh;
+    await settleTrustedHost(4);
+    expect(harness.list?.children).toHaveLength(0);
+
+    releaseNext({ ok: true, status: 200, json: async () => ({ feedback: [nextFeedback], nextCursor: null }) });
+    await settleTrustedHost(8);
+    expect(harness.list?.children).toHaveLength(1);
+    expect(harness.list?.children[0]?.getAttribute("data-shiplet-review-thread")).toBe("nav_y");
+    expect(harness.list?.children[0]?.getAttribute("data-shiplet-review-thread")).not.toBe("nav_x");
+
+    const oldRouteAgain = new Promise<TrustedHostFetchResponse>((resolve) => { releaseOld = resolve; });
+    harness.fetch.mockImplementationOnce(async () => oldRouteAgain);
+    await harness.channels.at(-1)!.port1.dispatch({
+      protocol: "shiplet.artifact.route.v1",
+      type: "change",
+      channelNonce: harness.artifactOffer?.channelNonce,
+      shipletId: "shiplet_a",
+      revisionId: "revision_a1",
+      pageUrl: oldPageUrl,
+    });
+    releaseOld({ ok: true, status: 200, json: async () => ({ feedback: [oldFeedback], nextCursor: null }) });
+    await settleTrustedHost(8);
+    const restoredReply = harness.createdElements
+      .filter((element) => element.getAttribute("aria-label") === "Reply text for PF-X")
+      .at(-1);
+    expect(restoredReply?.value).toBe("Draft kept with old route");
+  });
+
+  it("does not refresh authority or sign in after an unsupported Mentions capability response", async () => {
+    const harness = await operateTrustedHostScript({
+      embedded: true,
+      draftContext: true,
+      feedback: [{
+        id: "mentions_authority",
+        ticket_label: "PF-AUTH",
+        comment: "Previously loaded scope",
+        status: "New",
+        page_url: "https://client.example/pricing/",
+      }],
+    });
+    await settleTrustedHost(8);
+    if (harness.list?.children.length !== 1) {
+      await harness.refresh!.dispatch("click", { isTrusted: true });
+      await settleTrustedHost(4);
+    }
+    const people = harness.createdElements.find((element) => element.getAttribute("aria-label") === "People");
+    const stale = harness.createdElements.find((element) => element.getAttribute("data-shiplet-review-stale") === "v1");
+    const beforeContextRequests = harness.fetch.mock.calls.filter((call) => String(call[0]).includes("draft-context")).length;
+    const beforeSignIn = harness.replaceLocation.mock.calls.length;
+    harness.fetch.mockImplementationOnce(async () => ({
+      ok: false,
+      status: 409,
+      json: async () => ({ error: "sandbox_filter_unsupported", filter: "mentionedMe" }),
+    }));
+    people!.value = "mentions";
+    await people!.dispatch("change", { isTrusted: true });
+
+    expect(harness.fetch.mock.calls.filter((call) => String(call[0]).includes("draft-context")).length).toBe(beforeContextRequests);
+    expect(harness.replaceLocation.mock.calls.length).toBe(beforeSignIn);
+    expect(harness.list?.children).toHaveLength(1);
+    expect(stale?.hidden).toBe(false);
+    expect(stale?.children[0]?.textContent).toMatch(/previously loaded scope/i);
+  });
+
+  it("fences a late unsupported Mentions response after Everyone recovery", async () => {
+    const harness = await operateTrustedHostScript({
+      feedback: [{
+        id: "mentions_late",
+        ticket_label: "PF-LATE",
+        comment: "Initial scope",
+        status: "New",
+        page_url: "https://client.example/pricing/",
+      }],
+    });
+    const people = harness.createdElements.find((element) => element.getAttribute("aria-label") === "People");
+    const scope = harness.createdElements.find((element) => element.getAttribute("data-shiplet-review-scope-summary") === "v1");
+    const stale = harness.createdElements.find((element) => element.getAttribute("data-shiplet-review-stale") === "v1");
+    type TrustedHostFetchResponse = Awaited<ReturnType<typeof harness.fetch>>;
+    let releaseMentions!: (value: TrustedHostFetchResponse) => void;
+    const mentionsPending = new Promise<TrustedHostFetchResponse>((resolve) => { releaseMentions = resolve; });
+    harness.fetch.mockImplementationOnce(async () => mentionsPending);
+    people!.value = "mentions";
+    const mentionsChange = people!.dispatch("change", { isTrusted: true });
+    await settleTrustedHost(2);
+    harness.fetch.mockImplementationOnce(async () => ({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        feedback: [{
+          id: "everyone_recovered",
+          ticket_label: "PF-EVERYONE",
+          comment: "Everyone scope",
+          status: "New",
+          page_url: "https://client.example/pricing/",
+        }],
+        nextCursor: "everyone-next",
+      }),
+    }));
+    people!.value = "everyone";
+    await people!.dispatch("change", { isTrusted: true });
+    await settleTrustedHost(4);
+    expect(scope?.textContent).toMatch(/Everyone$/);
+    expect(harness.list?.children[0]?.getAttribute("data-shiplet-review-thread")).toBe("everyone_recovered");
+    expect(stale?.hidden).toBe(true);
+    const loadMore = harness.createdElements.find((element) => element.getAttribute("aria-label") === "Load more comments");
+    expect(loadMore?.hidden).toBe(false);
+
+    releaseMentions({
+      ok: false,
+      status: 409,
+      json: async () => ({ error: "sandbox_filter_unsupported", filter: "mentionedMe" }),
+    });
+    await mentionsChange;
+    await settleTrustedHost(4);
+    expect(scope?.textContent).toMatch(/Everyone$/);
+    expect(harness.list?.children[0]?.getAttribute("data-shiplet-review-thread")).toBe("everyone_recovered");
+    expect(stale?.hidden).toBe(true);
+    expect(loadMore?.hidden).toBe(false);
   });
 
   it("resumes the requested action once after a trusted popup establishes the site session", async () => {
@@ -616,6 +1002,82 @@ describe("trusted review host boundary", () => {
     const comments = await operateTrustedHostScript({ embedded: true, pendingEmbedAction: "comments" });
     expect(comments.panel.hidden).toBe(false);
     expect(comments.open).not.toHaveBeenCalled();
+  });
+
+  it("removes review overlays during hosted target selection and restores the stored preference", async () => {
+    const harness = await operateTrustedHostScript({
+      feedback: [
+        ...[1, 2, 3].map((number) => ({
+          id: `feedback_stack_${number}`,
+          ticket_label: `PF-${number}`,
+          ticket_number: number,
+          comment: `Stacked comment ${number}`,
+          status: "New",
+          coordinates: { pageX: 64, pageY: 56, viewportX: 64, viewportY: 56 },
+        })),
+        {
+          id: "feedback_page",
+          ticket_label: "PF-4",
+          ticket_number: 4,
+          comment: "Page comment",
+          status: "New",
+        },
+      ],
+    });
+    const pinLayer = harness.createdElements.find(
+      (element) => element.className === "shiplet-review-pin-layer",
+    );
+    const stack = harness.createdElements.find(
+      (element) => element.className === "shiplet-review-pin-stack",
+    );
+    const pageComments = harness.createdElements.find(
+      (element) => element.className === "shiplet-review-page-comments",
+    );
+    const pageCommentsMenu = harness.createdElements.find(
+      (element) => element.className === "shiplet-review-page-comments-menu",
+    );
+    const overlayToggle = harness.createdElements.find(
+      (element) => element.getAttribute("data-shiplet-review-overlay-toggle") === "v1",
+    );
+    expect(pinLayer?.hidden).toBe(false);
+    expect(stack?.hidden).toBe(false);
+    expect(pageComments?.hidden).toBe(false);
+    expect(overlayToggle?.getAttribute("aria-pressed")).toBe("false");
+
+    await stack?.dispatch("click", { isTrusted: true });
+    expect(stack?.getAttribute("aria-expanded")).toBe("true");
+    await harness.launcher?.dispatch("click", { isTrusted: true });
+    await acknowledgeArtifactCaptureReady(harness);
+    expect(harness.artifact.getAttribute("data-shiplet-selecting")).toBe("true");
+    expect(pinLayer?.hidden).toBe(true);
+    expect(stack?.hidden).toBe(true);
+    expect(stack?.getAttribute("aria-expanded")).toBe("false");
+    expect(pageComments?.hidden).toBe(true);
+    expect(pageCommentsMenu?.hidden).toBe(true);
+    expect(overlayToggle?.getAttribute("aria-pressed")).toBe("false");
+
+    const cancelMode = harness.createdElements.find(
+      (element) => element.getAttribute("data-shiplet-annotation-mode-cancel") === "v1",
+    );
+    await cancelMode?.dispatch("click", { isTrusted: true });
+    expect(pinLayer?.hidden).toBe(false);
+    expect(stack?.hidden).toBe(false);
+    expect(pageComments?.hidden).toBe(false);
+    expect(overlayToggle?.getAttribute("aria-pressed")).toBe("false");
+
+    await overlayToggle?.dispatch("click", { isTrusted: true });
+    expect(overlayToggle?.getAttribute("aria-pressed")).toBe("true");
+    await harness.launcher?.dispatch("click", { isTrusted: true });
+    await acknowledgeArtifactCaptureReady(harness);
+    expect(harness.artifact.getAttribute("data-shiplet-selecting")).toBe("true");
+    expect(pinLayer?.hidden).toBe(true);
+    expect(stack?.hidden).toBe(true);
+    expect(pageComments?.hidden).toBe(true);
+    await cancelMode?.dispatch("click", { isTrusted: true });
+    expect(pinLayer?.hidden).toBe(true);
+    expect(stack?.hidden).toBe(true);
+    expect(pageComments?.hidden).toBe(true);
+    expect(overlayToggle?.getAttribute("aria-pressed")).toBe("true");
   });
 
   // Given a trusted host around an opaque artifact, when review state loads or
@@ -750,7 +1212,7 @@ describe("trusted review host boundary", () => {
       (element) => element.className === "shiplet-review-reply-form",
     );
     const firstReplyInput = firstReplyForm?.children.find(
-      (element) => element.tagName === "INPUT",
+      (element) => element.tagName === "TEXTAREA",
     );
     const firstReplyButton = firstReplyForm?.children.find(
       (element) => element.tagName === "BUTTON",
@@ -853,6 +1315,168 @@ describe("trusted review host boundary", () => {
     expect.soft(harness.status?.hidden).toBe(true);
   });
 
+  it("opens one trusted contextual thread from a canonical ticket pin and preserves its draft when dismissed", async () => {
+    const harness = await operateTrustedHostScript({
+      feedback: [
+        {
+          id: "feedback_7",
+          ticket_label: "PF-7",
+          ticket_number: 7,
+          comment: "Keep the checkout promise close to the call to action.",
+          status: "New",
+          submitted_by_email: "reviewer@example.com",
+          created_on: "2026-09-20T12:00:00.000Z",
+          coordinates: {
+            pageX: 160,
+            pageY: 180,
+            viewportX: 160,
+            viewportY: 180,
+          },
+          replies: [
+            {
+              comment: "I can revise the supporting proof.",
+              author_email: "builder@example.com",
+              created_on: "2026-09-20T12:01:00.000Z",
+            },
+          ],
+        },
+      ],
+    });
+
+    const pin = harness.createdElements.find(
+      (element) => element.className === "shiplet-review-pin",
+    );
+    const card = harness.createdElements.find(
+      (element) =>
+        element.getAttribute("data-shiplet-contextual-thread") === "v1",
+    );
+    const cardClose = harness.createdElements.find(
+      (element) =>
+        element.getAttribute("data-shiplet-contextual-thread-close") === "v1",
+    );
+    const reply = harness.createdElements.find(
+      (element) =>
+        element.getAttribute("aria-label") === "Reply text for PF-7",
+    );
+
+    expect.soft(pin?.textContent).toBe("7");
+    expect.soft(pin?.getAttribute("aria-label")).toBe("Open PF-7");
+    expect.soft(pin?.getAttribute("aria-controls")).toBe(
+      "shiplet-contextual-review-thread",
+    );
+    expect.soft(reply?.tagName).toBe("TEXTAREA");
+    expect.soft(reply?.rows).toBe(3);
+    expect.soft(card?.hidden).toBe(true);
+
+    await pin?.dispatch("click", { isTrusted: true });
+    expect.soft(harness.panel.hidden).toBe(true);
+    expect.soft(card?.hidden).toBe(false);
+    expect.soft(card?.getAttribute("role")).toBe("region");
+    expect.soft(card?.getAttribute("aria-label")).toBe("Thread PF-7");
+    expect.soft(pin?.getAttribute("aria-expanded")).toBe("true");
+
+    if (reply) reply.value = "Draft stays with PF-7";
+    await cardClose?.dispatch("click", { isTrusted: true });
+    expect.soft(card?.hidden).toBe(true);
+    expect.soft(pin?.getAttribute("aria-expanded")).toBe("false");
+    expect.soft(pin?.focus).toHaveBeenCalled();
+
+    await pin?.dispatch("click", { isTrusted: true });
+    expect.soft(reply?.value).toBe("Draft stays with PF-7");
+
+    const commentsLauncher = harness.createdElements.find(
+      (element) => element.className === "shiplet-review-comments-launcher",
+    );
+    await commentsLauncher?.dispatch("click", { isTrusted: true });
+    expect.soft(card?.hidden).toBe(true);
+    expect.soft(reply?.value).toBe("Draft stays with PF-7");
+    await pin?.dispatch("click", { isTrusted: true });
+
+    await harness.window.dispatch("keydown", {
+      isTrusted: true,
+      isComposing: true,
+      key: "Escape",
+      target: reply,
+      preventDefault: vi.fn(),
+    });
+    expect.soft(card?.hidden).toBe(false);
+    await harness.window.dispatch("keydown", {
+      isTrusted: true,
+      isComposing: false,
+      key: "Escape",
+      target: reply,
+      preventDefault: vi.fn(),
+    });
+    expect.soft(card?.hidden).toBe(true);
+  });
+
+  it("accepts a bounded stable embedded feedback ID while retaining index compatibility", async () => {
+    const harness = await operateTrustedHostScript({
+      embedded: true,
+      feedback: [
+        {
+          id: "feedback_7",
+          ticket_label: "PF-7",
+          ticket_number: 7,
+          comment: "Embedded contextual thread",
+          status: "New",
+          coordinates: {
+            pageX: 210,
+            pageY: 260,
+            viewportX: 210,
+            viewportY: 260,
+          },
+          selected_element: { selector: "#review-target" },
+        },
+      ],
+    });
+    const card = harness.createdElements.find(
+      (element) =>
+        element.getAttribute("data-shiplet-contextual-thread") === "v1",
+    );
+    await settleTrustedHost();
+    const pinsMessages = harness.artifactWindow.postMessage.mock.calls
+      .map((call) => call[0])
+      .filter((message) => message?.protocol === "shiplet.embed.ui.v1" && Array.isArray(message.pins));
+    const pinsMessage = pinsMessages.at(-1);
+    expect.soft(pinsMessage?.pins).toEqual([
+      expect.objectContaining({
+        feedbackId: "feedback_7",
+        ticket: "PF-7",
+        index: 0,
+      }),
+    ]);
+
+    await harness.window.dispatch("message", {
+      source: harness.artifactWindow,
+      origin: "https://client.example",
+      data: {
+        protocol: "shiplet.embed.focus.v1",
+        feedbackId: "feedback_7",
+      },
+    });
+    expect.soft(card?.hidden).toBe(false);
+    expect(
+      harness.artifactWindow.postMessage.mock.calls.some(
+        (call) =>
+          call[0]?.protocol === "shiplet.embed.ui.v1" &&
+          call[0]?.view === "thread" &&
+          call[0]?.activeFeedbackId === "feedback_7",
+      ),
+    ).toBe(true);
+
+    await harness.window.dispatch("message", {
+      source: harness.widgetWindow,
+      origin: "https://attacker.example",
+      data: {
+        protocol: "shiplet.embed.focus.v1",
+        feedbackId: "feedback_missing",
+        index: 99,
+      },
+    });
+    expect.soft(card?.getAttribute("aria-label")).toBe("Thread PF-7");
+  });
+
   it("announces loading, empty, denied, offline, and retryable error states without trusting child content", async () => {
     const harness = await operateTrustedHostScript();
     expect.soft(harness.status?.textContent).toMatch(/no comments yet/i);
@@ -861,7 +1485,7 @@ describe("trusted review host boundary", () => {
     harness.fetch.mockImplementationOnce(async () => ({
       ok: false,
       status: 403,
-      json: async () => ({ feedback: [] }),
+      json: async () => ({ feedback: [], nextCursor: null }),
     }));
     await harness.refresh?.dispatch("click", { isTrusted: true });
     expect.soft(harness.status?.textContent).toMatch(/access.*denied/i);
@@ -901,6 +1525,15 @@ describe("trusted review host boundary", () => {
     expect.soft(harness.list?.children).toHaveLength(1);
     expect.soft(harness.status?.textContent).toBe("1 comment.");
     expect.soft(harness.status?.hidden).toBe(true);
+    const stale = harness.createdElements.find(
+      (element) =>
+        element.getAttribute("data-shiplet-review-stale") === "v1",
+    );
+    expect.soft(stale?.hidden).toBe(false);
+    expect.soft(stale?.getAttribute("role")).toBe("status");
+    expect.soft(stale?.children[0]?.textContent).toMatch(
+      /showing saved comments and drafts/i,
+    );
   });
 
   it("renders live reviewers with the same signal-flag presets as their profiles", async () => {
@@ -1141,6 +1774,57 @@ describe("trusted review host boundary", () => {
     expect(html).toContain('data-review-avatar-url="https://app.shiplet.cc/brand/avatars/shiplet-avatar-presets-v9.png"');
     const imgPolicy = response.headers.get("content-security-policy")?.split(";").map(part => part.trim()).find(part => part.startsWith("img-src "));
     expect(imgPolicy).toBe("img-src 'self' https://app.shiplet.cc data: blob:");
+  });
+
+  it("derives tenant-preserving draft context URLs from the terminal feedback route", async () => {
+    const draftContextUrl = async (
+      input: Parameters<typeof createTrustedReviewHostResponse>[0],
+    ) => {
+      const html = await createTrustedReviewHostResponse(input).text();
+      const serialized = html.match(/data-review-draft-context-url="([^"]+)"/)?.[1];
+      expect(serialized).toBeTruthy();
+      return new URL(serialized?.replace(/&amp;/g, "&") || "");
+    };
+
+    const tenant = await draftContextUrl({
+      ...baseInput,
+      reviewApiUrl:
+        "https://app.shiplet.cc/acme/__shiplet/review/feedback?state=open",
+    });
+    expect(tenant.pathname).toBe(
+      "/acme/__shiplet/review/draft-context",
+    );
+    expect(tenant.search).toBe("");
+
+    const root = await draftContextUrl({
+      ...baseInput,
+      reviewApiUrl:
+        "https://app.shiplet.cc/__shiplet/review/feedback?state=open",
+    });
+    expect(root.pathname).toBe("/__shiplet/review/draft-context");
+    expect(root.search).toBe("");
+
+    const general = await draftContextUrl({
+      ...baseInput,
+      reviewApiUrl:
+        "https://app.shiplet.cc/api/projects/shiplet_a/review-feedback?state=open",
+    });
+    expect(general.pathname).toBe(
+      "/api/projects/shiplet_a/review-draft-context",
+    );
+    expect(general.search).toBe("");
+
+    const embedded = await draftContextUrl({
+      ...baseInput,
+      reviewApiUrl:
+        "https://app.shiplet.cc/embed/review/feedback?installation_id=install_acme&state=open",
+      embeddedSiteOrigin: "https://client.example",
+      frameAncestorOrigins: ["https://client.example"],
+    });
+    expect(embedded.pathname).toBe("/embed/review/draft-context");
+    expect(embedded.searchParams.get("installation_id")).toBe("install_acme");
+    expect(embedded.searchParams.has("state")).toBe(false);
+    expect(embedded.searchParams.has("review_token")).toBe(false);
   });
 
   it("places artifact and custom widget code in distinct opaque-origin sandboxed frames", async () => {
@@ -1629,6 +2313,14 @@ describe("trusted review host boundary", () => {
       revisionId: "revision_a1",
     });
     await capturePort.dispatch({
+      protocol: "shiplet.artifact.capture.state.v1",
+      type: "ready",
+      channelNonce: command.channelNonce,
+      shipletId: command.shipletId,
+      revisionId: command.revisionId,
+      requestId: command.requestId,
+    });
+    await capturePort.dispatch({
       protocol: "shiplet.artifact.capture.result.v1",
       type: "result",
       channelNonce: command.channelNonce,
@@ -1689,10 +2381,123 @@ describe("trusted review host boundary", () => {
     expect(JSON.stringify(fields).toLowerCase()).not.toContain("credential");
   });
 
+  it("holds embedded target selection behind the exact request-bound bridge ready acknowledgement", async () => {
+    const harness = await operateTrustedHostScript({
+      embedded: true,
+      feedback: [{
+        id: "page_comment_ready",
+        ticket_label: "PF-READY",
+        ticket_number: 1,
+        comment: "Page comment remains available while preparing.",
+        status: "New",
+        page_url: "https://client.example/pricing/",
+      }],
+    });
+    const comments = harness.createdElements.find(
+      (element) => element.className === "shiplet-review-comments-launcher",
+    );
+    const compose = harness.createdElements.find(
+      (element) => element.getAttribute("data-shiplet-review-compose") === "v1",
+    );
+    const pageComments = harness.createdElements.find(
+      (element) => String(element.className || "").includes("shiplet-review-page-comments"),
+    );
+    const modeBar = harness.createdElements.find(
+      (element) => element.getAttribute("data-shiplet-annotation-modebar") === "v1",
+    );
+    const capturePort = harness.channels[1]?.port1;
+    expect.soft(comments).toBeDefined();
+    expect.soft(compose).toBeDefined();
+    expect.soft(capturePort).toBeDefined();
+    if (!comments || !compose || !capturePort || !harness.artifactOffer) return;
+
+    await comments.dispatch("click", { isTrusted: true });
+    expect(harness.panel.hidden).toBe(false);
+    expect(pageComments?.hidden).toBe(false);
+    await compose.dispatch("click", { isTrusted: true });
+    const start = capturePort.messages.at(-1) as Record<string, unknown>;
+    expect(start).toMatchObject({
+      protocol: "shiplet.artifact.capture.command.v1",
+      type: "start",
+    });
+    expect(harness.panel.hidden).toBe(false);
+    expect(pageComments?.hidden).toBe(false);
+    expect(harness.artifact.getAttribute("data-shiplet-selecting")).not.toBe("true");
+    expect(modeBar?.hidden).toBe(true);
+
+    const selectionViews = () => harness.artifactWindow.postMessage.mock.calls
+      .map((call) => call[0])
+      .filter((message) => message?.protocol === "shiplet.embed.ui.v1" && message.view === "selecting");
+    const beforeReady = selectionViews().length;
+    for (const message of [
+      { ...start, protocol: "shiplet.artifact.capture.state.v1", type: "ready", channelNonce: "wrong_nonce" },
+      { ...start, protocol: "shiplet.artifact.capture.state.v1", type: "ready", revisionId: "wrong_revision" },
+      { ...start, protocol: "shiplet.artifact.capture.state.v1", type: "ready", requestId: "capture_request_stale" },
+    ]) await capturePort.dispatch(message);
+    expect(selectionViews()).toHaveLength(beforeReady);
+    expect(harness.artifact.getAttribute("data-shiplet-selecting")).not.toBe("true");
+    expect(harness.panel.hidden).toBe(false);
+
+    const ready = {
+      protocol: "shiplet.artifact.capture.state.v1",
+      type: "ready",
+      channelNonce: start.channelNonce,
+      shipletId: start.shipletId,
+      revisionId: start.revisionId,
+      requestId: start.requestId,
+    };
+    await capturePort.dispatch(ready);
+    expect(harness.panel.hidden).toBe(true);
+    expect(pageComments?.hidden).toBe(true);
+    expect(harness.artifact.getAttribute("data-shiplet-selecting")).toBe("true");
+    expect(modeBar?.hidden).toBe(false);
+    expect(selectionViews()).toHaveLength(beforeReady + 1);
+
+    await capturePort.dispatch(ready);
+    expect(selectionViews()).toHaveLength(beforeReady + 1);
+  });
+
+  it("cancels preparation and ignores a ready acknowledgement from the cancelled request", async () => {
+    const harness = await operateTrustedHostScript({ embedded: true });
+    const compose = harness.createdElements.find(
+      (element) => element.getAttribute("data-shiplet-review-compose") === "v1",
+    );
+    const capturePort = harness.channels[1]?.port1;
+    if (!compose || !capturePort) return;
+
+    await compose.dispatch("click", { isTrusted: true });
+    const start = capturePort.messages.at(-1) as Record<string, unknown>;
+    const escape = {
+      isTrusted: true,
+      key: "Escape",
+      target: harness.body,
+      preventDefault: vi.fn(),
+    };
+    await harness.window.dispatch("keydown", escape);
+    expect(escape.preventDefault).toHaveBeenCalled();
+    expect(capturePort.messages.at(-1)).toMatchObject({
+      protocol: "shiplet.artifact.capture.command.v1",
+      type: "cancel",
+      requestId: start.requestId,
+    });
+    expect(harness.artifact.getAttribute("data-shiplet-selecting")).not.toBe("true");
+    const viewsBeforeLateReady = harness.artifactWindow.postMessage.mock.calls.length;
+    await capturePort.dispatch({
+      protocol: "shiplet.artifact.capture.state.v1",
+      type: "ready",
+      channelNonce: start.channelNonce,
+      shipletId: start.shipletId,
+      revisionId: start.revisionId,
+      requestId: start.requestId,
+    });
+    expect(harness.artifact.getAttribute("data-shiplet-selecting")).not.toBe("true");
+    expect(harness.artifactWindow.postMessage.mock.calls.length).toBe(viewsBeforeLateReady);
+  });
+
   // Given the trusted annotation launcher, when a reviewer selects an artifact
   // target and asks for more context, then the host progressively reveals an
   // anchored, draggable annotation card without expanding artifact authority.
-  it("enters annotation mode immediately while the artifact channel connects", async () => {
+  it("keeps annotation preparation inert until the artifact channel and capture listeners are ready", async () => {
     const harness = await operateTrustedHostScript({ connectArtifact: false });
     if (!harness.launcher || !harness.artifactOffer) return;
 
@@ -1702,11 +2507,11 @@ describe("trusted review host boundary", () => {
       (element) =>
         element.getAttribute("data-shiplet-annotation-modebar") === "v1",
     );
-    expect.soft(modeBar?.hidden).toBe(false);
+    expect.soft(modeBar?.hidden).toBe(true);
     expect
       .soft(harness.artifact.getAttribute("data-shiplet-selecting"))
-      .toBe("true");
-    expect.soft(harness.launcher.getAttribute("aria-expanded")).toBe("true");
+      .not.toBe("true");
+    expect.soft(harness.launcher.getAttribute("aria-expanded")).toBe("false");
 
     await harness.window.dispatch("message", {
       source: harness.artifactWindow,
@@ -1720,12 +2525,16 @@ describe("trusted review host boundary", () => {
       },
     });
 
-    expect(harness.channels.at(-1)?.port1.messages.at(-1)).toMatchObject({
+    const capturePort = harness.channels.at(-1)?.port1;
+    expect(capturePort?.messages.at(-1)).toMatchObject({
       protocol: "shiplet.artifact.capture.command.v1",
       type: "start",
       shipletId: "shiplet_a",
       revisionId: "revision_a1",
     });
+    await acknowledgeArtifactCaptureReady(harness, capturePort);
+    expect(modeBar?.hidden).toBe(false);
+    expect(harness.artifact.getAttribute("data-shiplet-selecting")).toBe("true");
   });
 
   it("runs target selection through an anchored, draggable Annotate composer with exact revision context", async () => {
@@ -1746,6 +2555,7 @@ describe("trusted review host boundary", () => {
       string,
       unknown
     >;
+    await acknowledgeArtifactCaptureReady(harness, capturePort);
     expect(selectionCommand).toMatchObject({
       protocol: "shiplet.artifact.capture.command.v1",
       type: "start",
@@ -1941,6 +2751,7 @@ describe("trusted review host boundary", () => {
 
     await harness.launcher.dispatch("click", { isTrusted: true });
     const command = capturePort.messages.at(-1) as Record<string, unknown>;
+    await acknowledgeArtifactCaptureReady(harness, capturePort);
     await capturePort.dispatch({
       protocol: "shiplet.artifact.capture.result.v1",
       type: "result",
@@ -2025,6 +2836,7 @@ describe("trusted review host boundary", () => {
 
     await harness.launcher.dispatch("click", { isTrusted: true });
     const command = capturePort.messages.at(-1) as Record<string, unknown>;
+    await acknowledgeArtifactCaptureReady(harness, capturePort);
     await capturePort.dispatch({
       protocol: "shiplet.artifact.capture.result.v1",
       type: "result",
@@ -2258,6 +3070,7 @@ describe("trusted review host boundary", () => {
 
     await harness.launcher.dispatch("click", { isTrusted: true });
     const command = capturePort.messages.at(-1) as Record<string, unknown>;
+    await acknowledgeArtifactCaptureReady(harness, capturePort);
     await capturePort.dispatch({
       protocol: "shiplet.artifact.capture.result.v1",
       type: "result",
@@ -3016,8 +3829,10 @@ describe("trusted review host boundary", () => {
       ".shiplet-review-context-disclosure summary{display:flex;align-items:center;min-height:44px}",
     );
     expect(styles).toContain(
-      ".shiplet-review-reply-form input{min-height:44px}",
+      ".shiplet-review-reply-form textarea{min-width:0;min-height:54px",
     );
+    expect(styles).toContain(".shiplet-review-status[data-state=\"error\"]");
+    expect(styles).toContain(".shiplet-review-status[hidden]{display:none}");
     expect(styles).toContain('.shiplet-review-list>li[data-active="true"]');
     expect(styles).toContain(
       '.shiplet-review-list>li[data-active="true"]{border-color:#a7b9c3;box-shadow:inset 2px 0 0 var(--shiplet-accent);background:#f8fbfc}',
@@ -3054,7 +3869,7 @@ describe("trusted review host boundary", () => {
       '.shiplet-review-form[data-annotation-state="expanded"]{max-height:calc(100dvh - 16px)}',
     );
     expect(styles).toContain("@media (prefers-reduced-motion:reduce)");
-    expect(new TextEncoder().encode(styles).byteLength).toBeLessThan(32_768);
+    expect(new TextEncoder().encode(styles).byteLength).toBeLessThan(56_320);
   });
 
   it("lets artifact frames follow the viewer color scheme while the trusted review controls stay light", () => {

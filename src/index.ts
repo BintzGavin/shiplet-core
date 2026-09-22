@@ -357,15 +357,39 @@ import {
   createReviewReply,
   createReviewReplyWithNotifications,
   getReviewFeedback,
+  getReviewAttachment,
   getReviewScreenshot,
   listAccessibleReviewFeedback,
   listReviewFeedback,
+  listReviewFeedbackPage,
+  reviewAttachmentUrl,
+  materializeReviewRichPayload,
+  isReviewStatus,
+  normalizeReviewReplyComment,
+  prepareDurableReviewPayload,
+  readStagedReviewScreenshot,
   requireProjectReviewer,
+  stageDurableReviewPayload,
   updateReviewStatus,
   updateReviewStatusWithNotifications,
   validateReviewFeedbackPayload,
   verifyReviewCapabilityToken,
 } from "./review";
+import type { ReviewRichPayloadV1 } from "./review-rich-payload";
+import {
+  REVIEW_OPERATION_REQUEST_ID,
+  ReviewOperationConflict,
+  cancelReviewOperation,
+  completeDurableThreadOperation,
+  digestReviewOperationPayload,
+  findBoundReviewOperation,
+  prepareReviewOperation,
+  publicReviewOperation,
+  requireDurableReviewMentionRecipients,
+  reviewOperationState,
+  type ReviewOperationEffect,
+  type ReviewOperationRow,
+} from "./review-operations";
 import {
   getWatchStatus,
   listNotificationsForUser,
@@ -466,9 +490,16 @@ import {
 } from "./embed";
 import {
   SandboxSession,
+  SandboxModernQueryError,
+  SandboxOperationConflict as SandboxDurableOperationConflict,
+  sandboxModernPagePrefixKey,
+  sandboxModernPageUrlKey,
   SHARED_SANDBOX_SESSION_ID,
   isSharedSandboxSessionId,
   type SandboxFeedbackInput,
+  type SandboxDurableOperationBinding,
+  type SandboxDurableOperationEffect,
+  type SandboxDurableOperationPublic,
   type SandboxSnapshot,
 } from "./sandbox";
 import { ShipletRoot } from "./shiplet-root";
@@ -522,7 +553,7 @@ const ARTIFACT_ACCESS_COOKIE = "__Host-shiplet_artifact_access";
 const LOCAL_ARTIFACT_ACCESS_COOKIE = "shiplet_artifact_access";
 
 function isReviewFeedbackApiPath(pathname: string) {
-  return /^\/api\/projects\/[^/]+\/(?:review-feedback|review-mention-users|review-watch|review-presence)(?:\/.*)?$/.test(
+  return /^\/api\/projects\/[^/]+\/(?:review-feedback|review-mention-users|review-watch|review-presence|review-operations|review-draft-context)(?:\/.*)?$/.test(
     pathname,
   );
 }
@@ -744,8 +775,6 @@ app.use("*", async (c, next) => {
 /**
  * Automatically initialize database schema on first request
  */
-const schemaInitialization = new WeakMap<object, Promise<void>>();
-
 async function ensureKernelSchemas(db: D1Database) {
   await ensureSchema(db);
   await ensureRevisionSchema(db);
@@ -761,19 +790,73 @@ async function ensureKernelSchemas(db: D1Database) {
   await ensureManagedRuntimeKernelSchema(db);
 }
 
-async function autoInitializeDatabase(db: D1Database): Promise<void> {
-  let initialization = schemaInitialization.get(db as object);
-  if (!initialization) {
-    initialization = ensureKernelSchemas(db);
-    schemaInitialization.set(db as object, initialization);
-  }
-  try {
-    await initialization;
-  } catch (error) {
-    schemaInitialization.delete(db as object);
-    throw error;
-  }
+const KERNEL_SCHEMA_EPOCH_TABLE = "shiplet_kernel_schema_epoch";
+const KERNEL_SCHEMA_EPOCH_MARKER = "kernel";
+// Any change to ensureKernelSchemas must explicitly bump this durable epoch.
+const CURRENT_KERNEL_SCHEMA_EPOCH = 1;
+
+async function readKernelSchemaEpoch(db: D1Database): Promise<number | null> {
+  const table = await db
+    .prepare(
+      "SELECT name FROM sqlite_master WHERE type = 'table' AND name = ? LIMIT 1",
+    )
+    .bind(KERNEL_SCHEMA_EPOCH_TABLE)
+    .first<{ name: string }>();
+  if (!table) return null;
+
+  const marker = await db
+    .prepare(
+      `SELECT epoch FROM ${KERNEL_SCHEMA_EPOCH_TABLE} WHERE schema_id = ? LIMIT 1`,
+    )
+    .bind(KERNEL_SCHEMA_EPOCH_MARKER)
+    .first<{ epoch: number }>();
+  return marker?.epoch ?? null;
 }
+
+async function recordKernelSchemaEpoch(db: D1Database, epoch: number) {
+  await db
+    .prepare(
+      `CREATE TABLE IF NOT EXISTS ${KERNEL_SCHEMA_EPOCH_TABLE} (
+        schema_id TEXT PRIMARY KEY,
+        epoch INTEGER NOT NULL
+      )`,
+    )
+    .run();
+  await db
+    .prepare(
+      `INSERT INTO ${KERNEL_SCHEMA_EPOCH_TABLE} (schema_id, epoch)
+       VALUES (?, ?)
+       ON CONFLICT(schema_id) DO UPDATE SET epoch = excluded.epoch`,
+    )
+    .bind(KERNEL_SCHEMA_EPOCH_MARKER, epoch)
+    .run();
+}
+
+type SchemaInitializationOperations = {
+  readEpoch: (db: D1Database) => PromiseLike<number | null>;
+  ensureSchemas: (db: D1Database) => PromiseLike<void>;
+  recordEpoch: (db: D1Database, epoch: number) => PromiseLike<void>;
+};
+
+function createSchemaInitializer(operations: SchemaInitializationOperations) {
+  return async (db: D1Database): Promise<void> => {
+    const epoch = await operations.readEpoch(db);
+    if (epoch === CURRENT_KERNEL_SCHEMA_EPOCH) return;
+    await operations.ensureSchemas(db);
+    await operations.recordEpoch(db, CURRENT_KERNEL_SCHEMA_EPOCH);
+  };
+}
+
+export const schemaInitializationTest = {
+  createSchemaInitializer,
+  currentEpoch: CURRENT_KERNEL_SCHEMA_EPOCH,
+};
+
+const autoInitializeDatabase = createSchemaInitializer({
+  readEpoch: readKernelSchemaEpoch,
+  ensureSchemas: ensureKernelSchemas,
+  recordEpoch: recordKernelSchemaEpoch,
+});
 
 // Enhanced withDb middleware that includes auto-initialization
 const withDbAndInit = async (c: any, next: any) => {
@@ -792,6 +875,12 @@ function json(data: unknown, status = 200) {
     status,
     headers: { "content-type": "application/json" },
   });
+}
+
+function sandboxNoStoreJson(data: unknown, status = 200) {
+  const response = json(data, status);
+  response.headers.set("cache-control", "no-store");
+  return response;
 }
 
 function isResponse(error: unknown): error is Response {
@@ -4506,6 +4595,702 @@ async function requireReviewProject(c: any) {
   return project;
 }
 
+function reviewOperationNotFoundResponse() {
+  const response = json({ error: "review_operation_not_found" }, 404);
+  response.headers.set("cache-control", "private, no-store");
+  return response;
+}
+
+function privateReviewJson(data: unknown, status = 200) {
+  const response = json(data, status);
+  response.headers.set("cache-control", "private, no-store");
+  return response;
+}
+
+function reviewAttachmentResponse(
+  attachment: Awaited<ReturnType<typeof getReviewAttachment>>,
+  method: string = "GET",
+) {
+  if (!attachment) return privateReviewJson({ error: "review_attachment_not_found" }, 404);
+  const headers = new Headers({
+    "content-type": attachment.metadata.content_type,
+    "content-length": String(attachment.metadata.byte_length),
+    "cache-control": "private, no-store",
+    "x-content-type-options": "nosniff",
+    "cross-origin-resource-policy": "same-origin",
+  });
+  const active =
+    attachment.metadata.content_type === "image/svg+xml" ||
+    ![
+      "image/png",
+      "image/jpeg",
+      "image/gif",
+      "image/webp",
+      "image/vnd.microsoft.icon",
+      "video/mp4",
+      "video/webm",
+      "video/quicktime",
+      "video/mpeg",
+      "video/x-amv",
+      "video/x-ms-asf",
+      "video/x-msvideo",
+      "video/x-f4v",
+      "video/x-flv",
+      "application/mp4",
+    ].includes(attachment.metadata.content_type);
+  const filename = attachment.metadata.name
+    .replace(/[\\/\r\n\u0000-\u001f\u007f]/g, "_")
+    .slice(0, 180) || "attachment";
+  headers.set(
+    "content-disposition",
+    `${active ? "attachment" : "inline"}; filename="${filename.replace(/"/g, "_")}"`,
+  );
+  return new Response(method === "HEAD" ? null : attachment.body, { headers });
+}
+
+function reviewAttachmentUrlForHostedSurface(
+  project: Project,
+  feedbackId: string,
+  attachmentId: string,
+  requestUrl: string,
+  revisionId?: string | null,
+  pageUrl?: string | null,
+) {
+  const request = new URL(requestUrl);
+  const pathPrefix = request.pathname.includes(`/${project.subdomain}/`)
+    ? `/${encodeURIComponent(project.subdomain)}`
+    : "";
+  const url = new URL(
+    `${pathPrefix}/__shiplet/review/feedback/${encodeURIComponent(feedbackId)}/attachments/${encodeURIComponent(attachmentId)}`,
+    request.origin,
+  );
+  if (revisionId) url.searchParams.set("revision_id", revisionId);
+  if (pageUrl) url.searchParams.set("page_url", pageUrl);
+  return `${url.pathname}${url.search}`;
+}
+
+function reviewAttachmentUrlForEmbedSurface(
+  feedbackId: string,
+  attachmentId: string,
+  requestUrl: string,
+  installationId: string,
+  revisionId: string,
+  pageUrl: string,
+) {
+  const url = new URL(
+    `/embed/review/feedback/${encodeURIComponent(feedbackId)}/attachments/${encodeURIComponent(attachmentId)}`,
+    new URL(requestUrl).origin,
+  );
+  url.searchParams.set("installation_id", installationId);
+  url.searchParams.set("revision_id", revisionId);
+  url.searchParams.set("page_url", pageUrl);
+  return `${url.pathname}${url.search}`;
+}
+
+function rewriteReviewAttachmentUrls<T extends { feedback: Array<{ attachments?: Array<{ id: string; content_url: string }> }> }>(
+  page: T,
+  contentUrl: (feedback: T["feedback"][number], attachmentId: string) => string,
+) {
+  return {
+    ...page,
+    feedback: page.feedback.map((feedback) => ({
+      ...feedback,
+      attachments: feedback.attachments?.map((attachment) => ({
+        ...attachment,
+        content_url: contentUrl(feedback, attachment.id),
+      })),
+    })),
+  };
+}
+
+const MAX_TRUSTED_RICH_FORM_BYTES = 512 * 1024;
+
+function trustedReviewRichPayloadFromForm(
+  formData: FormData,
+): { ok: true; value: unknown | null } | { ok: false } {
+  if (!formData.has("rich_payload_json")) return { ok: true, value: null };
+  const serialized = String(formData.get("rich_payload_json") || "");
+  if (!serialized || new TextEncoder().encode(serialized).byteLength > MAX_TRUSTED_RICH_FORM_BYTES) {
+    return { ok: false };
+  }
+  try {
+    return { ok: true, value: JSON.parse(serialized) };
+  } catch {
+    return { ok: false };
+  }
+}
+
+const REVIEW_OPERATION_CANCEL_BODY_BYTES = 8_192;
+
+type ReviewOperationCancellationBody = {
+  installationId?: string;
+  revisionId: string;
+  pageUrl: string;
+  effect: ReviewOperationEffect;
+  feedbackId?: string;
+};
+
+function reviewPrivateRouteError(error: unknown, fallbackCode: string) {
+  if (isResponse(error)) {
+    return privateReviewJson({ error: fallbackCode }, error.status);
+  }
+  return privateReviewJson({ error: fallbackCode }, 500);
+}
+
+async function readReviewOperationCancellationBody(
+  c: any,
+  input: { embed: boolean },
+): Promise<ReviewOperationCancellationBody> {
+  const mediaType = (c.req.header("content-type") || "")
+    .split(";", 1)[0]
+    .trim()
+    .toLowerCase();
+  if (mediaType !== "application/json") {
+    throw privateReviewJson(
+      { error: "review_operation_content_type_required" },
+      415,
+    );
+  }
+  const declaredLength = Number(c.req.header("content-length") || "0");
+  if (
+    Number.isFinite(declaredLength) &&
+    declaredLength > REVIEW_OPERATION_CANCEL_BODY_BYTES
+  ) {
+    throw privateReviewJson({ error: "review_operation_body_too_large" }, 413);
+  }
+  let text: string;
+  try {
+    text = await readRequestTextWithLimit(
+      c.req.raw,
+      REVIEW_OPERATION_CANCEL_BODY_BYTES,
+    );
+  } catch {
+    throw privateReviewJson({ error: "review_operation_body_too_large" }, 413);
+  }
+  let parsed: unknown;
+  try {
+    parsed = text ? JSON.parse(text) : null;
+  } catch {
+    throw privateReviewJson({ error: "review_operation_request_invalid" }, 400);
+  }
+  if (!isRecord(parsed)) {
+    throw privateReviewJson({ error: "review_operation_request_invalid" }, 400);
+  }
+  const allowed = new Set([
+    "revisionId",
+    "pageUrl",
+    "effect",
+    "feedbackId",
+    ...(input.embed ? ["installationId"] : []),
+  ]);
+  if (Object.keys(parsed).some((key) => !allowed.has(key))) {
+    throw privateReviewJson({ error: "review_operation_request_invalid" }, 400);
+  }
+  const boundedIdentifier = (value: unknown) =>
+    typeof value === "string" && REVIEW_OPERATION_REQUEST_ID.test(value);
+  const revisionId = parsed.revisionId;
+  const pageUrl = parsed.pageUrl;
+  const effect = parsed.effect;
+  let parsedPageUrl: URL;
+  try {
+    parsedPageUrl = new URL(typeof pageUrl === "string" ? pageUrl : "");
+  } catch {
+    throw privateReviewJson({ error: "review_operation_request_invalid" }, 400);
+  }
+  if (
+    !boundedIdentifier(revisionId) ||
+    typeof pageUrl !== "string" ||
+    pageUrl.length === 0 ||
+    pageUrl.length > 4_096 ||
+    (parsedPageUrl.protocol !== "http:" && parsedPageUrl.protocol !== "https:") ||
+    !["feedback.create", "feedback.reply", "feedback.status"].includes(
+      String(effect),
+    )
+  ) {
+    throw privateReviewJson({ error: "review_operation_request_invalid" }, 400);
+  }
+  const normalizedEffect = effect as ReviewOperationEffect;
+  const hasFeedbackId = Object.prototype.hasOwnProperty.call(parsed, "feedbackId");
+  const feedbackId = parsed.feedbackId;
+  if (
+    (normalizedEffect === "feedback.create" && hasFeedbackId) ||
+    ((normalizedEffect === "feedback.reply" ||
+      normalizedEffect === "feedback.status") &&
+      (!hasFeedbackId || !boundedIdentifier(feedbackId)))
+  ) {
+    throw privateReviewJson({ error: "review_operation_request_invalid" }, 400);
+  }
+  if (input.embed) {
+    if (!boundedIdentifier(parsed.installationId)) {
+      throw privateReviewJson({ error: "review_operation_request_invalid" }, 400);
+    }
+  }
+  return {
+    ...(input.embed ? { installationId: parsed.installationId as string } : {}),
+    revisionId: revisionId as string,
+    pageUrl,
+    effect: normalizedEffect,
+    ...(hasFeedbackId ? { feedbackId: feedbackId as string } : {}),
+  };
+}
+
+function publicReviewOperationResponse(operation: ReviewOperationRow) {
+  return privateReviewJson(publicReviewOperation(operation));
+}
+
+function reviewOperationCancellationResponse(
+  row: ReviewOperationRow,
+  cancelled: boolean,
+  status = 200,
+) {
+  return privateReviewJson(
+    {
+      cancelled,
+      ...publicReviewOperation(row),
+    },
+    status,
+  );
+}
+
+function reviewDraftContextResponse(input: {
+  actor: { kind: "human" | "sandbox"; id: string };
+  projectId: string;
+  revisionId: string;
+  pageUrl: string;
+  installationId: string | null;
+  expiresOn: string | null;
+  durableOperations: boolean;
+}) {
+  return privateReviewJson({ context: input });
+}
+
+function reviewDraftContextQuery(url: URL) {
+  return {
+    revisionId: url.searchParams.get("revision_id")?.trim() || "",
+    pageUrl: url.searchParams.get("page_url") || "",
+  };
+}
+
+function optionalReviewOperationRequestId(body: unknown) {
+  if (
+    !isRecord(body) ||
+    !Object.prototype.hasOwnProperty.call(body, "requestId")
+  ) {
+    return null;
+  }
+  const requestId =
+    typeof body.requestId === "string" ? body.requestId.trim() : "";
+  if (!REVIEW_OPERATION_REQUEST_ID.test(requestId)) {
+    throw new Response("Invalid review operation request ID", { status: 400 });
+  }
+  return requestId;
+}
+
+async function applyDurableHumanThreadOperation(input: {
+  env: Env;
+  project: Project;
+  user: ShipletUser;
+  feedbackId: string;
+  effect: "feedback.reply" | "feedback.status";
+  value: unknown;
+  requestId: string;
+  mentions?: ReturnType<typeof normalizeMentionInputs>;
+}) {
+  if (!REVIEW_OPERATION_REQUEST_ID.test(input.requestId)) {
+    throw new Response("Invalid review operation request ID", { status: 400 });
+  }
+  let value: string;
+  if (input.effect === "feedback.reply") {
+    value = normalizeReviewReplyComment(input.value);
+    if (!value) {
+      throw new Response("Comment is required.", { status: 400 });
+    }
+    await requireDurableReviewMentionRecipients(
+      input.env.DB,
+      input.project,
+      input.mentions || [],
+    );
+  } else {
+    value = typeof input.value === "string" ? input.value.trim() : "";
+    if (!isReviewStatus(value)) {
+      throw new Response("Status is not supported.", { status: 400 });
+    }
+  }
+  const feedback = await getReviewFeedback(
+    input.env.DB,
+    input.project.id,
+    input.feedbackId,
+  );
+  if (!feedback) throw new Response("Review feedback not found", { status: 404 });
+  const revisionId = trustedReviewRevisionId(input.project);
+  const payload = {
+    feedbackId: input.feedbackId,
+    value,
+    ...(input.effect === "feedback.reply"
+      ? { mentions: input.mentions || [] }
+      : {}),
+  };
+  const payloadJson = await prepareDurableReviewPayload(
+    input.env,
+    input.project.id,
+    input.requestId,
+    payload,
+  );
+  let operation: ReviewOperationRow;
+  try {
+    operation = await prepareReviewOperation(input.env.DB, {
+      installationId: `managed:${input.project.id}`,
+      projectId: input.project.id,
+      revisionId,
+      actorUserId: input.user.id,
+      effect: input.effect,
+      payloadJson,
+      payloadDigest: await digestReviewOperationPayload(payloadJson),
+      requestId: input.requestId,
+      pageUrl: feedback.page_url,
+      feedbackId: input.feedbackId,
+    });
+  } catch (error) {
+    if (error instanceof ReviewOperationConflict) {
+      throw new Response("Review operation conflict", { status: 409 });
+    }
+    throw error;
+  }
+  const completed = await completeDurableThreadOperation(input.env, {
+    operation,
+    project: input.project,
+    actor: input.user,
+    feedbackId: input.feedbackId,
+    value,
+    mentions: input.mentions,
+  });
+  if (!completed) {
+    const current = await input.env.DB
+      .prepare("SELECT * FROM embed_review_operation_intents WHERE id = ?")
+      .bind(operation.id)
+      .first<ReviewOperationRow>();
+    if (current?.completed_on) {
+      return getReviewFeedback(input.env.DB, input.project.id, input.feedbackId);
+    }
+    throw new Response("Review operation could not be recorded", { status: 500 });
+  }
+  return getReviewFeedback(input.env.DB, input.project.id, input.feedbackId);
+}
+
+async function applyDurableHumanFeedbackOperation(input: {
+  env: Env;
+  project: Project;
+  user: ShipletUser;
+  payload: Parameters<typeof createReviewFeedback>[3];
+  requestId: string;
+}) {
+  if (!REVIEW_OPERATION_REQUEST_ID.test(input.requestId)) {
+    throw new Response("Invalid review operation request ID", { status: 400 });
+  }
+  await requireDurableReviewMentionRecipients(
+    input.env.DB,
+    input.project,
+    input.payload.mentions,
+  );
+  const revisionId = trustedReviewRevisionId(input.project);
+  const payloadJson = await prepareDurableReviewPayload(
+    input.env,
+    input.project.id,
+    input.requestId,
+    input.payload,
+  );
+  let operation: ReviewOperationRow;
+  try {
+    operation = await prepareReviewOperation(input.env.DB, {
+      installationId: `managed:${input.project.id}`,
+      projectId: input.project.id,
+      revisionId,
+      actorUserId: input.user.id,
+      effect: "feedback.create",
+      payloadJson,
+      payloadDigest: await digestReviewOperationPayload(payloadJson),
+      requestId: input.requestId,
+      pageUrl: input.payload.pageUrl,
+    });
+  } catch (error) {
+    if (error instanceof ReviewOperationConflict) {
+      throw new Response("Review operation conflict", { status: 409 });
+    }
+    throw error;
+  }
+  if (operation.completed_on && operation.result_feedback_id) {
+    return getReviewFeedback(
+      input.env.DB,
+      input.project.id,
+      operation.result_feedback_id,
+    );
+  }
+  await stageDurableReviewPayload(
+    input.env,
+    input.project.id,
+    operation.result_feedback_id!,
+    input.payload,
+    payloadJson,
+  );
+  const feedback = await createReviewFeedback(
+    input.env,
+    input.project,
+    input.user,
+    input.payload,
+    {
+      revisionId,
+      intentId: operation.id,
+      confirmedOn: timestamps.now(),
+      requestId: input.requestId,
+    },
+  );
+  if (feedback) return feedback;
+  const current = await input.env.DB
+    .prepare("SELECT * FROM embed_review_operation_intents WHERE id = ?")
+    .bind(operation.id)
+    .first<ReviewOperationRow>();
+  if (current?.completed_on && current.result_feedback_id) {
+    return getReviewFeedback(
+      input.env.DB,
+      input.project.id,
+      current.result_feedback_id,
+    );
+  }
+  throw new Response("Review operation could not be recorded", { status: 500 });
+}
+
+async function cancelBoundReviewOperation(input: {
+  env: Env;
+  installationId: string;
+  projectId: string;
+  revisionId: string;
+  actorUserId: string;
+  requestId: string;
+  pageUrl: string;
+  effect: string;
+  feedbackId?: string | null;
+}) {
+  const result = await cancelReviewOperation(input.env.DB, input);
+  if (!result) return reviewOperationNotFoundResponse();
+  const state = reviewOperationState(result.row);
+  if (result.cancelled || state === "cancelled") {
+    return reviewOperationCancellationResponse(result.row, true);
+  }
+  if (state === "completed") {
+    return reviewOperationCancellationResponse(result.row, false);
+  }
+  return reviewOperationCancellationResponse(result.row, false, 409);
+}
+
+type ReviewFeedbackListQuery = {
+  pageUrl?: string;
+  pagePrefix?: string;
+  siteOrigin?: string;
+  status?: string;
+  state: "open" | "closed" | "all";
+  revisionId?: string;
+  submittedByUserId?: string;
+  mentionedUserId?: string;
+  cursor?: string;
+  cursorActor: string;
+  limit: number;
+  maxLimit: number;
+};
+
+function parseReviewFeedbackListQuery(
+  url: URL,
+  input: {
+    actorUserId: string | null;
+    cursorActor: string;
+    defaultState: "open" | "all";
+    embed?: {
+      pageUrl: string;
+      siteOrigin: string;
+      revisionId: string;
+    };
+  },
+): ReviewFeedbackListQuery {
+  const params = url.searchParams;
+  const stateValue = params.get("state");
+  const statusValue = params.get("status");
+  const includeClosedValue = params.get("includeClosed");
+  const pageUrlValue = params.get("pageUrl");
+  const pagePrefixValue = params.get("pagePrefix");
+  const revisionIdValue = params.get("revisionId");
+  const submittedByMe = parseReviewBooleanFilter(params, "submittedByMe");
+  const mentionedMe = parseReviewBooleanFilter(params, "mentionedMe");
+  const cursor = params.get("cursor");
+  const scope = params.get("scope");
+  const hasModernFilter = [
+    "state",
+    "pagePrefix",
+    "revisionId",
+    "submittedByMe",
+    "mentionedMe",
+    "scope",
+  ].some((name) => params.has(name));
+  const hasCursor = params.has("cursor");
+
+  if (params.has("cursor") && !cursor) {
+    throw new Response("Invalid review feedback cursor", { status: 400 });
+  }
+  if (params.has("pagePrefix") && !pagePrefixValue) {
+    throw new Response("Invalid review page prefix", { status: 400 });
+  }
+
+  if (stateValue !== null && !["open", "closed", "all"].includes(stateValue)) {
+    throw new Response("Invalid review feedback state", { status: 400 });
+  }
+  if (
+    statusValue !== null &&
+    !["New", "In Progress", "Blocked", "Staging", "Done", "Dropped"].includes(
+      statusValue,
+    )
+  ) {
+    throw new Response("Invalid review feedback status", { status: 400 });
+  }
+  if (
+    includeClosedValue !== null &&
+    includeClosedValue !== "true" &&
+    includeClosedValue !== "false"
+  ) {
+    throw new Response("Invalid includeClosed filter", { status: 400 });
+  }
+  if (
+    stateValue !== null &&
+    (statusValue !== null || includeClosedValue !== null)
+  ) {
+    throw new Response("Conflicting review feedback state filters", {
+      status: 400,
+    });
+  }
+  if (pageUrlValue !== null && pagePrefixValue !== null) {
+    throw new Response("Conflicting review feedback page filters", {
+      status: 400,
+    });
+  }
+  if (
+    revisionIdValue !== null &&
+    !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,255}$/.test(revisionIdValue)
+  ) {
+    throw new Response("Invalid review feedback revision", { status: 400 });
+  }
+  if ((submittedByMe || mentionedMe) && !input.actorUserId) {
+    throw new Response("Review feedback actor filter requires a user", {
+      status: 400,
+    });
+  }
+
+  const requestedLimit = params.get("limit");
+  let limit = 100;
+  if (requestedLimit !== null) {
+    if (!/^\d+$/.test(requestedLimit)) {
+      if (hasModernFilter || hasCursor) {
+        throw new Response("Invalid review feedback limit", { status: 400 });
+      }
+    } else {
+      limit = Number(requestedLimit);
+      if (hasModernFilter && (limit < 1 || limit > 100)) {
+        throw new Response("Review feedback limit must be between 1 and 100", {
+          status: 400,
+        });
+      }
+      if (hasCursor && !hasModernFilter && (limit < 1 || limit > 250)) {
+        throw new Response("Review feedback limit must be between 1 and 250", {
+          status: 400,
+        });
+      }
+    }
+  }
+
+  const state = (stateValue ||
+    (statusValue
+      ? input.defaultState
+      : includeClosedValue === "true"
+        ? "all"
+        : input.defaultState)) as "open" | "closed" | "all";
+  const query: ReviewFeedbackListQuery = {
+    state,
+    cursorActor: input.cursorActor,
+    limit,
+    maxLimit: hasModernFilter ? 100 : 250,
+    ...(statusValue ? { status: statusValue } : {}),
+    ...(revisionIdValue ? { revisionId: revisionIdValue } : {}),
+    ...(submittedByMe && input.actorUserId
+      ? { submittedByUserId: input.actorUserId }
+      : {}),
+    ...(mentionedMe && input.actorUserId
+      ? { mentionedUserId: input.actorUserId }
+      : {}),
+    ...(cursor ? { cursor } : {}),
+  };
+
+  if (!input.embed) {
+    if (scope !== null) {
+      throw new Response("Review feedback scope is only available when embedded", {
+        status: 400,
+      });
+    }
+    if (pageUrlValue) query.pageUrl = pageUrlValue;
+    if (pagePrefixValue) query.pagePrefix = pagePrefixValue;
+    return query;
+  }
+
+  if (revisionIdValue && revisionIdValue !== input.embed.revisionId) {
+    throw new Response("Embedded review revision denied", { status: 403 });
+  }
+  if (pageUrlValue && pageUrlValue !== input.embed.pageUrl) {
+    throw new Response("Embedded review page filter mismatch", { status: 400 });
+  }
+  const embedScope = scope || "page";
+  if (!new Set(["page", "prefix", "site"]).has(embedScope)) {
+    throw new Response("Invalid embedded review scope", { status: 400 });
+  }
+  if (embedScope === "page") {
+    if (pagePrefixValue) {
+      throw new Response("Embedded page scope cannot use a page prefix", {
+        status: 400,
+      });
+    }
+    query.pageUrl = input.embed.pageUrl;
+    return query;
+  }
+  if (embedScope === "prefix") {
+    if (!pagePrefixValue) {
+      throw new Response("Embedded prefix scope requires pagePrefix", {
+        status: 400,
+      });
+    }
+    let prefixOrigin = "";
+    try {
+      prefixOrigin = new URL(pagePrefixValue).origin;
+    } catch {
+      throw new Response("Invalid review page prefix", { status: 400 });
+    }
+    if (prefixOrigin !== input.embed.siteOrigin) {
+      throw new Response("Embedded review prefix must use the session site", {
+        status: 400,
+      });
+    }
+    query.pagePrefix = pagePrefixValue;
+    return query;
+  }
+  if (pagePrefixValue || pageUrlValue) {
+    throw new Response("Embedded site scope cannot use a page filter", {
+      status: 400,
+    });
+  }
+  query.siteOrigin = input.embed.siteOrigin;
+  return query;
+}
+
+function parseReviewBooleanFilter(params: URLSearchParams, name: string) {
+  const value = params.get(name);
+  if (value === null || value === "false") return false;
+  if (value === "true") return true;
+  throw new Response(`Invalid ${name} filter`, { status: 400 });
+}
+
 function reviewPresenceUserName(user: ShipletUser) {
   const parts = [user.first_name, user.last_name]
     .map((part) => normalizeOptionalString(part))
@@ -4555,6 +5340,123 @@ async function listTrustedReviewMentionCandidates(
     });
   }
   return hydrated;
+}
+
+type ModernReviewMentionCandidate = {
+	id: string;
+	label: string;
+	_sortLabel: string;
+	_search: string;
+};
+
+type ModernReviewMentionCursor = {
+	v: 1;
+	actor: string;
+	organization: string;
+	project: string;
+	query: string;
+	label: string;
+	id: string;
+};
+
+function normalizeModernMentionQuery(value: string | null) {
+	const normalized = (value || "").normalize("NFKC").trim().replace(/\s+/g, " ");
+	if (!normalized) {
+		throw new Response("Mention query is required", { status: 400 });
+	}
+	if (Array.from(normalized).length > 80) {
+		throw new Response("Mention query is too long", { status: 400 });
+	}
+	return normalized.toLocaleLowerCase();
+}
+
+function modernMentionSortLabel(value: string) {
+	return value.normalize("NFKC").trim().replace(/\s+/g, " ").toLocaleLowerCase();
+}
+
+function encodeModernReviewMentionCursor(value: ModernReviewMentionCursor) {
+	const encoded = btoa(JSON.stringify(value));
+	return encoded.replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/g, "");
+}
+
+function decodeModernReviewMentionCursor(value: string): ModernReviewMentionCursor | null {
+	if (!/^[A-Za-z0-9_-]{1,1024}$/.test(value)) return null;
+	try {
+		const padded = value.replace(/-/g, "+").replace(/_/g, "/").padEnd(Math.ceil(value.length / 4) * 4, "=");
+		const parsed = JSON.parse(atob(padded)) as Partial<ModernReviewMentionCursor>;
+		if (
+			parsed.v !== 1 ||
+			typeof parsed.actor !== "string" ||
+			typeof parsed.organization !== "string" ||
+			typeof parsed.project !== "string" ||
+			typeof parsed.query !== "string" ||
+			typeof parsed.label !== "string" ||
+			typeof parsed.id !== "string" ||
+			!parsed.actor || !parsed.organization || !parsed.project || !parsed.id
+		) return null;
+		return parsed as ModernReviewMentionCursor;
+	} catch {
+		return null;
+	}
+}
+
+async function listModernReviewMentionCandidates(
+	env: Env,
+	project: Project,
+	user: ShipletUser | null,
+	url: URL,
+) {
+	if (!user || !project.organization_id) {
+		throw new Response("Review mention access required", { status: 403 });
+	}
+	const membership = await getOrganizationMembership(env.DB, project.organization_id, user.id);
+	if (!membership) throw new Response("Review mention access required", { status: 403 });
+	const query = normalizeModernMentionQuery(url.searchParams.get("q"));
+	const cursorValue = url.searchParams.get("cursor");
+	const rawLimit = url.searchParams.get("limit");
+	const limit = rawLimit === null ? 20 : Number(rawLimit);
+	if (rawLimit !== null && (!/^\d+$/.test(rawLimit) || !Number.isInteger(limit) || limit < 1 || limit > 20)) {
+		throw new Response("Mention limit must be between 1 and 20", { status: 400 });
+	}
+	let cursor: ModernReviewMentionCursor | null = null;
+	if (cursorValue !== null) {
+		cursor = decodeModernReviewMentionCursor(cursorValue);
+		if (!cursor || cursor.actor !== user.id || cursor.organization !== project.organization_id || cursor.project !== project.id || cursor.query !== query) {
+			throw new Response("Invalid review mention cursor", { status: 400 });
+		}
+	}
+	const bindings: Array<string | number> = [project.organization_id];
+	const rows = await env.DB.prepare(
+		`SELECT users.id, users.email, users.first_name, users.last_name
+		 FROM organization_memberships
+		 JOIN users ON users.id = organization_memberships.user_id
+		 WHERE organization_memberships.organization_id = ?`,
+	).bind(...bindings).all<{ id: string; email: string; first_name: string | null; last_name: string | null }>();
+	const candidates: ModernReviewMentionCandidate[] = (rows.results || []).map((candidate) => {
+		const label = reviewPresenceUserName(candidate as ShipletUser);
+		return { id: candidate.id, label, _sortLabel: modernMentionSortLabel(label), _search: `${candidate.email} ${label}`.normalize("NFKC").toLocaleLowerCase() };
+	}).filter((candidate) => candidate._search.includes(query)).sort((left, right) =>
+		left._sortLabel < right._sortLabel ? -1 : left._sortLabel > right._sortLabel ? 1 : left.id < right.id ? -1 : left.id > right.id ? 1 : 0,
+	);
+	const afterCursor = cursor
+		? candidates.filter((candidate) => candidate._sortLabel > cursor!.label || (candidate._sortLabel === cursor!.label && candidate.id > cursor!.id))
+		: candidates;
+	const page = afterCursor.slice(0, limit);
+	const last = page.at(-1);
+	return {
+		users: page.map(({ id, label }) => ({ id, label })),
+		nextCursor: afterCursor.length > limit && last
+			? encodeModernReviewMentionCursor({
+					v: 1,
+					actor: user.id,
+					organization: project.organization_id,
+					project: project.id,
+					query,
+					label: last._sortLabel,
+					id: last.id,
+				})
+			: null,
+	};
 }
 
 function reviewClientUser(user: ShipletUser | null) {
@@ -5454,9 +6356,13 @@ function sandboxSessionIdFromRequest(
   return SHARED_SANDBOX_SESSION_ID;
 }
 
-function sandboxActorIdFromRequest(request: Request, url: URL) {
-  const fromQuery = url.searchParams.get("actor");
-  if (validSandboxActorId(fromQuery)) return fromQuery as string;
+function sandboxActorIdFromRequest(
+	request: Request,
+	url: URL,
+	options: { ignoreQuery?: boolean } = {},
+) {
+	const fromQuery = options.ignoreQuery ? null : url.searchParams.get("actor");
+	if (validSandboxActorId(fromQuery)) return fromQuery as string;
   const fromCookie = getCookie(request, SANDBOX_ACTOR_COOKIE);
   if (validSandboxActorId(fromCookie)) return fromCookie as string;
   return newSandboxActorId();
@@ -5485,7 +6391,124 @@ function withSandboxCookies(
 }
 
 function isSandboxProjectId(projectId: string) {
-  return /^sandbox-sbx_[a-z0-9]{24}-.+/.test(projectId);
+	return /^sandbox-sbx_[a-z0-9]{24}-.+/.test(projectId);
+}
+
+type SandboxModernQuery = {
+	pageUrlKey?: string;
+	pagePrefixKey?: string;
+	state: "open" | "closed" | "all";
+	revisionId?: string;
+	submittedByMe: boolean;
+	mentionedMe: boolean;
+	cursor?: string;
+	limit: number;
+};
+
+function sandboxModernRequest(url: URL) {
+	return [
+		"state",
+		"pagePrefix",
+		"revisionId",
+		"submittedByMe",
+		"mentionedMe",
+		"scope",
+		"cursor",
+	].some((name) => url.searchParams.has(name));
+}
+
+function sandboxModernScalar(url: URL, name: string) {
+	const values = url.searchParams.getAll(name);
+	if (values.length > 1) {
+		throw new SandboxModernQueryError("sandbox_query_invalid");
+	}
+	return values[0];
+}
+
+function sandboxModernQuery(
+	url: URL,
+	expectedOrigin: string,
+): SandboxModernQuery {
+	if (url.searchParams.has("status") || url.searchParams.has("includeClosed")) {
+		throw new SandboxModernQueryError("sandbox_query_invalid");
+	}
+	const stateValue = sandboxModernScalar(url, "state") ?? "open";
+	if (stateValue !== "open" && stateValue !== "closed" && stateValue !== "all") {
+		throw new SandboxModernQueryError("sandbox_query_invalid");
+	}
+	const pageUrl = sandboxModernScalar(url, "pageUrl");
+	const pagePrefix = sandboxModernScalar(url, "pagePrefix");
+	const scope = sandboxModernScalar(url, "scope");
+	if (scope !== undefined && scope !== "page" && scope !== "prefix" && scope !== "site") {
+		throw new SandboxModernQueryError("sandbox_query_invalid");
+	}
+	if (pageUrl !== undefined && pagePrefix !== undefined) {
+		throw new SandboxModernQueryError("sandbox_query_invalid");
+	}
+	if (
+		scope === "page" &&
+		(pageUrl === undefined || pagePrefix !== undefined)
+	) {
+		throw new SandboxModernQueryError("sandbox_query_invalid");
+	}
+	if (
+		scope === "prefix" &&
+		(pagePrefix === undefined || pageUrl !== undefined)
+	) {
+		throw new SandboxModernQueryError("sandbox_query_invalid");
+	}
+	if (scope === "site" && (pageUrl !== undefined || pagePrefix !== undefined)) {
+		throw new SandboxModernQueryError("sandbox_query_invalid");
+	}
+	const pageUrlKey =
+		pageUrl === undefined ? undefined : sandboxModernPageUrlKey(pageUrl);
+	const pagePrefixKey =
+		pagePrefix === undefined ? undefined : sandboxModernPagePrefixKey(pagePrefix);
+	if (pageUrl !== undefined && !pageUrlKey) {
+		throw new SandboxModernQueryError("sandbox_query_invalid");
+	}
+	if (pagePrefix !== undefined && !pagePrefixKey) {
+		throw new SandboxModernQueryError("sandbox_query_invalid");
+	}
+	for (const key of [pageUrlKey, pagePrefixKey]) {
+		if (key && new URL(key).origin !== expectedOrigin) {
+			throw new SandboxModernQueryError("sandbox_query_invalid");
+		}
+	}
+	const revisionId = sandboxModernScalar(url, "revisionId");
+	if (revisionId !== undefined && (revisionId.length === 0 || revisionId.length > 256)) {
+		throw new SandboxModernQueryError("sandbox_query_invalid");
+	}
+	const submittedByMeValue = sandboxModernScalar(url, "submittedByMe");
+	const mentionedMeValue = sandboxModernScalar(url, "mentionedMe");
+	const parseBoolean = (value: string | undefined) => {
+		if (value === undefined) return false;
+		if (value === "true") return true;
+		if (value === "false") return false;
+		throw new SandboxModernQueryError("sandbox_query_invalid");
+	};
+	const limitValue = sandboxModernScalar(url, "limit");
+	const limit = limitValue === undefined ? 100 : Number(limitValue);
+	if (
+		limitValue !== undefined &&
+		(!/^\d+$/.test(limitValue) || !Number.isInteger(limit) || limit < 1 || limit > 100)
+	) {
+		throw new SandboxModernQueryError("sandbox_query_invalid");
+	}
+	const cursor = sandboxModernScalar(url, "cursor");
+	if (cursor !== undefined && (cursor.length === 0 || cursor.length > 1024)) {
+		throw new SandboxModernQueryError("sandbox_query_invalid");
+	}
+	return {
+		pageUrlKey: pageUrlKey || undefined,
+		pagePrefixKey: pagePrefixKey || undefined,
+		state: stateValue,
+		revisionId,
+		submittedByMe: parseBoolean(submittedByMeValue),
+		mentionedMe: parseBoolean(mentionedMeValue),
+		cursor,
+		limit,
+	};
 }
 
 function sandboxProjectIdFromPreviewParam(value: string) {
@@ -9501,6 +10524,157 @@ function sandboxFeedbackInput(value: {
   };
 }
 
+function sandboxDurableCanonicalBinding(input: {
+	env: Env;
+	requestUrl: string;
+	projectId: string;
+	requestId: string;
+	actorId: string;
+	sessionId: string;
+	effect: SandboxDurableOperationEffect;
+	targetId: string | null;
+	payloadDigest: string;
+}): SandboxDurableOperationBinding {
+	return {
+		requestId: input.requestId,
+		actorId: input.actorId,
+		sessionId: input.sessionId,
+		projectId: input.projectId,
+		revisionId: `sandbox_${input.projectId}`,
+		pageUrl: new URL(
+			`/play/preview/${encodeURIComponent(input.projectId)}`,
+			appBaseUrl(input.env, input.requestUrl),
+		).toString(),
+		effect: input.effect,
+		targetId: input.targetId,
+		payloadDigest: input.payloadDigest,
+	};
+}
+
+async function sandboxDurablePayloadDigest(payloadJson: string) {
+	const bytes = new Uint8Array(
+		await crypto.subtle.digest("SHA-256", new TextEncoder().encode(payloadJson)),
+	);
+	return Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("");
+}
+
+function sandboxOperationResponse(operation: SandboxDurableOperationPublic) {
+	return privateReviewJson({ operation });
+}
+
+function isSandboxDurableOperationConflict(error: unknown) {
+	return error instanceof SandboxDurableOperationConflict ||
+		(error instanceof Error &&
+			(error.name === "SandboxOperationConflict" ||
+				error.message === "Sandbox operation binding conflict."));
+}
+
+async function applySandboxDurableCreate(input: {
+	env: Env;
+	requestUrl: string;
+	projectId: string;
+	sessionId: string;
+	actorId: string;
+	requestId: string;
+	payload: ReturnType<typeof sandboxFeedbackInput> & { richPayload?: ReviewRichPayloadV1 | null };
+}) {
+	const canonicalPageUrl = new URL(
+		`/play/preview/${encodeURIComponent(input.projectId)}`,
+		appBaseUrl(input.env, input.requestUrl),
+	).toString();
+	const payload = {
+		...input.payload,
+		pageUrl: canonicalPageUrl,
+		pathname: new URL(canonicalPageUrl).pathname,
+		pageUrlKey: new URL(canonicalPageUrl).pathname,
+	};
+	const payloadJson = await prepareDurableReviewPayload(
+		input.env,
+		input.projectId,
+		input.requestId,
+		payload,
+	);
+	const binding = sandboxDurableCanonicalBinding({
+		...input,
+		effect: "feedback.create",
+		targetId: null,
+		payloadDigest: await sandboxDurablePayloadDigest(payloadJson),
+	});
+	const stub = sandboxStub(input.env, input.sessionId) as any;
+	try {
+		const prepared = await stub.prepareDurableOperation(binding);
+		if (prepared.conflict) throw new Response("Review operation conflict", { status: 409 });
+		if (prepared.operation.state === "pending") {
+			await stageDurableReviewPayload(
+				input.env,
+				input.projectId,
+				prepared.resultId,
+				payload,
+				payloadJson,
+			);
+		}
+		const completed = await stub.completeDurableOperation(binding, {
+			kind: "create",
+			payload,
+			richPayloadJson: payload.richPayload ? payloadJson : null,
+		});
+		if (completed.conflict) throw new Response("Review operation conflict", { status: 409 });
+		if (completed.operation.state !== "completed" || !completed.feedback) {
+			throw new Response("Sandbox review operation is terminal.", { status: 409 });
+		}
+		return completed.feedback;
+	} catch (error) {
+		if (isSandboxDurableOperationConflict(error)) {
+			throw new Response("Review operation conflict", { status: 409 });
+		}
+		throw error;
+	}
+}
+
+async function applySandboxDurableThread(input: {
+	env: Env;
+	requestUrl: string;
+	projectId: string;
+	sessionId: string;
+	actorId: string;
+	requestId: string;
+	feedbackId: string;
+	effect: "feedback.reply" | "feedback.status";
+	value: string;
+}) {
+	const payloadJson = JSON.stringify(
+		input.effect === "feedback.reply"
+			? { feedbackId: input.feedbackId, comment: input.value }
+			: { feedbackId: input.feedbackId, status: input.value },
+	);
+	const binding = sandboxDurableCanonicalBinding({
+		...input,
+		targetId: input.feedbackId,
+		payloadDigest: await sandboxDurablePayloadDigest(payloadJson),
+	});
+	const stub = sandboxStub(input.env, input.sessionId) as any;
+	try {
+		const prepared = await stub.prepareDurableOperation(binding);
+		if (prepared.conflict) throw new Response("Review operation conflict", { status: 409 });
+		const completed = await stub.completeDurableOperation(
+			binding,
+			input.effect === "feedback.reply"
+				? { kind: "reply", comment: input.value }
+					: { kind: "status", status: input.value },
+		);
+		if (completed.conflict) throw new Response("Review operation conflict", { status: 409 });
+		if (completed.operation.state !== "completed" || !completed.feedback) {
+			throw new Response("Sandbox review operation is terminal.", { status: 409 });
+		}
+		return completed.feedback;
+	} catch (error) {
+		if (isSandboxDurableOperationConflict(error)) {
+			throw new Response("Review operation conflict", { status: 409 });
+		}
+		throw error;
+	}
+}
+
 function mcpResult(id: unknown, result: unknown) {
   return json({ jsonrpc: "2.0", id, result });
 }
@@ -9622,6 +10796,9 @@ app.use("*", withDbAndInit, async (c, next) => {
     const isTrustedReviewNamespace =
       tenantPath === "/__shiplet/review" ||
       tenantPath.startsWith("/__shiplet/review/");
+    const trustedReviewAttachmentRequest = tenantPath.match(
+      /^\/__shiplet\/review\/feedback\/([^/]+)\/attachments\/([^/]+)$/,
+    );
     const artifactFramePrefix = "/__shiplet/artifact-frame";
     const isArtifactFrameRequest =
       tenantPath === artifactFramePrefix ||
@@ -9671,6 +10848,9 @@ app.use("*", withDbAndInit, async (c, next) => {
     // proxy is available without a Shiplet session. Review UI and APIs remain
     // access-controlled below.
     if (!canView && isAnonymousExternalArtifactRead) canView = true;
+    if (!canView && trustedReviewAttachmentRequest) {
+      return privateReviewJson({ error: "review_attachment_not_found" }, 404);
+    }
     if (!canView) {
       const accessGateUrl = shipletAccessGateUrl(
         c.env,
@@ -9737,6 +10917,12 @@ app.use("*", withDbAndInit, async (c, next) => {
         return c.text("Review capability denied", 403);
       }
       const url = new URL(c.req.url);
+      if (url.searchParams.has("q") || url.searchParams.has("cursor")) {
+        const effectiveUser = user || (artifactCapability
+          ? await getUser(c.env.DB, artifactCapability.viewer.id)
+          : null);
+        return json(await listModernReviewMentionCandidates(c.env, project, effectiveUser, url));
+      }
       return json({
         users: await listTrustedReviewMentionCandidates(
           c.env,
@@ -9745,6 +10931,163 @@ app.use("*", withDbAndInit, async (c, next) => {
           url.searchParams.get("q") || "",
           Number(url.searchParams.get("limit") || 20),
         ),
+      });
+    }
+    const trustedReviewAttachmentMatch = tenantPath.match(
+      /^\/__shiplet\/review\/feedback\/([^/]+)\/attachments\/([^/]+)$/,
+    );
+    if (trustedReviewAttachmentMatch) {
+      if (c.req.method !== "GET" && c.req.method !== "HEAD") {
+        return privateReviewJson({ error: "review_attachment_method_not_allowed" }, 405);
+      }
+      if (
+        artifactCapability &&
+        !artifactCapability.scopes.includes("feedback:read")
+      ) {
+        return privateReviewJson({ error: "review_attachment_not_found" }, 404);
+      }
+      if (!user && !artifactCapability) {
+        return privateReviewJson({ error: "review_attachment_not_found" }, 404);
+      }
+      const feedback = await getReviewFeedback(
+        c.env.DB,
+        project.id,
+        trustedReviewAttachmentMatch[1],
+      );
+      const attachmentUrl = new URL(c.req.url);
+      const requestedRevision = attachmentUrl.searchParams.get("revision_id");
+      const requestedPage = attachmentUrl.searchParams.get("page_url");
+      if (
+        !feedback ||
+        (requestedRevision && requestedRevision !== trustedReviewRevisionId(project)) ||
+        (feedback.revision_id && feedback.revision_id !== trustedReviewRevisionId(project)) ||
+        (requestedPage !== null && feedback.page_url !== requestedPage)
+      ) {
+        return privateReviewJson({ error: "review_attachment_not_found" }, 404);
+      }
+      const attachment = await getReviewAttachment(
+        c.env,
+        project.id,
+        trustedReviewAttachmentMatch[1],
+        trustedReviewAttachmentMatch[2],
+      );
+      return reviewAttachmentResponse(attachment, c.req.method);
+    }
+    if (tenantPath === "/__shiplet/review/draft-context") {
+      if (c.req.method !== "GET") {
+        return privateReviewJson({ error: "review_context_method_not_allowed" }, 405);
+      }
+      if (!user || artifactCapability) {
+        return privateReviewJson(
+          { error: "review_access_required" },
+          user ? 403 : 401,
+        );
+      }
+      const url = new URL(c.req.url);
+      const query = reviewDraftContextQuery(url);
+      if (query.revisionId !== trustedReviewRevisionId(project)) {
+        return privateReviewJson({ error: "review_context_revision_unavailable" }, 409);
+      }
+      let submittedPage: URL;
+      try {
+        submittedPage = new URL(query.pageUrl);
+      } catch {
+        return privateReviewJson({ error: "review_context_page_invalid" }, 400);
+      }
+      if (
+        !managedReviewPageBinding({
+          env: c.env,
+          requestUrl: c.req.url,
+          project,
+          submittedPage,
+        }).ok
+      ) {
+        return privateReviewJson({ error: "review_context_page_invalid" }, 400);
+      }
+      return reviewDraftContextResponse({
+        actor: { kind: "human", id: user.id },
+        projectId: project.id,
+        revisionId: query.revisionId,
+        pageUrl: query.pageUrl,
+        installationId: null,
+        expiresOn: null,
+        durableOperations: true,
+      });
+    }
+    const trustedReviewOperationMatch = tenantPath.match(
+      /^\/__shiplet\/review\/operations\/([^/]+)$/,
+    );
+    if (trustedReviewOperationMatch) {
+      if (c.req.method !== "GET") {
+        return privateReviewJson({ error: "review_operation_method_not_allowed" }, 405);
+      }
+      if (!user || artifactCapability) {
+        return privateReviewJson(
+          { error: "review_access_required" },
+          user ? 403 : 401,
+        );
+      }
+      const url = new URL(c.req.url);
+      const revisionId = url.searchParams.get("revision_id") || "";
+      const pageUrl = url.searchParams.get("page_url") || "";
+      const effect = url.searchParams.get("effect") || "";
+      const feedbackId = url.searchParams.get("feedback_id")?.trim() || null;
+      const operation =
+        revisionId === trustedReviewRevisionId(project)
+          ? await findBoundReviewOperation(c.env.DB, {
+              installationId: `managed:${project.id}`,
+              projectId: project.id,
+              revisionId,
+              actorUserId: user.id,
+              requestId: decodeURIComponent(trustedReviewOperationMatch[1]),
+              pageUrl,
+              effect,
+              feedbackId,
+            })
+          : null;
+      if (!operation) {
+        return reviewOperationNotFoundResponse();
+      }
+      const response = json(publicReviewOperation(operation));
+      response.headers.set("cache-control", "private, no-store");
+      return response;
+    }
+    const trustedReviewOperationCancelMatch = tenantPath.match(
+      /^\/__shiplet\/review\/operations\/([^/]+)\/cancel$/,
+    );
+    if (trustedReviewOperationCancelMatch) {
+      if (c.req.method !== "POST") {
+        return privateReviewJson({ error: "review_operation_method_not_allowed" }, 405);
+      }
+      if (c.req.header("origin") !== new URL(c.req.url).origin) {
+        return privateReviewJson({ error: "review_operation_origin_required" }, 403);
+      }
+      if (!user || artifactCapability) {
+        return privateReviewJson(
+          { error: "review_access_required" },
+          user ? 403 : 401,
+        );
+      }
+      let body: ReviewOperationCancellationBody;
+      try {
+        body = await readReviewOperationCancellationBody(c, { embed: false });
+      } catch (error) {
+        if (isResponse(error)) return error;
+        throw error;
+      }
+      if (body.revisionId !== trustedReviewRevisionId(project)) {
+        return reviewOperationNotFoundResponse();
+      }
+      return cancelBoundReviewOperation({
+        env: c.env,
+        installationId: `managed:${project.id}`,
+        projectId: project.id,
+        revisionId: body.revisionId,
+        actorUserId: user.id,
+        requestId: decodeURIComponent(trustedReviewOperationCancelMatch[1]),
+        pageUrl: body.pageUrl,
+        effect: body.effect,
+        feedbackId: body.feedbackId || null,
       });
     }
     const trustedReviewReplyMatch = tenantPath.match(
@@ -9764,19 +11107,36 @@ app.use("*", withDbAndInit, async (c, next) => {
       }
       if (!user) return c.text("Review access required", 401);
       const body = await readJson(c);
-      return json(
-        {
-          feedback: await createReviewReplyWithNotifications(
-            c.env,
-            project,
-            trustedReviewReplyMatch[1],
-            String(body.comment || ""),
-            user,
-            normalizeMentionInputs(body.mentions),
-          ),
-        },
-        201,
-      );
+      try {
+        const requestId = optionalReviewOperationRequestId(body);
+        return json(
+          {
+            feedback: requestId !== null
+              ? await applyDurableHumanThreadOperation({
+                  env: c.env,
+                  project,
+                  user,
+                  feedbackId: trustedReviewReplyMatch[1],
+                  effect: "feedback.reply",
+                  value: body.comment,
+                  requestId,
+                  mentions: normalizeMentionInputs(body.mentions),
+                })
+              : await createReviewReplyWithNotifications(
+                  c.env,
+                  project,
+                  trustedReviewReplyMatch[1],
+                  String(body.comment || ""),
+                  user,
+                  normalizeMentionInputs(body.mentions),
+                ),
+          },
+          201,
+        );
+      } catch (error) {
+        if (isResponse(error)) return error;
+        throw error;
+      }
     }
     const trustedReviewStatusMatch = tenantPath.match(
       /^\/__shiplet\/review\/feedback\/([^/]+)\/status$/,
@@ -9795,15 +11155,31 @@ app.use("*", withDbAndInit, async (c, next) => {
       }
       if (!user) return c.text("Review access required", 401);
       const body = await readJson(c);
-      return json({
-        feedback: await updateReviewStatusWithNotifications(
-          c.env,
-          project,
-          trustedReviewStatusMatch[1],
-          String(body.status || ""),
-          user,
-        ),
-      });
+      try {
+        const requestId = optionalReviewOperationRequestId(body);
+        return json({
+          feedback: requestId !== null
+            ? await applyDurableHumanThreadOperation({
+                env: c.env,
+                project,
+                user,
+                feedbackId: trustedReviewStatusMatch[1],
+                effect: "feedback.status",
+                value: body.status,
+                requestId,
+              })
+            : await updateReviewStatusWithNotifications(
+                c.env,
+                project,
+                trustedReviewStatusMatch[1],
+                String(body.status || ""),
+                user,
+              ),
+        });
+      } catch (error) {
+        if (isResponse(error)) return error;
+        throw error;
+      }
     }
     const trustedReviewWatchPath = "/__shiplet/review/watch";
     if (tenantPath === trustedReviewWatchPath) {
@@ -9840,14 +11216,31 @@ app.use("*", withDbAndInit, async (c, next) => {
           return c.text("Review capability denied", 403);
         }
         const url = new URL(c.req.url);
-        return json({
-          feedback: await listReviewFeedback(c.env.DB, project.id, {
-            pageUrl: url.searchParams.get("pageUrl"),
-            status: url.searchParams.get("status"),
-            includeClosed: url.searchParams.get("includeClosed") === "true",
-            limit: Number(url.searchParams.get("limit") || 100),
-          }),
+        const query = parseReviewFeedbackListQuery(url, {
+          actorUserId: user?.id || null,
+          cursorActor: artifactCapability
+            ? `capability:${artifactCapability.nonce}:${artifactCapability.viewer.id}`
+            : `user:${user?.id || "anonymous"}`,
+          defaultState: "open",
         });
+        try {
+          const page = await listReviewFeedbackPage(c.env.DB, project.id, query);
+          return json(
+            rewriteReviewAttachmentUrls(page, (feedback, attachmentId) =>
+              reviewAttachmentUrlForHostedSurface(
+                project,
+                feedback.id,
+                attachmentId,
+                c.req.url,
+                feedback.revision_id,
+                feedback.page_url,
+              ),
+            ),
+          );
+        } catch (error) {
+          if (isResponse(error)) return error;
+          return c.text("Failed to list review feedback", 500);
+        }
       }
       if (c.req.method === "POST") {
         const rejection = tenantReviewMutationRejection(c.req.raw);
@@ -9859,17 +11252,27 @@ app.use("*", withDbAndInit, async (c, next) => {
           return c.text("Review capability denied", 403);
         }
         if (!user) return c.text("Review access required", 401);
-        const validation = validateReviewFeedbackPayload(await readJson(c));
+        const body = await readJson(c);
+        const validation = validateReviewFeedbackPayload(body);
         if (!validation.ok) {
           return json({ ok: false, errors: validation.errors }, 400);
         }
-        const feedback = await createReviewFeedback(
-          c.env,
-          project,
-          user,
-          validation.value,
-        );
-        return json({ ok: true, feedback }, 201);
+        try {
+          const requestId = optionalReviewOperationRequestId(body);
+          const feedback = requestId !== null
+            ? await applyDurableHumanFeedbackOperation({
+                env: c.env,
+                project,
+                user,
+                payload: validation.value,
+                requestId,
+              })
+            : await createReviewFeedback(c.env, project, user, validation.value);
+          return json({ ok: true, feedback }, 201);
+        } catch (error) {
+          if (isResponse(error)) return error;
+          throw error;
+        }
       }
       return c.text("Method not allowed", 405, { Allow: "GET, POST" });
     }
@@ -12457,6 +13860,8 @@ function trustedConfirmationHtml(input: {
   intentId?: string;
   summary: string;
   workflowFields?: Record<string, unknown> | null;
+  recipients?: Array<{ id: string; label?: string | null }>;
+  richPayload?: ReviewRichPayloadV1 | null;
   completeHeading?:
     | "Feedback sent"
     | "Workflow event recorded"
@@ -12481,6 +13886,25 @@ function trustedConfirmationHtml(input: {
   const fieldDetails = workflowFields
     ? `<section aria-labelledby="workflow-fields-title"><h2 id="workflow-fields-title">Workflow fields</h2><p>These exact values will be attributed to you.</p><dl>${workflowFields}</dl></section>`
     : "";
+  const recipients = (input.recipients || []).slice(0, 20);
+  const recipientDetails = recipients.length
+    ? `<section aria-labelledby="review-recipients-title" data-review-recipients="v1"><h2 id="review-recipients-title">Recipients</h2><ul>${recipients
+        .map(
+          (recipient) =>
+            `<li data-review-recipient-id="${escapeEmbedHtml(recipient.id)}">${escapeEmbedHtml(recipient.label || recipient.id)}</li>`,
+        )
+        .join("")}</ul></section>`
+    : "";
+  const rich = input.richPayload;
+  const richDetails = rich
+    ? `<section aria-labelledby="review-rich-title" data-review-rich-confirmation="v1"><h2 id="review-rich-title">Captured review details</h2><dl>${rich.captureFidelity ? `<div><dt>Capture fidelity</dt><dd>${escapeEmbedHtml(rich.captureFidelity.kind)}</dd></div>` : ""}${rich.screenshotAnnotations ? `<div><dt>Annotations</dt><dd>${rich.screenshotAnnotations.shapes.length}</dd></div>` : ""}${rich.attachments
+        .slice(0, 4)
+        .map(
+          (attachment) =>
+            `<div><dt>${escapeEmbedHtml(attachment.name)}</dt><dd>${attachment.size} bytes · ${escapeEmbedHtml(attachment.mimeType || "application/octet-stream")}</dd></div>`,
+        )
+        .join("")}</dl></section>`
+    : "";
   const completePath = input.completePath ?? "/embed/review/confirm/complete";
   const form =
     !complete && input.intentId
@@ -12491,7 +13915,7 @@ function trustedConfirmationHtml(input: {
     title: heading,
     heading,
     attributes: `data-shiplet-confirmation="${complete ? "complete" : "v1"}"`,
-    content: `<p>${escapeEmbedHtml(input.summary)}</p>${fieldDetails}${form}${complete ? '<p class="access-note">Return to your website to continue reviewing. You can close this window.</p>' : ""}`,
+    content: `<p>${escapeEmbedHtml(input.summary)}</p>${richDetails}${recipientDetails}${fieldDetails}${form}${complete ? '<p class="access-note">Return to your website to continue reviewing. You can close this window.</p>' : ""}`,
   });
 }
 
@@ -12863,6 +14287,66 @@ function hasTrustedTopLevelFormProvenance(
   );
 }
 
+app.get("/review/confirm/evidence/:intentId", async (c) => {
+  const notFound = () => privateReviewJson({ error: "review_evidence_not_found" }, 404);
+  try {
+    const intentId = c.req.param("intentId");
+    if (!/^(?:review|embed)_intent_[A-Za-z0-9]{16,128}$/.test(intentId)) {
+      return notFound();
+    }
+    const user = await getCurrentUser(c.req.raw, c.env);
+    if (!user) return notFound();
+    const operation = await c.env.DB
+      .prepare("SELECT * FROM embed_review_operation_intents WHERE id = ? LIMIT 1")
+      .bind(intentId)
+      .first<ReviewOperationRow>();
+    if (!operation || operation.effect !== "feedback.create") return notFound();
+    const project = await getProjectById(c.env.DB, operation.project_id);
+    if (
+      !project ||
+      project.archived_on ||
+      operation.actor_user_id !== user.id ||
+      operation.revision_id !== trustedReviewRevisionId(project) ||
+      operation.confirmed_on !== null ||
+      operation.completed_on !== null ||
+      operation.failed_on !== null ||
+      operation.failure_code !== null ||
+      Date.parse(operation.expires_on) <= Date.now() ||
+      !(await canViewProject(c.env.DB, project, user.id))
+    ) {
+      return notFound();
+    }
+    if (operation.installation_id.startsWith("managed:")) {
+      if (operation.installation_id !== `managed:${project.id}`) return notFound();
+    } else {
+      const installation = await getEmbedInstallation(
+        c.env.DB,
+        operation.installation_id,
+      );
+      if (
+        !installation ||
+        installation.project_id !== project.id ||
+        installation.revoked_on
+      ) {
+        return notFound();
+      }
+    }
+    const evidence = await readStagedReviewScreenshot(c.env, operation);
+    if (!evidence) return notFound();
+    return new Response(evidence.body, {
+      headers: {
+        "content-type": evidence.contentType,
+        "content-length": String(evidence.byteLength),
+        "cache-control": "private, no-store",
+        "x-content-type-options": "nosniff",
+        "cross-origin-resource-policy": "same-origin",
+      },
+    });
+  } catch {
+    return notFound();
+  }
+});
+
 app.post("/review/confirm", async (c) => {
   try {
     const contentLength = Number(c.req.header("content-length") || "0");
@@ -12888,6 +14372,8 @@ app.post("/review/confirm", async (c) => {
     if (!capture.ok) return c.text("Invalid artifact capture context", 400);
     const mentions = trustedReviewMentionsFromForm(formData);
     if (!mentions.ok) return c.text("Invalid review mentions", 400);
+    const richForm = trustedReviewRichPayloadFromForm(formData);
+    if (!richForm.ok) return c.text("Invalid rich review payload", 400);
     if (
       !["feedback.create", "workflow.event.create"].includes(operation) ||
       !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,255}$/.test(requestId)
@@ -12908,7 +14394,7 @@ app.post("/review/confirm", async (c) => {
     let confirmationSummary: string;
     let confirmationWorkflowFields: Record<string, unknown> | null = null;
     if (operation === "workflow.event.create") {
-      if (capture.value || mentions.value.length > 0) {
+      if (capture.value || mentions.value.length > 0 || richForm.value) {
         return c.text(
           "Workflow confirmation contains unrelated review data",
           400,
@@ -12947,11 +14433,17 @@ app.post("/review/confirm", async (c) => {
         pageUrl: submittedPageUrl,
         clientFeedbackId,
         mentions: mentions.value,
+        ...(richForm.value ? { richPayload: richForm.value } : {}),
         ...(capture.value || {}),
       });
       if (!feedbackValidation.ok) {
         return json({ ok: false, errors: feedbackValidation.errors }, 400);
       }
+      await requireDurableReviewMentionRecipients(
+        c.env.DB,
+        project,
+        feedbackValidation.value.mentions,
+      );
       validatedPayload = { ...feedbackValidation.value };
       validatedPageUrl = feedbackValidation.value.pageUrl;
       confirmationSummary = feedbackValidation.value.comment;
@@ -12984,11 +14476,60 @@ app.post("/review/confirm", async (c) => {
     if (revisionId !== activeRevisionId) {
       return c.text("Shiplet revision changed; reopen review", 409);
     }
-    const payloadDigest = await sha256HexText(JSON.stringify(validatedPayload));
+    const payloadJson =
+      operation === "feedback.create"
+        ? await prepareDurableReviewPayload(
+            c.env,
+            project.id,
+            requestId,
+            validatedPayload as Parameters<typeof validateReviewFeedbackPayload>[0] & Record<string, unknown>,
+          )
+        : JSON.stringify(validatedPayload);
+    const payloadDigest = await sha256HexText(payloadJson);
     const intentId = `review_intent_${crypto.randomUUID().replace(/-/g, "")}`;
     const installationId = `managed:${project.id}`;
     const now = new Date();
     const expiresOn = new Date(now.getTime() + 2 * 60_000).toISOString();
+    if (operation === "feedback.create") {
+      try {
+        const prepared = await prepareReviewOperation(c.env.DB, {
+          installationId,
+          projectId: project.id,
+          revisionId: activeRevisionId,
+          actorUserId: user.id,
+          effect: "feedback.create",
+          payloadJson,
+          payloadDigest,
+          requestId,
+          pageUrl: validatedPageUrl,
+          expiresOn,
+        });
+        await stageDurableReviewPayload(
+          c.env,
+          project.id,
+          prepared.result_feedback_id!,
+          validatedPayload,
+          payloadJson,
+        );
+        return trustedConfirmationResponse(
+          appBaseUrl(c.env, c.req.url),
+          trustedConfirmationHtml({
+            state: "pending",
+            intentId: prepared.id,
+            summary: confirmationSummary,
+            workflowFields: confirmationWorkflowFields,
+            recipients: mentions.value.map((mention) => ({ id: mention.userId })),
+            richPayload: (validatedPayload.richPayload as ReviewRichPayloadV1 | null | undefined) || null,
+            completePath: "/review/confirm/complete",
+          }),
+        );
+      } catch (error) {
+        if (error instanceof ReviewOperationConflict) {
+          return c.text("Confirmation intent conflict", 409);
+        }
+        throw error;
+      }
+    }
     const inserted = await c.env.DB.prepare(
       `INSERT OR IGNORE INTO embed_review_operation_intents (
        id, installation_id, project_id, revision_id, actor_user_id,
@@ -13003,7 +14544,7 @@ app.post("/review/confirm", async (c) => {
         activeRevisionId,
         user.id,
         operation,
-        JSON.stringify(validatedPayload),
+        payloadJson,
         payloadDigest,
         requestId,
         validatedPageUrl,
@@ -13127,6 +14668,8 @@ app.post("/embed/review/confirm", async (c) => {
     if (!capture.ok) return c.text("Invalid artifact capture context", 400);
     const mentions = trustedReviewMentionsFromForm(formData);
     if (!mentions.ok) return c.text("Invalid review mentions", 400);
+    const richForm = trustedReviewRichPayloadFromForm(formData);
+    if (!richForm.ok) return c.text("Invalid rich review payload", 400);
     if (
       !["feedback.create", "workflow.event.create"].includes(operation) ||
       !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,255}$/.test(requestId)
@@ -13138,7 +14681,7 @@ app.post("/embed/review/confirm", async (c) => {
     let confirmationSummary: string;
     let confirmationWorkflowFields: Record<string, unknown> | null = null;
     if (operation === "workflow.event.create") {
-      if (capture.value || mentions.value.length > 0) {
+      if (capture.value || mentions.value.length > 0 || richForm.value) {
         return c.text(
           "Workflow confirmation contains unrelated review data",
           400,
@@ -13175,11 +14718,17 @@ app.post("/embed/review/confirm", async (c) => {
         pageUrl: submittedPageUrl,
         clientFeedbackId,
         mentions: mentions.value,
+        ...(richForm.value ? { richPayload: richForm.value } : {}),
         ...(capture.value || {}),
       });
       if (!feedbackValidation.ok) {
         return json({ ok: false, errors: feedbackValidation.errors }, 400);
       }
+      await requireDurableReviewMentionRecipients(
+        c.env.DB,
+        project,
+        feedbackValidation.value.mentions,
+      );
       validatedPayload = { ...feedbackValidation.value };
       validatedPageUrl = feedbackValidation.value.pageUrl;
       confirmationSummary = feedbackValidation.value.comment;
@@ -13191,10 +14740,61 @@ app.post("/embed/review/confirm", async (c) => {
     if (normalizedPageUrl !== pageUrl) {
       return c.text("Embedded review page mismatch", 403);
     }
-    const payloadDigest = await sha256HexText(JSON.stringify(validatedPayload));
+    const payloadJson =
+      operation === "feedback.create"
+        ? await prepareDurableReviewPayload(
+            c.env,
+            project.id,
+            requestId,
+            validatedPayload as Record<string, unknown> & {
+              screenshotDataUrl?: string | null;
+            },
+          )
+        : JSON.stringify(validatedPayload);
+    const payloadDigest = await sha256HexText(payloadJson);
     const intentId = `embed_intent_${crypto.randomUUID().replace(/-/g, "")}`;
     const now = new Date();
     const expiresOn = new Date(now.getTime() + 2 * 60_000).toISOString();
+    if (operation === "feedback.create") {
+      try {
+        const prepared = await prepareReviewOperation(c.env.DB, {
+          installationId: session.installationId,
+          projectId: project.id,
+          revisionId: session.revisionId,
+          actorUserId: session.actorUserId,
+          effect: "feedback.create",
+          payloadJson,
+          payloadDigest,
+          requestId,
+          pageUrl,
+          expiresOn,
+          intentPrefix: "embed_intent",
+        });
+        await stageDurableReviewPayload(
+          c.env,
+          project.id,
+          prepared.result_feedback_id!,
+          validatedPayload,
+          payloadJson,
+        );
+        return trustedConfirmationResponse(
+          appBaseUrl(c.env, c.req.url),
+          trustedConfirmationHtml({
+            state: "pending",
+            intentId: prepared.id,
+            summary: confirmationSummary,
+            workflowFields: confirmationWorkflowFields,
+            recipients: mentions.value.map((mention) => ({ id: mention.userId })),
+            richPayload: (validatedPayload.richPayload as ReviewRichPayloadV1 | null | undefined) || null,
+          }),
+        );
+      } catch (error) {
+        if (error instanceof ReviewOperationConflict) {
+          return c.text("Confirmation intent conflict", 409);
+        }
+        throw error;
+      }
+    }
     const inserted = await c.env.DB.prepare(
       `INSERT OR IGNORE INTO embed_review_operation_intents (
 				 id, installation_id, project_id, revision_id, actor_user_id,
@@ -13209,7 +14809,7 @@ app.post("/embed/review/confirm", async (c) => {
         session.revisionId,
         session.actorUserId,
         operation,
-        JSON.stringify(validatedPayload),
+        payloadJson,
         payloadDigest,
         requestId,
         pageUrl,
@@ -13289,37 +14889,60 @@ app.post("/embed/review/thread", async (c) => {
     if (
       action === "replies"
         ? !value || value.length > 5000
-        : !["New", "In Progress", "Blocked", "Done", "Dropped"].includes(value)
+        : !["New", "In Progress", "Blocked", "Staging", "Done", "Dropped"].includes(value)
     )
       return c.text("Invalid review action value", 400);
-    const payload = JSON.stringify({ feedbackId, value });
-    const intentId = `embed_intent_${crypto.randomUUID().replace(/-/g, "")}`;
-    const now = new Date();
-    await c.env.DB.prepare(
-      `INSERT INTO embed_review_operation_intents
-      (id, installation_id, project_id, revision_id, actor_user_id, effect, payload_json, payload_digest, request_id, page_url, expires_on, created_on)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-    )
-      .bind(
-        intentId,
-        session.installationId,
-        project.id,
-        session.revisionId,
-        session.actorUserId,
-        action === "replies" ? "feedback.reply" : "feedback.status",
-        payload,
-        await sha256HexText(payload),
-        intentId,
+    const mentionResult = trustedReviewMentionsFromForm(form);
+    if (!mentionResult.ok || (action === "status" && mentionResult.value.length > 0)) {
+      return c.text("Invalid review mentions", 400);
+    }
+    if (action === "replies") {
+      await requireDurableReviewMentionRecipients(
+        c.env.DB,
+        project,
+        mentionResult.value,
+      );
+    }
+    const submittedRequestId = form.get("request_id");
+    const requestId =
+      submittedRequestId === null
+        ? `legacy_${crypto.randomUUID().replace(/-/g, "")}`
+        : String(submittedRequestId).trim();
+    if (!REVIEW_OPERATION_REQUEST_ID.test(requestId)) {
+      return c.text("Invalid review operation request ID", 400);
+    }
+    const effect = action === "replies" ? "feedback.reply" : "feedback.status";
+    const payload = JSON.stringify({
+      feedbackId,
+      value,
+      ...(effect === "feedback.reply" ? { mentions: mentionResult.value } : {}),
+    });
+    let operation: ReviewOperationRow;
+    try {
+      operation = await prepareReviewOperation(c.env.DB, {
+        installationId: session.installationId,
+        projectId: project.id,
+        revisionId: session.revisionId,
+        actorUserId: session.actorUserId,
+        effect,
+        payloadJson: payload,
+        payloadDigest: await digestReviewOperationPayload(payload),
+        requestId,
         pageUrl,
-        new Date(now.getTime() + 120_000).toISOString(),
-        now.toISOString(),
-      )
-      .run();
+        feedbackId,
+        intentPrefix: "embed_intent",
+      });
+    } catch (error) {
+      if (error instanceof ReviewOperationConflict) {
+        return c.text("Confirmation intent conflict", 409);
+      }
+      throw error;
+    }
     return trustedConfirmationResponse(
       c.req.url,
       trustedConfirmationHtml({
         state: "pending",
-        intentId,
+        intentId: operation.id,
         summary: `${feedback.ticket_label}: ${action === "replies" ? "Reply" : "Change status to"} — ${value}`,
         confirmLabel:
           action === "replies" ? "Confirm reply" : "Confirm status change",
@@ -13331,21 +14954,7 @@ app.post("/embed/review/thread", async (c) => {
   }
 });
 
-type EmbedReviewIntentRow = {
-  id: string;
-  installation_id: string;
-  project_id: string;
-  revision_id: string;
-  actor_user_id: string;
-  effect: string;
-  payload_json: string;
-  payload_digest: string;
-  request_id: string;
-  page_url: string;
-  expires_on: string;
-  confirmed_on: string | null;
-  completed_on: string | null;
-};
+type EmbedReviewIntentRow = ReviewOperationRow;
 
 async function completeTrustedReviewConfirmation(c: any) {
   try {
@@ -13389,7 +14998,37 @@ async function completeTrustedReviewConfirmation(c: any) {
     ) {
       return c.text("Shiplet review access required", 403);
     }
+    if (intent.failed_on) {
+      return c.text(
+        intent.failure_code === "cancelled_by_user"
+          ? "Review operation was cancelled"
+          : "Review operation is unavailable",
+        409,
+      );
+    }
     const now = new Date();
+    if (
+      intent.effect === "feedback.create" &&
+      intent.completed_on &&
+      intent.result_feedback_id &&
+      intent.result_event_id
+    ) {
+      const saved = await getReviewFeedback(
+        c.env.DB,
+        project.id,
+        intent.result_feedback_id,
+      );
+      if (saved) {
+        return trustedConfirmationResponse(
+          appBaseUrl(c.env, c.req.url),
+          trustedConfirmationHtml({
+            state: "complete",
+            completeHeading: "Feedback sent",
+            summary: "Your feedback was recorded by Shiplet.",
+          }),
+        );
+      }
+    }
     if (
       intent.effect === "feedback.reply" ||
       intent.effect === "feedback.status"
@@ -13403,6 +15042,7 @@ async function completeTrustedReviewConfirmation(c: any) {
       const payload = JSON.parse(intent.payload_json) as {
         feedbackId: string;
         value: string;
+        mentions?: Array<{ userId: string }>;
       };
       const feedback = await getReviewFeedback(
         c.env.DB,
@@ -13415,38 +15055,23 @@ async function completeTrustedReviewConfirmation(c: any) {
           intent.page_url
       )
         return c.text("Review thread unavailable", 403);
-      const claimed = await c.env.DB.prepare(
-        `UPDATE embed_review_operation_intents SET confirmed_on = ?, completed_on = ?
-        WHERE id = ? AND actor_user_id = ? AND confirmed_on IS NULL AND expires_on > ?
-        AND EXISTS (SELECT 1 FROM embed_installations WHERE id = ? AND revoked_on IS NULL)`,
-      )
-        .bind(
-          now.toISOString(),
-          now.toISOString(),
-          intent.id,
-          user.id,
-          now.toISOString(),
-          installation.id,
-        )
-        .run();
-      if (claimed.meta.changes !== 1)
-        return c.text("Confirmation intent expired or already used", 409);
-      if (intent.effect === "feedback.reply")
-        await createReviewReplyWithNotifications(
-          c.env,
-          project,
-          payload.feedbackId,
-          payload.value,
-          user,
-        );
-      else
-        await updateReviewStatusWithNotifications(
-          c.env,
-          project,
-          payload.feedbackId,
-          payload.value,
-          user,
-        );
+      const result = await completeDurableThreadOperation(c.env, {
+        operation: intent,
+        project,
+        actor: user,
+        feedbackId: payload.feedbackId,
+        value: payload.value,
+        mentions: normalizeMentionInputs(payload.mentions),
+      });
+      if (!result) {
+        const current = (await c.env.DB
+          .prepare("SELECT * FROM embed_review_operation_intents WHERE id = ?")
+          .bind(intent.id)
+          .first()) as ReviewOperationRow | null;
+        if (!current?.completed_on) {
+          return c.text("Review operation could not be recorded", 500);
+        }
+      }
       return trustedConfirmationResponse(
         c.req.url,
         trustedConfirmationHtml({
@@ -13504,24 +15129,39 @@ async function completeTrustedReviewConfirmation(c: any) {
         }),
       );
     }
-    const validation = validateReviewFeedbackPayload(
-      JSON.parse(intent.payload_json),
-    );
+	const storedPayload = JSON.parse(intent.payload_json) as Record<string, unknown>;
+	const materializedRichPayload = await materializeReviewRichPayload(c.env, intent);
+	const validation = validateReviewFeedbackPayload({
+		...storedPayload,
+		...(materializedRichPayload ? { richPayload: materializedRichPayload } : {}),
+	});
     if (!validation.ok || intent.effect !== "feedback.create") {
       return c.text("Confirmation payload is invalid", 400);
     }
-    const feedback = await createReviewFeedback(
-      c.env,
-      project,
-      user,
-      validation.value,
-      {
-        revisionId: intent.revision_id,
-        intentId: intent.id,
-        confirmedOn: now.toISOString(),
-        requestId: intent.request_id,
-      },
-    );
+    let feedback: Awaited<ReturnType<typeof createReviewFeedback>>;
+    try {
+      feedback = await createReviewFeedback(
+        c.env,
+        project,
+        user,
+        validation.value,
+        {
+          revisionId: intent.revision_id,
+          intentId: intent.id,
+          confirmedOn: now.toISOString(),
+          requestId: intent.request_id,
+        },
+      );
+    } catch (error) {
+      if (
+        validation.value.mentions.length > 0 &&
+        isResponse(error) &&
+        error.status === 400
+      ) {
+        return json({ ok: false, code: "review_mention_authority_changed" }, 409);
+      }
+      throw error;
+    }
     if (!feedback) {
       const [current, latestIntent] = await Promise.all([
         getProjectById(c.env.DB, project.id),
@@ -13537,6 +15177,9 @@ async function completeTrustedReviewConfirmation(c: any) {
       ]);
       if (current && trustedReviewRevisionId(current) !== intent.revision_id) {
         return c.text("Shiplet revision changed; reopen review", 409);
+      }
+      if (validation.value.mentions.length > 0) {
+        return json({ ok: false, code: "review_mention_authority_changed" }, 409);
       }
       return latestIntent?.confirmed_on || latestIntent?.completed_on
         ? c.text("Confirmation intent expired or already used", 409)
@@ -13559,9 +15202,110 @@ async function completeTrustedReviewConfirmation(c: any) {
 app.post("/embed/review/confirm/complete", completeTrustedReviewConfirmation);
 app.post("/review/confirm/complete", completeTrustedReviewConfirmation);
 
-async function requireEmbedReviewSession(c: any) {
+app.get("/embed/review/operations/:requestId", async (c) => {
+  try {
+    const { session, project, pageUrl } = await requireEmbedReviewSession(c);
+    const platformSessionCookie =
+      getCookie(c.req.raw, SESSION_COOKIE) ||
+      getCookie(c.req.raw, LEGACY_SESSION_COOKIE);
+    if (platformSessionCookie) {
+      const visibleUser = await getCurrentUser(c.req.raw, c.env);
+      if (!visibleUser || visibleUser.id !== session.actorUserId) {
+        return privateReviewJson({ error: "review_actor_mismatch" }, 403);
+      }
+    }
+    if (trustedReviewRevisionId(project) !== session.revisionId) {
+      return reviewOperationNotFoundResponse();
+    }
+    const url = new URL(c.req.url);
+    const effect = url.searchParams.get("effect") || "";
+    const feedbackId = url.searchParams.get("feedback_id")?.trim() || null;
+    const operation = await findBoundReviewOperation(c.env.DB, {
+      installationId: session.installationId,
+      projectId: project.id,
+      revisionId: session.revisionId,
+      actorUserId: session.actorUserId,
+      requestId: c.req.param("requestId"),
+      pageUrl,
+      effect,
+      feedbackId,
+    });
+    if (!operation) {
+      return reviewOperationNotFoundResponse();
+    }
+    const response = json(publicReviewOperation(operation));
+    response.headers.set("cache-control", "private, no-store");
+    return response;
+  } catch (error) {
+    if (isResponse(error)) {
+      if (error.headers.get("content-type")?.includes("application/json")) {
+        return error;
+      }
+      return privateReviewJson({ error: "review_operation_unavailable" }, error.status);
+    }
+    return privateReviewJson({ error: "review_operation_unavailable" }, 500);
+  }
+});
+
+app.post("/embed/review/operations/:requestId/cancel", async (c) => {
+  try {
+    if (c.req.header("origin") !== new URL(c.req.url).origin) {
+      return privateReviewJson({ error: "review_operation_origin_required" }, 403);
+    }
+    const body = await readReviewOperationCancellationBody(c, { embed: true });
+    const { session, project, pageUrl } = await requireEmbedReviewSession(c, {
+      installationId: body.installationId,
+      pageUrl: body.pageUrl,
+    });
+    if (trustedReviewRevisionId(project) !== session.revisionId) {
+      return reviewOperationNotFoundResponse();
+    }
+    if (body.revisionId !== session.revisionId) {
+      return reviewOperationNotFoundResponse();
+    }
+    if (body.installationId !== session.installationId || body.pageUrl !== pageUrl) {
+      return reviewOperationNotFoundResponse();
+    }
+    const platformSessionCookie =
+      getCookie(c.req.raw, SESSION_COOKIE) ||
+      getCookie(c.req.raw, LEGACY_SESSION_COOKIE);
+    if (platformSessionCookie) {
+      const visibleUser = await getCurrentUser(c.req.raw, c.env);
+      if (!visibleUser || visibleUser.id !== session.actorUserId) {
+        return privateReviewJson({ error: "review_actor_mismatch" }, 403);
+      }
+    }
+    return cancelBoundReviewOperation({
+      env: c.env,
+      installationId: session.installationId,
+      projectId: project.id,
+      revisionId: body.revisionId,
+      actorUserId: session.actorUserId,
+      requestId: c.req.param("requestId"),
+      pageUrl: body.pageUrl,
+      effect: body.effect,
+      feedbackId: body.feedbackId || null,
+    });
+  } catch (error) {
+    if (isResponse(error)) {
+      if (error.headers.get("content-type")?.includes("application/json")) {
+        return error;
+      }
+      return privateReviewJson({ error: "review_operation_request_invalid" }, error.status);
+    }
+    return privateReviewJson({ error: "review_operation_cancel_failed" }, 500);
+  }
+});
+
+async function requireEmbedReviewSession(
+  c: any,
+  bindingInput?: { installationId?: string; pageUrl?: string },
+) {
   const url = new URL(c.req.url);
-  const installationId = url.searchParams.get("installation_id")?.trim() || "";
+  const installationId =
+    bindingInput?.installationId?.trim() ||
+    url.searchParams.get("installation_id")?.trim() ||
+    "";
   if (!installationId) {
     throw new Response("Embedded review binding required", { status: 400 });
   }
@@ -13578,7 +15322,7 @@ async function requireEmbedReviewSession(c: any) {
     });
   }
   const pageUrl = normalizeEmbedReturnUrl(
-    url.searchParams.get("page_url") || session.pageUrl,
+    bindingInput?.pageUrl || url.searchParams.get("page_url") || session.pageUrl,
     session.siteOrigin,
   );
   if (!pageUrl) {
@@ -13614,6 +15358,43 @@ async function requireEmbedReviewSession(c: any) {
   }
   return { session, project, user, pageUrl };
 }
+
+app.get("/embed/review/draft-context", async (c) => {
+  try {
+    const { session, project, user, pageUrl } = await requireEmbedReviewSession(c);
+    const platformSessionCookie =
+      getCookie(c.req.raw, SESSION_COOKIE) ||
+      getCookie(c.req.raw, LEGACY_SESSION_COOKIE);
+    if (platformSessionCookie) {
+      const visibleUser = await getCurrentUser(c.req.raw, c.env);
+      if (!visibleUser || visibleUser.id !== user.id) {
+        return privateReviewJson({ error: "review_actor_mismatch" }, 403);
+      }
+    }
+    const url = new URL(c.req.url);
+    const requestedPageUrl = url.searchParams.get("page_url") || "";
+    if (requestedPageUrl !== pageUrl) {
+      return privateReviewJson({ error: "review_context_binding_invalid" }, 403);
+    }
+    return reviewDraftContextResponse({
+      actor: { kind: "human", id: user.id },
+      projectId: project.id,
+      revisionId: session.revisionId,
+      pageUrl,
+      installationId: session.installationId,
+      expiresOn: session.expiresOn,
+      durableOperations: true,
+    });
+  } catch (error) {
+    if (isResponse(error)) {
+      if (error.headers.get("content-type")?.includes("application/json")) {
+        return error;
+      }
+      return privateReviewJson({ error: "review_context_unavailable" }, error.status);
+    }
+    return privateReviewJson({ error: "review_context_unavailable" }, 500);
+  }
+});
 
 app.get("/embed/review/host", async (c) => {
   try {
@@ -13688,21 +15469,92 @@ app.get("/embed/review/widget", async (c) => {
   }
 });
 
-app.get("/embed/review/feedback", async (c) => {
+app.get("/embed/review/mention-users", async (c) => {
   try {
-    const { project, pageUrl } = await requireEmbedReviewSession(c);
+    const { project, user } = await requireEmbedReviewSession(c);
+    const url = new URL(c.req.url);
+    if (url.searchParams.has("q") || url.searchParams.has("cursor")) {
+      return json(await listModernReviewMentionCandidates(c.env, project, user, url));
+    }
     return json({
-      feedback: await listReviewFeedback(c.env.DB, project.id, {
-        pageUrl,
-        includeClosed: true,
-        limit: 100,
-      }),
+      users: await listTrustedReviewMentionCandidates(
+        c.env,
+        project,
+        user,
+        url.searchParams.get("q") || "",
+        Number(url.searchParams.get("limit") || 20),
+      ),
     });
   } catch (error) {
     if (isResponse(error)) return error;
-    const message = error instanceof Error ? error.message : "Unknown error";
-    return c.text(`Failed to list embedded review feedback: ${message}`, 500);
+    return privateReviewJson({ error: "review_mention_unavailable" }, 500);
   }
+});
+
+app.get("/embed/review/feedback", async (c) => {
+  try {
+    const { session, project, user, pageUrl } =
+      await requireEmbedReviewSession(c);
+    const query = parseReviewFeedbackListQuery(new URL(c.req.url), {
+      actorUserId: user.id,
+      cursorActor: `embed:${session.installationId}:${session.revisionId}:${user.id}`,
+      defaultState: "all",
+      embed: {
+        pageUrl,
+        siteOrigin: session.siteOrigin,
+        revisionId: session.revisionId,
+      },
+    });
+    const page = await listReviewFeedbackPage(c.env.DB, project.id, query);
+    return json(
+      rewriteReviewAttachmentUrls(page, (feedback, attachmentId) =>
+        reviewAttachmentUrlForEmbedSurface(
+          feedback.id,
+          attachmentId,
+          c.req.url,
+          session.installationId,
+          session.revisionId,
+          pageUrl,
+        ),
+      ),
+    );
+  } catch (error) {
+    if (isResponse(error)) return error;
+    return c.text("Failed to list embedded review feedback", 500);
+  }
+});
+
+app.on(["GET", "HEAD"], "/embed/review/feedback/:feedbackId/attachments/:attachmentId", async (c) => {
+	try {
+		const { session, project, pageUrl } = await requireEmbedReviewSession(c);
+		const requestedRevision = new URL(c.req.url).searchParams.get("revision_id");
+		if (requestedRevision && requestedRevision !== session.revisionId) {
+			return privateReviewJson({ error: "review_attachment_not_found" }, 404);
+		}
+		const feedback = await getReviewFeedback(
+			c.env.DB,
+			project.id,
+			c.req.param("feedbackId"),
+		);
+		if (
+			!feedback ||
+			normalizeEmbedReturnUrl(feedback.page_url, session.siteOrigin) !== pageUrl
+		) {
+			return privateReviewJson({ error: "review_attachment_not_found" }, 404);
+		}
+		return reviewAttachmentResponse(
+			await getReviewAttachment(
+				c.env,
+				project.id,
+				c.req.param("feedbackId"),
+				c.req.param("attachmentId"),
+			),
+			c.req.method,
+		);
+	} catch (error) {
+		if (isResponse(error)) return privateReviewJson({ error: "review_attachment_not_found" }, 404);
+		return privateReviewJson({ error: "review_attachment_not_found" }, 404);
+	}
 });
 
 app.post("/embed/review/feedback", async (c) => {
@@ -19177,6 +21029,18 @@ app.post("/api/projects/:projectId/invitations", async (c) => {
 
 app.get("/api/projects/:projectId/review-mention-users", async (c) => {
   try {
+    const projectId = c.req.param("projectId");
+    if (isSandboxProjectId(projectId)) {
+      const sessionId = sandboxSessionIdForProject(projectId)!;
+      const actorId = sandboxActorIdFromRequest(c.req.raw, new URL(c.req.url), {
+        ignoreQuery: true,
+      });
+      return withSandboxCookies(
+        sandboxNoStoreJson({ error: "sandbox_mentions_unsupported" }, 409),
+        sessionId,
+        actorId,
+      );
+    }
     const project = await requireReviewProject(c);
     if (!project.organization_id) {
       return json({ users: [] });
@@ -19186,6 +21050,9 @@ app.get("/api/projects/:projectId/review-mention-users", async (c) => {
       "feedback:read",
     ]);
     const url = new URL(c.req.url);
+    if (url.searchParams.has("q") || url.searchParams.has("cursor")) {
+      return json(await listModernReviewMentionCandidates(c.env, project, user, url));
+    }
     return json({
       users: await listTrustedReviewMentionCandidates(
         c.env,
@@ -19323,15 +21190,310 @@ app.get("/api/projects/:projectId/review-presence/ws", async (c) => {
   }
 });
 
+app.get("/api/projects/:projectId/review-draft-context", async (c) => {
+  try {
+    const projectId = c.req.param("projectId");
+    const url = new URL(c.req.url);
+    const query = reviewDraftContextQuery(url);
+    if (isSandboxProjectId(projectId)) {
+      const sessionId = sandboxSessionIdForProject(projectId)!;
+      const actorId = sandboxActorIdFromRequest(c.req.raw, url);
+	  const sandboxProject = await sandboxStub(c.env, sessionId).getShiplet(sessionId, projectId);
+      const canonicalPageUrl = new URL(
+        `/play/preview/${encodeURIComponent(projectId)}`,
+        appBaseUrl(c.env, c.req.url),
+      ).toString();
+      const response = reviewDraftContextResponse({
+        actor: { kind: "sandbox", id: actorId },
+        projectId,
+        revisionId: `sandbox_${projectId}`,
+        pageUrl: canonicalPageUrl,
+        installationId: null,
+        expiresOn: null,
+        durableOperations: Boolean(sandboxProject),
+      });
+      return withSandboxCookies(response, sessionId, actorId);
+    }
+    const project = await requireReviewProject(c);
+    const user = await getReviewRequestUser(c.env, c.req.raw);
+    const authorization = await authorizeReviewRequest(
+      c.env,
+      c.req.raw,
+      project,
+      user,
+      ["feedback:read"],
+    );
+    if (!authorization.user) {
+      return privateReviewJson({ error: "review_access_required" }, 403);
+    }
+    if (query.revisionId !== trustedReviewRevisionId(project)) {
+      return privateReviewJson({ error: "review_context_revision_unavailable" }, 409);
+    }
+    let submittedPage: URL;
+    try {
+      submittedPage = new URL(query.pageUrl);
+    } catch {
+      return privateReviewJson({ error: "review_context_page_invalid" }, 400);
+    }
+    if (
+      !managedReviewPageBinding({
+        env: c.env,
+        requestUrl: c.req.url,
+        project,
+        submittedPage,
+      }).ok
+    ) {
+      return privateReviewJson({ error: "review_context_page_invalid" }, 400);
+    }
+    return reviewDraftContextResponse({
+      actor: { kind: "human", id: authorization.user.id },
+      projectId: project.id,
+      revisionId: query.revisionId,
+      pageUrl: query.pageUrl,
+      installationId: null,
+      expiresOn: null,
+      durableOperations: true,
+    });
+  } catch (error) {
+    if (isResponse(error)) {
+      if (error.headers.get("content-type")?.includes("application/json")) {
+        return error;
+      }
+      return privateReviewJson({ error: "review_context_unavailable" }, error.status);
+    }
+    return privateReviewJson({ error: "review_context_unavailable" }, 500);
+  }
+});
+
+app.get("/api/projects/:projectId/review-operations/:requestId", async (c) => {
+  try {
+    const projectId = c.req.param("projectId");
+    if (isSandboxProjectId(projectId)) {
+	  const sessionId = sandboxSessionIdForProject(projectId)!;
+	  const url = new URL(c.req.url);
+	  const actorId = sandboxActorIdFromRequest(c.req.raw, url, { ignoreQuery: true });
+	  let requestId = "";
+	  try {
+		requestId = decodeURIComponent(c.req.param("requestId"));
+	  } catch {
+		return reviewOperationNotFoundResponse();
+	  }
+	  const effect = url.searchParams.get("effect") || "";
+	  const targetId = url.searchParams.get("feedback_id")?.trim() || null;
+	  if (
+		!REVIEW_OPERATION_REQUEST_ID.test(requestId) ||
+		!["feedback.create", "feedback.reply", "feedback.status"].includes(effect) ||
+		(effect === "feedback.create" ? targetId !== null : !targetId)
+	  ) return reviewOperationNotFoundResponse();
+	  const expected = sandboxDurableCanonicalBinding({
+		env: c.env,
+		requestUrl: c.req.url,
+		projectId,
+		requestId,
+		actorId,
+		sessionId,
+		effect: effect as SandboxDurableOperationEffect,
+		targetId,
+		payloadDigest: "",
+	  });
+	  if (
+		url.searchParams.get("revision_id") !== expected.revisionId ||
+		url.searchParams.get("page_url") !== expected.pageUrl
+	  ) return reviewOperationNotFoundResponse();
+	  const operation = await sandboxStub(c.env, sessionId).findDurableOperation({
+		requestId,
+		actorId,
+		sessionId,
+		projectId,
+		revisionId: expected.revisionId,
+		pageUrl: expected.pageUrl,
+		effect: expected.effect,
+		targetId,
+	  });
+	  if (!operation) return reviewOperationNotFoundResponse();
+	  return withSandboxCookies(sandboxOperationResponse(operation), sessionId, actorId);
+    }
+    const project = await requireReviewProject(c);
+    const user = await getReviewRequestUser(c.env, c.req.raw);
+    const authorization = await authorizeReviewRequest(
+      c.env,
+      c.req.raw,
+      project,
+      user,
+      ["feedback:read"],
+    );
+    if (!authorization.user) return reviewOperationNotFoundResponse();
+    const url = new URL(c.req.url);
+    const revisionId = url.searchParams.get("revision_id") || "";
+    const operation =
+      revisionId === trustedReviewRevisionId(project)
+        ? await findBoundReviewOperation(c.env.DB, {
+            installationId: `managed:${project.id}`,
+            projectId: project.id,
+            revisionId,
+            actorUserId: authorization.user.id,
+            requestId: decodeURIComponent(c.req.param("requestId")),
+            pageUrl: url.searchParams.get("page_url") || "",
+            effect: url.searchParams.get("effect") || "",
+            feedbackId: url.searchParams.get("feedback_id")?.trim() || null,
+          })
+        : null;
+    if (!operation) return reviewOperationNotFoundResponse();
+    return publicReviewOperationResponse(operation);
+  } catch (error) {
+    if (isResponse(error)) {
+      if (error.headers.get("content-type")?.includes("application/json")) {
+        return error;
+      }
+      return privateReviewJson({ error: "review_operation_unavailable" }, error.status);
+    }
+    return privateReviewJson({ error: "review_operation_unavailable" }, 500);
+  }
+});
+
+app.post("/api/projects/:projectId/review-operations/:requestId/cancel", async (c) => {
+  try {
+    const projectId = c.req.param("projectId");
+    if (isSandboxProjectId(projectId)) {
+	  if (c.req.header("origin") !== new URL(c.req.url).origin) {
+		return privateReviewJson({ error: "review_operation_origin_required" }, 403);
+	  }
+	  const sessionId = sandboxSessionIdForProject(projectId)!;
+	  const actorId = sandboxActorIdFromRequest(c.req.raw, new URL(c.req.url), { ignoreQuery: true });
+	  if (!await sandboxStub(c.env, sessionId).getShiplet(sessionId, projectId)) {
+		return privateReviewJson({ error: "durable_operations_unsupported" }, 409);
+	  }
+	  const body = await readReviewOperationCancellationBody(c, { embed: false });
+	  let requestId = "";
+	  try {
+		requestId = decodeURIComponent(c.req.param("requestId"));
+	  } catch {
+		return reviewOperationNotFoundResponse();
+	  }
+	  if (!REVIEW_OPERATION_REQUEST_ID.test(requestId)) return reviewOperationNotFoundResponse();
+	  const expected = sandboxDurableCanonicalBinding({
+		env: c.env,
+		requestUrl: c.req.url,
+		projectId,
+		requestId,
+		actorId,
+		sessionId,
+		effect: body.effect as SandboxDurableOperationEffect,
+		targetId: body.feedbackId || null,
+		payloadDigest: "",
+	  });
+	  if (body.revisionId !== expected.revisionId || body.pageUrl !== expected.pageUrl) {
+		return reviewOperationNotFoundResponse();
+	  }
+	  const operation = await sandboxStub(c.env, sessionId).cancelDurableOperation({
+		requestId,
+		actorId,
+		sessionId,
+		projectId,
+		revisionId: expected.revisionId,
+		pageUrl: expected.pageUrl,
+		effect: expected.effect,
+		targetId: expected.targetId,
+	  });
+	  if (!operation) return reviewOperationNotFoundResponse();
+	  return withSandboxCookies(sandboxOperationResponse(operation), sessionId, actorId);
+    }
+    if (c.req.header("origin") !== new URL(c.req.url).origin) {
+      return privateReviewJson({ error: "review_operation_origin_required" }, 403);
+    }
+    const project = await requireReviewProject(c);
+    const user = await getReviewRequestUser(c.env, c.req.raw);
+    const authorization = await authorizeReviewRequest(
+      c.env,
+      c.req.raw,
+      project,
+      user,
+      ["feedback:write"],
+    );
+    if (!authorization.user) {
+      return privateReviewJson({ error: "review_access_required" }, 403);
+    }
+    const body = await readReviewOperationCancellationBody(c, { embed: false });
+    if (body.revisionId !== trustedReviewRevisionId(project)) {
+      return reviewOperationNotFoundResponse();
+    }
+    return cancelBoundReviewOperation({
+      env: c.env,
+      installationId: `managed:${project.id}`,
+      projectId: project.id,
+      revisionId: body.revisionId,
+      actorUserId: authorization.user.id,
+      requestId: decodeURIComponent(c.req.param("requestId")),
+      pageUrl: body.pageUrl,
+      effect: body.effect,
+      feedbackId: body.feedbackId || null,
+    });
+  } catch (error) {
+    if (isResponse(error)) {
+      if (error.headers.get("content-type")?.includes("application/json")) {
+        return error;
+      }
+      return privateReviewJson({ error: "review_operation_request_invalid" }, error.status);
+    }
+    return privateReviewJson({ error: "review_operation_cancel_failed" }, 500);
+  }
+});
+
 app.get("/api/projects/:projectId/review-feedback", async (c) => {
+  let sandboxErrorSessionId: string | null = null;
+  let sandboxErrorActorId: string | null = null;
   try {
     const projectId = c.req.param("projectId");
     if (isSandboxProjectId(projectId)) {
       const sessionId = sandboxSessionIdForProject(projectId)!;
-      const actorId = sandboxActorIdFromRequest(c.req.raw, new URL(c.req.url));
       const url = new URL(c.req.url);
+      const modern = sandboxModernRequest(url);
+      const actorId = sandboxActorIdFromRequest(c.req.raw, url, {
+        ignoreQuery: modern,
+      });
+      sandboxErrorSessionId = sessionId;
+      sandboxErrorActorId = actorId;
+      const stub = sandboxStub(c.env, sessionId);
+      if (modern) {
+        await stub.validateModernListScope(sessionId, projectId);
+        const query = sandboxModernQuery(
+          url,
+          new URL(appBaseUrl(c.env, c.req.url)).origin,
+        );
+        if (query.mentionedMe) {
+          return withSandboxCookies(
+            sandboxNoStoreJson({
+              error: "sandbox_filter_unsupported",
+              filter: "mentionedMe",
+            }, 409),
+            sessionId,
+            actorId,
+          );
+        }
+        const page = await stub.listModernFeedbackPage({
+            sessionId,
+            projectId,
+            actorId,
+            pageUrlKey: query.pageUrlKey,
+            pagePrefixKey: query.pagePrefixKey,
+            state: query.state,
+            revisionId: query.revisionId,
+            submittedByMe: query.submittedByMe,
+            cursor: query.cursor,
+            limit: query.limit,
+          });
+        if ("error" in page) {
+          return withSandboxCookies(
+            sandboxNoStoreJson({ error: page.error }, 400),
+            sessionId,
+            actorId,
+          );
+        }
+        const response = sandboxNoStoreJson(page);
+        return withSandboxCookies(response, sessionId, actorId);
+      }
       const response = json({
-        feedback: await sandboxStub(c.env, sessionId).listFeedback(
+        feedback: await stub.listFeedback(
           sessionId,
           projectId,
           {
@@ -19347,21 +21509,47 @@ app.get("/api/projects/:projectId/review-feedback", async (c) => {
 
     const project = await requireReviewProject(c);
     const user = await getReviewRequestUser(c.env, c.req.raw);
-    await authorizeReviewRequest(c.env, c.req.raw, project, user, [
-      "feedback:read",
-    ]);
+    const authorization = await authorizeReviewRequest(
+      c.env,
+      c.req.raw,
+      project,
+      user,
+      ["feedback:read"],
+    );
     const url = new URL(c.req.url);
-    const feedback = await listReviewFeedback(c.env.DB, project.id, {
-      pageUrl: url.searchParams.get("pageUrl"),
-      status: url.searchParams.get("status"),
-      includeClosed: url.searchParams.get("includeClosed") === "true",
-      limit: Number(url.searchParams.get("limit") || 100),
+    const actorUserId = authorization.user?.id || null;
+    const query = parseReviewFeedbackListQuery(url, {
+      actorUserId,
+      cursorActor: authorization.token
+        ? `agent:${authorization.token.id}`
+        : `user:${actorUserId}`,
+      defaultState: "open",
     });
-    return json({ feedback });
+    return json(await listReviewFeedbackPage(c.env.DB, project.id, query));
   } catch (error) {
+    const modernQueryError =
+      error instanceof SandboxModernQueryError ||
+      (error instanceof Error && error.message === "sandbox_cursor_invalid");
+    if (modernQueryError) {
+      const response = sandboxNoStoreJson(
+        {
+          error:
+            error instanceof SandboxModernQueryError
+              ? error.code
+              : "sandbox_cursor_invalid",
+        },
+        400,
+      );
+      return sandboxErrorSessionId && sandboxErrorActorId
+        ? withSandboxCookies(
+            response,
+            sandboxErrorSessionId,
+            sandboxErrorActorId,
+          )
+        : response;
+    }
     if (isResponse(error)) return error;
-    const message = error instanceof Error ? error.message : "Unknown error";
-    return c.text(`Failed to list review feedback: ${message}`, 500);
+    return c.text("Failed to list review feedback", 500);
   }
 });
 
@@ -19371,7 +21559,8 @@ app.post("/api/projects/:projectId/review-feedback", async (c) => {
     if (isSandboxProjectId(projectId)) {
       const sessionId = sandboxSessionIdForProject(projectId)!;
       const actorId = sandboxActorIdFromRequest(c.req.raw, new URL(c.req.url));
-      const validation = validateReviewFeedbackPayload(await readJson(c));
+	  const body = await readJson(c);
+      const validation = validateReviewFeedbackPayload(body);
       if (!validation.ok) {
         return withSandboxCookies(
           json({ ok: false, errors: validation.errors }, 400),
@@ -19379,15 +21568,37 @@ app.post("/api/projects/:projectId/review-feedback", async (c) => {
           actorId,
         );
       }
+	  const requestId = optionalReviewOperationRequestId(body);
+	  if (requestId !== null && validation.value.mentions.length > 0) {
+		return withSandboxCookies(
+			sandboxNoStoreJson({ error: "sandbox_mentions_unsupported" }, 409),
+			sessionId,
+			actorId,
+		);
+	  }
+	  const sandboxPayload = {
+		...sandboxFeedbackInput(validation.value),
+		richPayload: validation.value.richPayload,
+	  };
       const response = json(
         {
           ok: true,
-          feedback: await sandboxStub(c.env, sessionId).createFeedback(
-            sessionId,
-            projectId,
-            actorId,
-            sandboxFeedbackInput(validation.value),
-          ),
+		  feedback: requestId === null
+			? await sandboxStub(c.env, sessionId).createFeedback(
+				sessionId,
+				projectId,
+				actorId,
+				sandboxPayload,
+			  )
+			: await applySandboxDurableCreate({
+				env: c.env,
+				requestUrl: c.req.url,
+				projectId,
+				sessionId,
+				actorId,
+				requestId,
+				payload: sandboxPayload,
+			  }),
         },
         201,
       );
@@ -19403,20 +21614,33 @@ app.post("/api/projects/:projectId/review-feedback", async (c) => {
       user,
       ["feedback:write"],
     );
-    const validation = validateReviewFeedbackPayload(await readJson(c));
+    const body = await readJson(c);
+    const validation = validateReviewFeedbackPayload(body);
     if (!validation.ok) {
       return json({ ok: false, errors: validation.errors }, 400);
     }
-    const feedback = await createReviewFeedback(
-      c.env,
-      project,
-      authorization.user,
-      validation.value,
-      undefined,
-      authorization.token
-        ? { kind: "agent", id: authorization.token.id }
-        : undefined,
-    );
+    const requestId = optionalReviewOperationRequestId(body);
+    if (requestId !== null && !authorization.user) {
+      return json({ ok: false, code: "durable_recovery_requires_user" }, 400);
+    }
+    const feedback = requestId !== null
+      ? await applyDurableHumanFeedbackOperation({
+          env: c.env,
+          project,
+          user: authorization.user!,
+          payload: validation.value,
+          requestId,
+        })
+      : await createReviewFeedback(
+          c.env,
+          project,
+          authorization.user,
+          validation.value,
+          undefined,
+          authorization.token
+            ? { kind: "agent", id: authorization.token.id }
+            : undefined,
+        );
     return json({ ok: true, feedback }, 201);
   } catch (error) {
     if (isResponse(error)) return error;
@@ -19459,8 +21683,88 @@ app.get("/api/projects/:projectId/review-feedback/:feedbackId", async (c) => {
   }
 });
 
+app.on(["GET", "HEAD"],
+	"/api/projects/:projectId/review-feedback/:feedbackId/attachments/:attachmentId",
+	async (c) => {
+		try {
+			const projectId = c.req.param("projectId");
+			if (isSandboxProjectId(projectId)) {
+				const sessionId = sandboxSessionIdForProject(projectId)!;
+				const url = new URL(c.req.url);
+				const actorId = sandboxActorIdFromRequest(c.req.raw, url, { ignoreQuery: true });
+				const canonicalPageUrl = new URL(
+					`/play/preview/${encodeURIComponent(projectId)}`,
+					appBaseUrl(c.env, c.req.url),
+				).toString();
+				const revisionId = `sandbox_${projectId}`;
+				if (
+					url.searchParams.get("page_url") !== canonicalPageUrl ||
+					url.searchParams.get("revision_id") !== revisionId
+				) return privateReviewJson({ error: "review_attachment_not_found" }, 404);
+				const metadata = await sandboxStub(c.env, sessionId).getDurableAttachment({
+					sessionId,
+					projectId,
+					actorId,
+					feedbackId: c.req.param("feedbackId"),
+					attachmentId: c.req.param("attachmentId"),
+					pageUrl: canonicalPageUrl,
+					revisionId,
+				});
+				if (!metadata || !c.env.REVIEW_ASSETS) {
+					return privateReviewJson({ error: "review_attachment_not_found" }, 404);
+				}
+				const key =
+					`projects/${projectId}/feedback/${c.req.param("feedbackId")}/attachments/` +
+					`${metadata.attachment_id}/${metadata.digest.replace(/^sha256:/, "")}`;
+				const object = await c.env.REVIEW_ASSETS.get(key);
+				if (!object?.body) return privateReviewJson({ error: "review_attachment_not_found" }, 404);
+				const bytes = new Uint8Array(await object.arrayBuffer());
+				const digestBytes = new Uint8Array(await crypto.subtle.digest("SHA-256", bytes));
+				const digest = `sha256:${Array.from(digestBytes, (byte) => byte.toString(16).padStart(2, "0")).join("")}`;
+				if (
+					bytes.byteLength !== metadata.byte_length ||
+					digest !== metadata.digest ||
+					object.httpMetadata?.contentType !== metadata.content_type
+				) return privateReviewJson({ error: "review_attachment_not_found" }, 404);
+				return reviewAttachmentResponse(
+					{
+						metadata: {
+							id: metadata.attachment_id,
+							name: metadata.file_name,
+							content_type: metadata.content_type,
+							byte_length: metadata.byte_length,
+							digest: metadata.digest,
+							ordinal: metadata.ordinal,
+							content_url: url.pathname + url.search,
+						},
+						body: bytes,
+					},
+					c.req.method,
+				);
+			}
+			const project = await requireReviewProject(c);
+			const user = await getReviewRequestUser(c.env, c.req.raw);
+			await authorizeReviewRequest(c.env, c.req.raw, project, user, [
+				"feedback:read",
+			]);
+			const attachment = await getReviewAttachment(
+				c.env,
+				project.id,
+				c.req.param("feedbackId"),
+				c.req.param("attachmentId"),
+			);
+					return reviewAttachmentResponse(attachment, c.req.method);
+			} catch (error) {
+				if (isResponse(error)) {
+					return privateReviewJson({ error: "review_attachment_not_found" }, 404);
+			}
+			return privateReviewJson({ error: "review_attachment_not_found" }, 404);
+		}
+	},
+);
+
 app.get(
-  "/api/projects/:projectId/review-feedback/:feedbackId/screenshot",
+	"/api/projects/:projectId/review-feedback/:feedbackId/screenshot",
   async (c) => {
     try {
       const projectId = c.req.param("projectId");
@@ -19520,13 +21824,35 @@ app.post(
           new URL(c.req.url),
         );
         const body = await readJson(c);
-        const feedback = await sandboxStub(c.env, sessionId).createReply(
-          sessionId,
-          projectId,
-          c.req.param("feedbackId"),
-          actorId,
-          String(body.comment || ""),
-        );
+		const requestId = optionalReviewOperationRequestId(body);
+		if (requestId !== null && normalizeMentionInputs(body.mentions).length > 0) {
+			return withSandboxCookies(
+				sandboxNoStoreJson({ error: "sandbox_mentions_unsupported" }, 409),
+				sessionId,
+				actorId,
+			);
+		}
+		const comment = normalizeReviewReplyComment(body.comment);
+		if (!comment) return c.text("Comment is required.", 400);
+        const feedback = requestId === null
+		  ? await sandboxStub(c.env, sessionId).createReply(
+			  sessionId,
+			  projectId,
+			  c.req.param("feedbackId"),
+			  actorId,
+			  comment,
+			)
+		  : await applySandboxDurableThread({
+			  env: c.env,
+			  requestUrl: c.req.url,
+			  projectId,
+			  sessionId,
+			  actorId,
+			  requestId,
+			  feedbackId: c.req.param("feedbackId"),
+			  effect: "feedback.reply",
+			  value: comment,
+			});
         if (!feedback) return c.text("Review feedback not found", 404);
         return withSandboxCookies(json({ feedback }, 201), sessionId, actorId);
       }
@@ -19541,17 +21867,32 @@ app.post(
         ["feedback:write"],
       );
       const body = await readJson(c);
-      const feedback = await createReviewReplyWithNotifications(
-        c.env,
-        project,
-        c.req.param("feedbackId"),
-        String(body.comment || ""),
-        authorization.user,
-        normalizeMentionInputs(body.mentions),
-        authorization.token
-          ? { kind: "agent", id: authorization.token.id }
-          : undefined,
-      );
+      const requestId = optionalReviewOperationRequestId(body);
+      if (requestId !== null && !authorization.user) {
+        return json({ ok: false, code: "durable_recovery_requires_user" }, 400);
+      }
+      const feedback = requestId !== null
+        ? await applyDurableHumanThreadOperation({
+            env: c.env,
+            project,
+            user: authorization.user!,
+            feedbackId: c.req.param("feedbackId"),
+            effect: "feedback.reply",
+            value: body.comment,
+            requestId,
+            mentions: normalizeMentionInputs(body.mentions),
+          })
+        : await createReviewReplyWithNotifications(
+            c.env,
+            project,
+            c.req.param("feedbackId"),
+            String(body.comment || ""),
+            authorization.user,
+            normalizeMentionInputs(body.mentions),
+            authorization.token
+              ? { kind: "agent", id: authorization.token.id }
+              : undefined,
+          );
       return json({ feedback }, 201);
     } catch (error) {
       if (isResponse(error)) return error;
@@ -19573,12 +21914,27 @@ app.post(
           new URL(c.req.url),
         );
         const body = await readJson(c);
-        const feedback = await sandboxStub(c.env, sessionId).updateStatus(
-          sessionId,
-          projectId,
-          c.req.param("feedbackId"),
-          String(body.status || ""),
-        );
+		const requestId = optionalReviewOperationRequestId(body);
+		const status = typeof body.status === "string" ? body.status.trim() : "";
+		if (!isReviewStatus(status)) return c.text("Status is not supported.", 400);
+        const feedback = requestId === null
+		  ? await sandboxStub(c.env, sessionId).updateStatus(
+			  sessionId,
+			  projectId,
+			  c.req.param("feedbackId"),
+			  status,
+			)
+		  : await applySandboxDurableThread({
+			  env: c.env,
+			  requestUrl: c.req.url,
+			  projectId,
+			  sessionId,
+			  actorId,
+			  requestId,
+			  feedbackId: c.req.param("feedbackId"),
+			  effect: "feedback.status",
+			  value: status,
+			});
         if (!feedback) return c.text("Review feedback not found", 404);
         return withSandboxCookies(json({ feedback }), sessionId, actorId);
       }
@@ -19593,16 +21949,30 @@ app.post(
         ["feedback:write"],
       );
       const body = await readJson(c);
-      const feedback = await updateReviewStatusWithNotifications(
-        c.env,
-        project,
-        c.req.param("feedbackId"),
-        String(body.status || ""),
-        authorization.user,
-        authorization.token
-          ? { kind: "agent", id: authorization.token.id }
-          : undefined,
-      );
+      const requestId = optionalReviewOperationRequestId(body);
+      if (requestId !== null && !authorization.user) {
+        return json({ ok: false, code: "durable_recovery_requires_user" }, 400);
+      }
+      const feedback = requestId !== null
+        ? await applyDurableHumanThreadOperation({
+            env: c.env,
+            project,
+          user: authorization.user!,
+          feedbackId: c.req.param("feedbackId"),
+          effect: "feedback.status",
+          value: body.status,
+            requestId,
+          })
+        : await updateReviewStatusWithNotifications(
+            c.env,
+            project,
+            c.req.param("feedbackId"),
+            String(body.status || ""),
+            authorization.user,
+            authorization.token
+              ? { kind: "agent", id: authorization.token.id }
+              : undefined,
+          );
       return json({ feedback });
     } catch (error) {
       if (isResponse(error)) return error;

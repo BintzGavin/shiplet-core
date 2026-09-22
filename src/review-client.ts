@@ -2375,7 +2375,7 @@ ${bubbleLayoutHelpers}
 				"</div>" +
 			"</li>";
 		}).join("");
-		const statusOptions = ["New", "In Progress", "Blocked", "Done", "Dropped"]
+		const statusOptions = ["New", "In Progress", "Blocked", "Staging", "Done", "Dropped"]
 			.map((status) => "<option value='" + esc(status) + "'" + (item.status === status ? " selected" : "") + ">" + esc(status) + "</option>")
 			.join("");
 		const replyCount = (item.replies || []).length;

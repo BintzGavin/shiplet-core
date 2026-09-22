@@ -126,6 +126,93 @@ describe("review workflow canonical event integration", () => {
 		}
 	});
 
+	it("accepts Staging as an open status while preserving authorization and filtering", async () => {
+		const { project } = await fixture();
+		const feedbackResponse = await request(
+			`/api/projects/${project.id}/review-feedback`,
+			{
+				method: "POST",
+				headers: { "Content-Type": "application/json", ...REVIEWER },
+				body: JSON.stringify({
+					comment: "Stage this review for verification.",
+					pageUrl: `http://localhost/${project.id}/staging`,
+					clientFeedbackId: `staging-${crypto.randomUUID()}`,
+				}),
+			},
+		);
+		expect(feedbackResponse.status).toBe(201);
+		const { feedback } = (await feedbackResponse.json()) as {
+			feedback: { id: string; status: string };
+		};
+		expect(feedback.status).toBe("New");
+
+		const outsider = await request(
+			`/api/projects/${project.id}/review-feedback/${feedback.id}/status`,
+			{
+				method: "POST",
+				headers: {
+					"Content-Type": "application/json",
+					"x-shiplet-user-id": "user_canonical_review_outsider",
+					"x-shiplet-user-email": "canonical-review-outsider@example.com",
+				},
+				body: JSON.stringify({ status: "Staging" }),
+			},
+		);
+		expect(outsider.status).toBe(403);
+
+		const staged = await request(
+			`/api/projects/${project.id}/review-feedback/${feedback.id}/status`,
+			{
+				method: "POST",
+				headers: { "Content-Type": "application/json", ...REVIEWER },
+				body: JSON.stringify({ status: "Staging" }),
+			},
+		);
+		expect(staged.status).toBe(200);
+		const stagedPayload = (await staged.json()) as {
+			feedback: { status: string };
+		};
+		expect(stagedPayload.feedback.status).toBe("Staging");
+
+		const openList = await request(
+			`/api/projects/${project.id}/review-feedback`,
+			{ headers: REVIEWER },
+		);
+		expect(openList.status).toBe(200);
+		const openPayload = (await openList.json()) as {
+			feedback: Array<{ id: string; status: string }>;
+		};
+		expect(
+			openPayload.feedback.some(
+				(row) => row.id === feedback.id && row.status === "Staging",
+			),
+		).toBe(true);
+
+		const filtered = await request(
+			`/api/projects/${project.id}/review-feedback?status=Staging`,
+			{ headers: REVIEWER },
+		);
+		expect(filtered.status).toBe(200);
+		const filteredPayload = (await filtered.json()) as {
+			feedback: Array<{ id: string }>;
+		};
+		expect(
+			filteredPayload.feedback.map(
+				(row) => row.id,
+			),
+		).toContain(feedback.id);
+
+		const malformed = await request(
+			`/api/projects/${project.id}/review-feedback/${feedback.id}/status`,
+			{
+				method: "POST",
+				headers: { "Content-Type": "application/json", ...REVIEWER },
+				body: JSON.stringify({ status: "staging" }),
+			},
+		);
+		expect(malformed.status).toBe(400);
+	});
+
 	it("Given an organization API key mutates review state, When canonical events are stored, Then the authenticated token principal is the agent actor", async () => {
 		const { organization, project } = await fixture();
 		const tokenResponse = await request(

@@ -7,6 +7,7 @@ import {
   resolveCustomMcpMutationEffectAuthority,
   type CustomMcpMutationEffectAuthority,
 } from "./custom-mcp-approval";
+import { REVIEW_STATUSES as CANONICAL_REVIEW_STATUSES } from "./review";
 
 const IDENTIFIER = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,255}$/;
 const STATE_KEY = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
@@ -14,13 +15,7 @@ const MAX_RESULT_BYTES = 32 * 1024;
 const MAX_STATE_VALUE_BYTES = 32 * 1024;
 const MAX_STATE_KEYS_PER_NAMESPACE = 128;
 const MAX_STATE_BYTES_PER_NAMESPACE = 256 * 1024;
-const REVIEW_STATUSES = new Set([
-  "New",
-  "In Progress",
-  "Blocked",
-  "Done",
-  "Dropped",
-]);
+const REVIEW_STATUSES = new Set<string>(CANONICAL_REVIEW_STATUSES);
 const CANONICAL_STATUS_CATEGORIES = new Set([
   "open",
   "in_progress",
@@ -76,7 +71,7 @@ function ownDataRecord(value: unknown): Record<string, unknown> | null {
 }
 
 function reviewStatusCategory(status: string) {
-  if (status === "New") return "open";
+  if (status === "New" || status === "Staging") return "open";
   if (status === "In Progress" || status === "Blocked") return "in_progress";
   if (status === "Done") return "resolved";
   return "closed";

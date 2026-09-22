@@ -75,6 +75,38 @@ async function reviewInstallation() {
 }
 
 describe("framework-independent widget installation", () => {
+  it("[T2] confines outer dock and visibility synchronization to bounded presentation state", async () => {
+    const script = await (await request("/api/embed/widget.js")).text();
+    const styles = await (await request("/api/embed/widget.css")).text();
+
+    expect(script).toContain('shiplet.embed.presentation.v1');
+    expect(script).toContain("allowedDocks");
+    for (const dock of ["top-left", "top-right", "bottom-left", "bottom-right"]) expect(script).toContain(dock);
+    expect(styles).toContain(':host([data-dock=top-left])');
+    expect(styles).toContain(':host([data-dock=bottom-left])');
+    expect(script).not.toContain('data.draft');
+    expect(script).not.toContain('data.recipients');
+  });
+  it("serves stable-ticket contextual pin assets without moving write controls into the page", async () => {
+    const script = await (await request("/api/embed/widget.js")).text();
+    const styles = await (await request("/api/embed/widget.css")).text();
+
+    expect(script).toContain("feedbackId");
+    expect(script).toContain("ticket");
+    expect(script).toContain('protocol: "shiplet.embed.focus.v1"');
+    expect(script).toContain('["toolbar", "comments", "thread"');
+    expect(script).toContain('id="shiplet-embedded-review-surface"');
+    expect(script).toContain("items.slice(0, 250)");
+    expect(script).toContain("item.index >= 1000000");
+    expect(script).not.toContain("items.slice(0, 100)");
+    expect(script).toContain(
+      'button.setAttribute("aria-controls", "shiplet-embedded-review-surface")',
+    );
+    expect(script).not.toContain("review-feedback/replies");
+    expect(script).not.toContain("Confirm reply");
+    expect(styles).toContain(".surface[data-view=thread]");
+  });
+
   it("shows the regular Annotate toolbar while signed out, without a nested login panel", async () => {
     const installation = await reviewInstallation();
     const response = await request(`/embed/review/start?${new URLSearchParams({
