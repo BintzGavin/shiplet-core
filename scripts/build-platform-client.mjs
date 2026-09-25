@@ -26,6 +26,11 @@ const clientEntries = [
 		entry: path.join(root, "src/platform/feedback-client.tsx"),
 		fileName: "feedback.js",
 	},
+	{
+		assetPath: "/assets/platform/invite-links.js",
+		entry: path.join(root, "src/platform/invite-links-client.tsx"),
+		fileName: "invite-links.js",
+	},
 ];
 
 await rm(outDir, { recursive: true, force: true });

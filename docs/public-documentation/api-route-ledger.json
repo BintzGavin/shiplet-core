@@ -133,6 +133,20 @@
       "rationale": "Organization, team, and invitation creation is a first-party WorkOS-backed administrative flow with human consent and role checks."
     },
     {
+      "id": "organization_invite_link_administration",
+      "methods": ["GET", "POST", "DELETE"],
+      "pathPattern": "^/api/organizations/:organizationId/invite-links(?:/:linkId)?$",
+      "category": "first_party_browser_model",
+      "rationale": "Listing, creating, and revoking organization and team invite links is the administrator-only, session-cookie-bound browser model for sharing membership links rather than a public automation contract."
+    },
+    {
+      "id": "organization_invite_link_join",
+      "methods": ["GET", "POST"],
+      "pathPattern": "^/join/:token$",
+      "category": "identity_browser_ceremony",
+      "rationale": "The join page is the bearer-link membership acceptance ceremony, bound to the signed-in browser identity and one deliberate accept action rather than an independently callable REST operation."
+    },
+    {
       "id": "legacy_publish_and_hostname_status",
       "methods": ["GET", "POST"],
       "pathPattern": "^/(?:projects|projects/:subdomain/custom-domain-status)$",

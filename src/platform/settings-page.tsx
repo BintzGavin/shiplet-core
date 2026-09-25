@@ -9,6 +9,8 @@ import {
 } from "@tanstack/react-query";
 import { createStore } from "zustand/vanilla";
 
+import { BuildWorkspaceInviteLinksIsland } from "./invite-links-page";
+import type { WorkspaceInviteLinksSeed } from "./invite-links-types";
 import { PlatformLiveUpdatesScript } from "./live-updates";
 import { PlatformNav, type PlatformRoute } from "./navigation";
 import { DashboardRuntimeScript } from "../render";
@@ -29,6 +31,8 @@ type SettingsPageOptions = {
 	nonce: KernelDocumentNonce;
 	user: ShipletUser;
 	route?: SettingsRoute;
+	/** Server-rendered seed for the workspace "Invite links" island. */
+	inviteLinks?: WorkspaceInviteLinksSeed;
 };
 
 type SettingsQueryResult = {
@@ -58,12 +62,26 @@ export function BuildPlatformSettingsPage(options: SettingsPageOptions) {
 	const uiStore = createStore<SettingsUiState>(() => ({
 		route,
 	}));
+	// The island is rendered with renderToString so the browser bundle can
+	// hydrate it; renderToStaticMarkup below emits the string verbatim.
+	// Skipped entirely for someone with no organizations: there is nothing to
+	// show, and it saves the island bundle download.
+	const inviteLinksIsland =
+		route === "workspace" &&
+		options.inviteLinks &&
+		options.inviteLinks.organizations.length > 0
+			? BuildWorkspaceInviteLinksIsland({
+					nonce: options.nonce,
+					seed: options.inviteLinks,
+				})
+			: "";
 
 	const body = renderToStaticMarkup(
 		<QueryClientProvider client={queryClient}>
 			<HydrationBoundary state={dehydrate(queryClient)}>
 				<SettingsPage
 					initialUser={options.user}
+					inviteLinksIsland={inviteLinksIsland}
 					queryKey={queryKey}
 					route={uiStore.getState().route}
 				/>
@@ -83,6 +101,7 @@ ${DashboardRuntimeScript(options.nonce)}`;
 
 function SettingsPage(props: {
 	initialUser: ShipletUser;
+	inviteLinksIsland?: string;
 	queryKey: readonly unknown[];
 	route: SettingsRoute;
 }) {
@@ -130,6 +149,12 @@ function SettingsPage(props: {
 						<>
 							<WorkspaceSection />
 							<TeamsSection />
+							{props.inviteLinksIsland ? (
+								<div
+									className="settings-island"
+									dangerouslySetInnerHTML={{ __html: props.inviteLinksIsland }}
+								/>
+							) : null}
 						</>
 					) : null}
 					{props.route === "access" ? <SharingSection /> : null}

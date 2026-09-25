@@ -11213,6 +11213,7 @@ describe("Shiplet", () => {
         "/assets/platform/shiplets.js",
         "/assets/platform/inbox.js",
         "/assets/platform/feedback.js",
+        "/assets/platform/invite-links.js",
       ]) {
         const response = await makeRequest(asset);
         const source = await response.text();

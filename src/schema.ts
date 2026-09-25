@@ -433,6 +433,36 @@ export async function ensureSchema(db: D1Database) {
 			),
 		db
 			.prepare(
+				`CREATE TABLE IF NOT EXISTS organization_invite_links (
+					id TEXT PRIMARY KEY,
+					organization_id TEXT NOT NULL,
+					team_id TEXT,
+					token TEXT NOT NULL UNIQUE,
+					max_uses INTEGER,
+					use_count INTEGER NOT NULL DEFAULT 0,
+					allowed_emails_json TEXT,
+					expires_on TEXT,
+					created_by_user_id TEXT NOT NULL,
+					created_on TEXT NOT NULL,
+					revoked_on TEXT,
+					FOREIGN KEY (organization_id) REFERENCES organizations(id)
+				)`,
+			),
+		db
+			.prepare(
+				`CREATE TABLE IF NOT EXISTS organization_invite_link_redemptions (
+					id TEXT PRIMARY KEY,
+					link_id TEXT NOT NULL,
+					organization_id TEXT NOT NULL,
+					user_id TEXT NOT NULL,
+					email TEXT NOT NULL,
+					redeemed_on TEXT NOT NULL,
+					UNIQUE (link_id, user_id),
+					FOREIGN KEY (link_id) REFERENCES organization_invite_links(id)
+				)`,
+			),
+		db
+			.prepare(
 				`CREATE TABLE IF NOT EXISTS organization_api_token_project_rules (
 					token_id TEXT NOT NULL,
 					project_id TEXT NOT NULL,
@@ -661,6 +691,14 @@ export async function ensureSchema(db: D1Database) {
 		db.prepare(
 			`CREATE INDEX IF NOT EXISTS idx_org_api_token_rules_token
 			 ON organization_api_token_project_rules(token_id, project_id)`,
+		),
+		db.prepare(
+			`CREATE INDEX IF NOT EXISTS idx_org_invite_links_org
+			 ON organization_invite_links(organization_id, revoked_on)`,
+		),
+		db.prepare(
+			`CREATE INDEX IF NOT EXISTS idx_org_invite_link_redemptions_link
+			 ON organization_invite_link_redemptions(link_id)`,
 		),
 		db.prepare(
 			`CREATE INDEX IF NOT EXISTS idx_embed_installations_project_origin

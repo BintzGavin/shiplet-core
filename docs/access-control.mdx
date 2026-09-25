@@ -33,6 +33,37 @@ offered, and accept it deliberately. If the signed-in email does not match,
 switch accounts or sign out and return with the invited identity; do not widen
 visibility or forward the invitation to bypass the mismatch.
 
+### Invite links
+
+An invite link is one shareable URL that lets people join an organization, or
+one team in it, without sending each person an invitation. Organization
+administrators create invite links in the **Invite links** section of
+**Workspace** (`/workspace`), choosing the whole organization or exactly one
+team for each link. Administrators can copy the same link again later and
+revoke it at any time, and Shiplet records every link creation, join, and
+revocation in its audit history.
+
+Each link has three settings, summarized below. Limit uses when you know how
+many people should join, set an expiry for a short-lived share, and reserve the
+link for specific email addresses when only those people should join. A
+revoked, expired, or used-up link stops working immediately; ask an
+administrator for a new one. Anyone who has an unreserved link can sign in and
+join, so share it only where you would share membership.
+
+| Setting         | Options                               | Effect                                                               |
+| --------------- | ------------------------------------- | -------------------------------------------------------------------- |
+| Uses            | A set number, or unlimited            | The link stops working once that many people have joined through it. |
+| Expiry          | A number of days, or never            | The link stops working when that time passes.                        |
+| Reserved emails | Specific addresses, or anyone with it | Only a signed-in email that matches a listed address can join.       |
+
+Opening a link shows the organization name, and the team name for a team link.
+Sign in if asked, then accept deliberately; opening the link does not join you
+by itself. Joining grants the member role, never administrator, and opening the
+link again with the same account does not take another use. For a reserved
+link, your signed-in email must match a listed address exactly, ignoring letter
+case; otherwise the page asks you to sign out and return with the listed email,
+or to switch accounts where account switching is enabled.
+
 ### Who can view
 
 | Visibility     | Anonymous visitor | Organization member | Organization admin or owner | Explicit user or team grant |

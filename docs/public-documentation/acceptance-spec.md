@@ -539,3 +539,36 @@ is built, then each version references one stable, accessible Shiplet-owned
 visual. The visual shows the agent asking for access, the person choosing a
 Shiplet organization, and the agent working with Shiplets and feedback through
 MCP. It contains no identity-provider or credential lifecycle detail.
+
+## DOC-043 — organization and team invite links
+
+Given an organization administrator wants to share membership without sending
+each person an invitation, when they open the Invite links section of Workspace
+at `/workspace`, then they can create a link for the whole organization or
+exactly one team, limit it to a number of uses or leave it unlimited, set it to
+expire after a number of days or never, and optionally reserve it for specific
+email addresses. They can copy the same link again later and revoke it at any
+time. Only organization administrators can list, create, or revoke links.
+
+Given a person opens an active link, when the join page loads, then it names
+the organization and, for a team link, the team. The person signs in if needed
+and joins only through one deliberate accept action. Joining grants the member
+role only, never administrator, and the same person opening the link again does
+not consume another use.
+
+Given a link is revoked, expired, or used up, or is reserved for email addresses
+that do not include the signed-in email, when someone tries to join, then
+Shiplet refuses the attempt with a plain explanation. Reserved-email matching is
+exact apart from letter case, and a mismatch asks the person to sign out and
+return with the listed email, or to switch accounts where account switching is
+enabled.
+
+Given an administrator or security reviewer checks membership changes, when a
+link is created, redeemed, or revoked, then the immutable kernel admin audit
+ledger records that action.
+
+Given both public documentation renderers describe this feature, when the access
+guide is built, then the MDX and Worker pages teach the same settings, joiner
+steps, member-only role, refusals, and audit record. The administration and join
+routes are first-party browser surfaces classified in `api-route-ledger.json`
+rather than public OpenAPI operations.
