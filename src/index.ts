@@ -833,7 +833,9 @@ async function ensureKernelSchemas(db: D1Database) {
 const KERNEL_SCHEMA_EPOCH_TABLE = "shiplet_kernel_schema_epoch";
 const KERNEL_SCHEMA_EPOCH_MARKER = "kernel";
 // Any change to ensureKernelSchemas must explicitly bump this durable epoch.
-const CURRENT_KERNEL_SCHEMA_EPOCH = 1;
+// test/kernel-schema-epoch.spec.ts pins the schema digest to this value.
+// 2: organization and team invite link tables.
+const CURRENT_KERNEL_SCHEMA_EPOCH = 2;
 
 async function readKernelSchemaEpoch(db: D1Database): Promise<number | null> {
   const table = await db
