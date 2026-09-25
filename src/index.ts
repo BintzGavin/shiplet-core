@@ -121,6 +121,7 @@ import {
   getCustomHostnameStatus,
 } from "./cloudflare-api";
 import { D1QB } from "workers-qb";
+import { getPath } from "hono/utils/url";
 import {
   ACCOUNT_GROUP_COOKIE,
   LEGACY_ACCOUNT_GROUP_COOKIE,
@@ -416,6 +417,37 @@ import {
   runAuditedKernelAdminAction,
 } from "./kernel-admin-audit";
 import {
+  consumeInviteLinkUse,
+  createInviteLink,
+  decrementInviteLinkUse,
+  generateInviteLinkToken,
+  getInviteLinkById,
+  hasInviteLinkRedemption,
+  hasJoinedInviteLinkTarget,
+  hasTeamMembership,
+  inviteLinkAllowedEmails,
+  inviteLinkExpiresOn,
+  inviteLinkStatus,
+  inviteLinkStatusForUser,
+  isInviteLinkEmailAllowed,
+  listInviteLinksForOrganization,
+  loadInviteLinkJoinTarget,
+  loadInviteLinkViews,
+  loadWorkspaceInviteLinksSeed,
+  parseCreateInviteLinkRequest,
+  publicInviteLink,
+  recordInviteLinkRedemption,
+  revokeInviteLink,
+  runAuditedInviteLinkRedemption,
+  type InviteLinkJoinTarget,
+} from "./organization-invite-links";
+import {
+  joinPath,
+  type InviteLinkListResponse,
+  type InviteLinkResponse,
+  type InviteLinkStatus,
+} from "./platform/invite-links-types";
+import {
   approveCliAuthorizationRequest,
   createCliAuthorizationRequest,
   exchangeCliAuthorizationCode,
@@ -535,6 +567,7 @@ const RESERVED_PLATFORM_PATHS = new Set([
   "feedback",
   "init",
   "inbox",
+  "join",
   "llms.txt",
   "play",
   "og-image.png",
@@ -675,6 +708,12 @@ function isPlatformCookieAuthRoute(pathname: string, method: string) {
     pathname.startsWith("/shiplets/")
   )
     return true;
+  if (
+    method !== "GET" &&
+    method !== "HEAD" &&
+    pathname.startsWith("/join/")
+  )
+    return true;
   if (method !== "GET" && pathname === "/auth/login") return true;
   if (method !== "GET" && pathname === "/embed/connect") return true;
   if (method !== "GET" && pathname === "/embed/install") return true;
@@ -714,7 +753,8 @@ app.use("*", async (c, next) => {
   await next();
   if (
     c.res.status !== 101 &&
-    shouldPreventIndexing(new URL(c.req.url).pathname)
+    (shouldPreventIndexing(new URL(c.req.url).pathname) ||
+      shouldPreventIndexing(routedPathname(c.req.url)))
   ) {
     c.res = withNoIndexResponse(c.res);
   }
@@ -753,10 +793,10 @@ app.use("*", async (c, next) => {
 
 app.use("*", async (c, next) => {
   const url = new URL(c.req.url);
-  if (
-    !isPlatformCookieAuthRoute(url.pathname, c.req.method) ||
-    hasBearerAuthorization(c.req.raw)
-  ) {
+  const cookieAuthRoute =
+    isPlatformCookieAuthRoute(url.pathname, c.req.method) ||
+    isPlatformCookieAuthRoute(routedPathname(c.req.url), c.req.method);
+  if (!cookieAuthRoute || hasBearerAuthorization(c.req.raw)) {
     await next();
     return;
   }
@@ -966,6 +1006,7 @@ const NOINDEX_RESPONSE_PATHS = [
   "/feedback",
   "/inbox",
   "/init",
+  "/join",
   "/openapi.json",
   "/play",
   "/projects",
@@ -975,6 +1016,15 @@ const NOINDEX_RESPONSE_PATHS = [
   "/workspace",
   "/llms.txt",
 ];
+
+/**
+ * The path Hono routes on: percent-decoded exactly as the router decodes it.
+ * Classify requests by this as well as by the raw pathname, or an encoded
+ * path such as /%6Aoin/... would skip a check yet still reach /join/:token.
+ */
+function routedPathname(requestUrl: string) {
+  return getPath({ url: requestUrl } as Request);
+}
 
 function shouldPreventIndexing(pathname: string) {
   return NOINDEX_RESPONSE_PATHS.some(
@@ -1034,9 +1084,14 @@ function isKernelDocumentRequest(env: Env, requestUrl: string) {
   // script authority.
   if (isPathTenantFallbackHost(url.hostname)) {
     const firstPathSegment = url.pathname.split("/").filter(Boolean)[0];
+    const routedFirstSegment = routedPathname(requestUrl)
+      .split("/")
+      .filter(Boolean)[0];
     return (
       firstPathSegment === undefined ||
-      RESERVED_PLATFORM_PATHS.has(firstPathSegment)
+      RESERVED_PLATFORM_PATHS.has(firstPathSegment) ||
+      (routedFirstSegment !== undefined &&
+        RESERVED_PLATFORM_PATHS.has(routedFirstSegment))
     );
   }
 
@@ -19365,12 +19420,33 @@ async function renderPlatformSettingsRoute(c: any, route: SettingsRoute) {
     );
   }
 
+  // The workspace page server-renders its invite links so the island hydrates
+  // with real data and never shows a loading state.
+  // A failure here only drops the invite links section, never the page.
+  const inviteLinks =
+    route === "workspace"
+      ? await loadWorkspaceInviteLinksSeed(
+          c.env.DB,
+          user,
+          appBaseUrl(c.env, c.req.url),
+        ).catch(() => {
+          console.error(
+            JSON.stringify({ event: "invite_link.seed", outcome: "failed" }),
+          );
+          return undefined;
+        })
+      : undefined;
+
+  // Settings pages are personal, and the workspace page embeds live join
+  // URLs, so no browser, back-forward, or shared cache may keep them.
+  c.header("Cache-Control", "private, no-store");
   return c.html(
     renderPage(
       BuildPlatformSettingsPage({
         nonce: kernelDocumentNonce(c),
         user,
         route,
+        inviteLinks,
       }),
       {
         nonce: kernelDocumentNonce(c),
@@ -20836,6 +20912,655 @@ app.post(
     }
   },
 );
+
+/** Invite-link payloads carry live join URLs, so no cache may keep them. */
+function noStoreJson(data: unknown, status = 200) {
+  const response = json(data, status);
+  response.headers.set("cache-control", "no-store");
+  return response;
+}
+
+app.get("/api/organizations/:organizationId/invite-links", async (c) => {
+  try {
+    const user = await requireCurrentUser(c);
+    const organizationId = c.req.param("organizationId");
+    await requireAuditedOrganizationAdministrator({
+      db: c.env.DB,
+      organizationId,
+      actorId: user.id,
+      action: "organization_invite_link.list",
+      authorize: () =>
+        requireOrganizationAdministrator(c.env.DB, organizationId, user.id),
+    });
+    const links = await loadInviteLinkViews(
+      c.env.DB,
+      await listInviteLinksForOrganization(c.env.DB, organizationId),
+      {
+        appUrl: appBaseUrl(c.env, c.req.url),
+        teams: await listTeamsForOrganization(c.env.DB, organizationId),
+      },
+    );
+    return noStoreJson({ links } satisfies InviteLinkListResponse);
+  } catch (error) {
+    if (isResponse(error)) return error;
+    const message = error instanceof Error ? error.message : "Unknown error";
+    return c.text(`Failed to list invite links: ${message}`, 500);
+  }
+});
+
+app.post("/api/organizations/:organizationId/invite-links", async (c) => {
+  try {
+    const user = await requireCurrentUser(c);
+    const organizationId = c.req.param("organizationId");
+    await requireAuditedOrganizationAdministrator({
+      db: c.env.DB,
+      organizationId,
+      actorId: user.id,
+      action: "organization_invite_link.create",
+      authorize: () =>
+        requireOrganizationAdministrator(c.env.DB, organizationId, user.id),
+    });
+    const settings = parseCreateInviteLinkRequest(await readJson(c));
+    const team = settings.teamId
+      ? await getTeam(c.env.DB, settings.teamId)
+      : null;
+    if (settings.teamId && (!team || team.organization_id !== organizationId)) {
+      return c.text("Team not found", 404);
+    }
+
+    const created = await runAuditedKernelAdminAction({
+      db: c.env.DB,
+      organizationId,
+      actorId: user.id,
+      action: "organization_invite_link.create",
+      targetKind: "invite_link",
+      operation: () => {
+        const createdOn = timestamps.now();
+        return createInviteLink(c.env.DB, {
+          id: newId("invlink"),
+          organization_id: organizationId,
+          team_id: team?.id ?? null,
+          token: generateInviteLinkToken(),
+          max_uses: settings.maxUses,
+          use_count: 0,
+          allowed_emails_json:
+            settings.allowedEmails.length > 0
+              ? JSON.stringify(settings.allowedEmails)
+              : null,
+          expires_on: inviteLinkExpiresOn(createdOn, settings.expiresInDays),
+          created_by_user_id: user.id,
+          created_on: createdOn,
+          revoked_on: null,
+        });
+      },
+    });
+
+    const link = publicInviteLink(created, {
+      appUrl: appBaseUrl(c.env, c.req.url),
+      teamName: team?.name ?? null,
+      creator: { id: user.id, email: user.email },
+      redemptions: [],
+      nowIso: timestamps.now(),
+    });
+    return noStoreJson({ link } satisfies InviteLinkResponse, 201);
+  } catch (error) {
+    if (isResponse(error)) return error;
+    const message = error instanceof Error ? error.message : "Unknown error";
+    return c.text(`Failed to create invite link: ${message}`, 500);
+  }
+});
+
+app.delete(
+  "/api/organizations/:organizationId/invite-links/:linkId",
+  async (c) => {
+    try {
+      const user = await requireCurrentUser(c);
+      const organizationId = c.req.param("organizationId");
+      await requireAuditedOrganizationAdministrator({
+        db: c.env.DB,
+        organizationId,
+        actorId: user.id,
+        action: "organization_invite_link.revoke",
+        authorize: () =>
+          requireOrganizationAdministrator(c.env.DB, organizationId, user.id),
+      });
+      const existing = await getInviteLinkById(
+        c.env.DB,
+        c.req.param("linkId"),
+      );
+      if (!existing || existing.organization_id !== organizationId) {
+        return c.text("Invite link not found", 404);
+      }
+
+      const revoked = await runAuditedKernelAdminAction({
+        db: c.env.DB,
+        organizationId,
+        actorId: user.id,
+        action: "organization_invite_link.revoke",
+        targetKind: "invite_link",
+        operation: async () => {
+          await revokeInviteLink(c.env.DB, existing.id, timestamps.now());
+          return (await getInviteLinkById(c.env.DB, existing.id)) ?? existing;
+        },
+      });
+      const [link] = await loadInviteLinkViews(c.env.DB, [revoked], {
+        appUrl: appBaseUrl(c.env, c.req.url),
+      });
+      return noStoreJson({ link } satisfies InviteLinkResponse);
+    } catch (error) {
+      if (isResponse(error)) return error;
+      const message = error instanceof Error ? error.message : "Unknown error";
+      return c.text(`Failed to revoke invite link: ${message}`, 500);
+    }
+  },
+);
+
+type InviteLinkJoinPage =
+  | { kind: "invalid" }
+  | {
+      kind: "inactive";
+      status: Exclude<InviteLinkStatus, "active">;
+      organizationName: string;
+      expiresOn: string | null;
+    }
+  | {
+      kind: "signed_out";
+      organizationName: string;
+      teamName: string | null;
+      restricted: boolean;
+    }
+  | { kind: "member"; organizationName: string; teamName: string | null }
+  | { kind: "wrong_email"; email: string }
+  | {
+      kind: "ready";
+      organizationName: string;
+      teamName: string | null;
+      email: string;
+    }
+  | { kind: "failed"; organizationName: string };
+
+const INVITE_LINK_JOIN_PAGE_STATUS = {
+  invalid: 404,
+  inactive: 410,
+  signed_out: 200,
+  member: 200,
+  wrong_email: 403,
+  ready: 200,
+  failed: 502,
+} as const;
+
+const INVITE_LINK_MONTH_NAMES = [
+  "January",
+  "February",
+  "March",
+  "April",
+  "May",
+  "June",
+  "July",
+  "August",
+  "September",
+  "October",
+  "November",
+  "December",
+];
+
+/** Thrown inside the audited redemption when the atomic use consume fails. */
+class InviteLinkUnavailableError extends Error {}
+
+function inviteLinkLoginPath(token: string, options: { addAccount?: boolean } = {}) {
+  const returnTo = encodeURIComponent(joinPath(token));
+  return options.addAccount
+    ? `/auth/login?account_action=add&return_to=${returnTo}`
+    : `/auth/login?return_to=${returnTo}`;
+}
+
+function inviteLinkExpiredSentence(expiresOn: string | null) {
+  const date = new Date(expiresOn ?? "");
+  if (Number.isNaN(date.getTime())) return "The link has expired.";
+  return `The link expired on ${INVITE_LINK_MONTH_NAMES[date.getUTCMonth()]} ${date.getUTCDate()}, ${date.getUTCFullYear()}.`;
+}
+
+function inviteLinkTeamSentence(teamName: string | null) {
+  return teamName
+    ? `\n\t\t<p>You'll be added to the ${escapeAuthHtml(teamName)} team.</p>`
+    : "";
+}
+
+function inviteLinkJoinPageContent(
+  page: InviteLinkJoinPage,
+  options: { token: string; accountSwitchingEnabled: boolean },
+): string {
+  const joinAction = escapeAuthHtml(joinPath(options.token));
+  const switchAccountHref = options.accountSwitchingEnabled
+    ? escapeAuthHtml(inviteLinkLoginPath(options.token, { addAccount: true }))
+    : "/auth/logout";
+  switch (page.kind) {
+    case "invalid":
+      return `<h1 id="join-title">This invite link isn't valid</h1>
+		<p>Check the link you were sent, or ask the person who shared it for a new one.</p>
+		<a class="btn btn-secondary" href="/">Go to Shiplet</a>`;
+    case "inactive": {
+      const reason =
+        page.status === "revoked"
+          ? `The link was turned off by an administrator of ${escapeAuthHtml(page.organizationName)}.`
+          : page.status === "expired"
+            ? inviteLinkExpiredSentence(page.expiresOn)
+            : "The link has already been used the maximum number of times.";
+      return `<h1 id="join-title">This invite link is no longer active</h1>
+		<p>${reason}</p>
+		<p>Ask the person who shared it for a new link.</p>
+		<a class="btn btn-secondary" href="/">Go to Shiplet</a>`;
+    }
+    case "signed_out":
+      return `<h1 id="join-title">Join ${escapeAuthHtml(page.organizationName)}</h1>${inviteLinkTeamSentence(page.teamName)}
+		<p>Sign in with the email address you use for Shiplet to accept this invitation.</p>${
+      page.restricted
+        ? "\n\t\t<p>This link is reserved for specific email addresses.</p>"
+        : ""
+    }
+		<a class="btn btn-primary" href="${escapeAuthHtml(inviteLinkLoginPath(options.token))}">Sign in to continue</a>
+		<a class="btn btn-secondary" href="/">Cancel</a>`;
+    case "member":
+      return `<h1 id="join-title">You're in</h1>
+		<p>You're a member of ${escapeAuthHtml(page.organizationName)}${
+      page.teamName ? ` and the ${escapeAuthHtml(page.teamName)} team` : ""
+    }.</p>
+		<a class="btn btn-primary" href="/shiplets">Open shiplets</a>
+		<a class="btn btn-secondary" href="/workspace">Workspace</a>`;
+    case "wrong_email":
+      return `<h1 id="join-title">This link is for a different email address</h1>
+		<p>You're signed in as ${escapeAuthHtml(page.email)}. This invite link is reserved for specific email addresses.</p>
+		<p>${
+      options.accountSwitchingEnabled
+        ? "Use a different account and sign in with the address the link was sent to."
+        : "Sign out, then open this link again and sign in with the address it was sent to."
+    }</p>
+		<a class="btn btn-secondary" href="${switchAccountHref}">${
+      options.accountSwitchingEnabled ? "Use a different account" : "Sign out"
+    }</a>`;
+    case "ready":
+      return `<h1 id="join-title">Join ${escapeAuthHtml(page.organizationName)}</h1>${inviteLinkTeamSentence(page.teamName)}
+		<p>You're signed in as <strong>${escapeAuthHtml(page.email)}</strong>.</p>
+		<form method="post" action="${joinAction}">
+			<button class="btn btn-primary" type="submit">Accept invitation</button>
+			<a class="btn btn-secondary" href="/">Cancel</a>
+		</form>
+		<a class="auth-docs-link" href="${switchAccountHref}">${
+      options.accountSwitchingEnabled
+        ? "Not you? Use a different account"
+        : "Not you? Sign out"
+    }</a>`;
+    case "failed":
+      return `<h1 id="join-title">We couldn't add you just yet</h1>
+		<p>Something went wrong while joining ${escapeAuthHtml(page.organizationName)}. Try the link again in a moment.</p>
+		<form method="post" action="${joinAction}">
+			<button class="btn btn-primary" type="submit">Try again</button>
+		</form>`;
+  }
+}
+
+function renderInviteLinkJoinPage(
+  page: InviteLinkJoinPage,
+  options: { token: string; accountSwitchingEnabled: boolean },
+) {
+  return `<div class="auth-stage">
+	<div class="auth-scene" aria-hidden="true">${HARBOR_SCENE_SVG}</div>
+	<section class="form-container auth-card" aria-labelledby="join-title">
+		<span class="success-card-label">Invitation</span>
+		${inviteLinkJoinPageContent(page, options)}
+	</section>
+</div>`;
+}
+
+function inviteLinkJoinPageTitle(page: InviteLinkJoinPage) {
+  switch (page.kind) {
+    case "invalid":
+      return "Invite link not valid | Shiplet";
+    case "inactive":
+      return "Invite link no longer active | Shiplet";
+    case "member":
+      return "You're in | Shiplet";
+    case "wrong_email":
+      return "Different email address | Shiplet";
+    case "failed":
+      return `Couldn't join ${page.organizationName} | Shiplet`;
+    case "signed_out":
+    case "ready":
+      return `Join ${page.organizationName} | Shiplet`;
+  }
+}
+
+function inviteLinkJoinPageResponse(
+  c: any,
+  page: InviteLinkJoinPage,
+  options: { token: string; user: ShipletUser | null },
+) {
+  c.header("Cache-Control", "no-store");
+  return c.html(
+    renderPage(
+      renderInviteLinkJoinPage(page, {
+        token: options.token,
+        accountSwitchingEnabled: useFeatureFlag(
+          c.env,
+          ACCOUNT_EMAIL_SWITCHING_FLAG,
+        ),
+      }),
+      {
+        nonce: kernelDocumentNonce(c),
+        customDomain: c.env.CUSTOM_DOMAIN,
+        appUrl: appBaseUrl(c.env, c.req.url),
+        user: options.user,
+        title: inviteLinkJoinPageTitle(page),
+        description: "Join an organization on Shiplet.",
+        canonicalPath: null,
+        indexing: "noindex",
+      },
+    ),
+    INVITE_LINK_JOIN_PAGE_STATUS[page.kind],
+  );
+}
+
+async function inviteLinkJoinPageForVisitor(
+  db: D1Database,
+  target: InviteLinkJoinTarget,
+  user: ShipletUser | null,
+): Promise<InviteLinkJoinPage> {
+  const { link, organization, team } = target;
+  const teamName = team?.name ?? null;
+  // Existing members never see "no longer active"; this is also the page
+  // shown right after a successful accept.
+  if (user && (await hasJoinedInviteLinkTarget(db, target, user.id))) {
+    return { kind: "member", organizationName: organization.name, teamName };
+  }
+  const nowIso = timestamps.now();
+  const status = user
+    ? await inviteLinkStatusForUser(db, link, user.id, nowIso)
+    : inviteLinkStatus(link, nowIso);
+  if (status !== "active") {
+    return {
+      kind: "inactive",
+      status,
+      organizationName: organization.name,
+      expiresOn: link.expires_on,
+    };
+  }
+  if (!user) {
+    return {
+      kind: "signed_out",
+      organizationName: organization.name,
+      teamName,
+      restricted: inviteLinkAllowedEmails(link) !== null,
+    };
+  }
+  if (!isInviteLinkEmailAllowed(link, user.email)) {
+    return { kind: "wrong_email", email: user.email };
+  }
+  return {
+    kind: "ready",
+    organizationName: organization.name,
+    teamName,
+    email: user.email,
+  };
+}
+
+async function redeemInviteLink(
+  c: any,
+  target: InviteLinkJoinTarget,
+  user: ShipletUser,
+  token: string,
+) {
+  const db: D1Database = c.env.DB;
+  const { link, organization, team } = target;
+  const membershipBefore = await getOrganizationMembership(
+    db,
+    organization.id,
+    user.id,
+  );
+  const inTeamBefore = team
+    ? await hasTeamMembership(db, team.id, user.id)
+    : false;
+  if (membershipBefore && (!team || inTeamBefore)) {
+    return c.redirect(joinPath(token), 303);
+  }
+
+  const nowIso = timestamps.now();
+  // Checked before any write, in the same order as the join page, to pick the
+  // page to show. A revoked or expired link stops everyone, including a person
+  // holding an earlier redemption. A used-up link stops everyone who does not
+  // already hold a use. The atomic take below, which comes before the
+  // redemption is recorded, still settles races with other redemptions,
+  // revokes, and expiry.
+  const status = await inviteLinkStatusForUser(db, link, user.id, nowIso);
+  if (status !== "active") {
+    return inviteLinkJoinPageResponse(
+      c,
+      {
+        kind: "inactive",
+        status,
+        organizationName: organization.name,
+        expiresOn: link.expires_on,
+      },
+      { token, user },
+    );
+  }
+  if (!isInviteLinkEmailAllowed(link, user.email)) {
+    return inviteLinkJoinPageResponse(
+      c,
+      { kind: "wrong_email", email: user.email },
+      { token, user },
+    );
+  }
+
+  try {
+    await runAuditedInviteLinkRedemption({
+      db,
+      organizationId: organization.id,
+      actorId: user.id,
+      inviteLinkId: link.id,
+      teamId: team?.id ?? null,
+      operation: async () => {
+        // One rule keeps the use count right: a redemption row, once written,
+        // is never deleted. The use is taken first and the row recorded
+        // second, so every row holds a counted use, and it keeps holding it
+        // when the join fails part-way. A person whose row is already
+        // recorded (a retry after a failed join, or a concurrent submit that
+        // got there first) takes no other use and only finishes the
+        // membership steps. So a failed join on a limited link keeps that use
+        // reserved for the person's retry; if they never retry, the use stays
+        // taken, which errs on the side of never exceeding max_uses.
+        const alreadyCounted = await hasInviteLinkRedemption(
+          db,
+          link.id,
+          user.id,
+        );
+        // True while this submit holds a use it took that no row stands for.
+        let consumed = false;
+        if (!alreadyCounted) {
+          consumed = await consumeInviteLinkUse(db, link.id, nowIso);
+          if (!consumed) throw new InviteLinkUnavailableError();
+        }
+        let redemption: "recorded" | "already_redeemed";
+        try {
+          redemption = await recordInviteLinkRedemption(db, {
+            link,
+            userId: user.id,
+            email: user.email,
+            nowIso,
+          });
+        } catch (error) {
+          // The insert reported a failure. Usually no row was written and the
+          // use this submit took has nothing standing for it, so give it back
+          // before the failure page offers a retry. D1 can also commit and then
+          // fail to answer, so re-read first: a row that did land keeps its use.
+          // If the re-read fails too, the use stays taken, which errs on the
+          // side of never exceeding max_uses.
+          if (consumed) {
+            consumed = false;
+            const rowLanded = await hasInviteLinkRedemption(
+              db,
+              link.id,
+              user.id,
+            ).catch(() => true);
+            if (!rowLanded) await decrementInviteLinkUse(db, link.id);
+          }
+          throw error;
+        }
+        if (redemption === "already_redeemed" && consumed) {
+          // A concurrent submit by the same person recorded the row first,
+          // and that row holds the counted use, so give this one back.
+          // Cleared first so a failed give-back is never repeated: a use left
+          // taken only closes the link sooner, while a second give-back could
+          // let one more person in.
+          consumed = false;
+          await decrementInviteLinkUse(db, link.id);
+        }
+        // A row seen above cannot vanish, so "recorded" always means this
+        // submit took the use that the new row holds.
+
+        let localMembershipId: string;
+        let workosMembershipId: string;
+        if (membershipBefore) {
+          localMembershipId = membershipBefore.id;
+          workosMembershipId = membershipBefore.id;
+        } else {
+          const workosMembership = await createWorkOSOrganizationMembership(
+            c.env,
+            {
+              organizationId: organization.id,
+              userId:
+                (await latestWorkOSUserIdForLocalUser(db, user.id)) || user.id,
+              roleSlug: "member",
+            },
+          );
+          await ensureOrganizationMembershipRecord(db, {
+            id: workosMembership.id,
+            organization_id: organization.id,
+            user_id: user.id,
+            role: "member",
+            created_on: timestamps.now(),
+          });
+          const recordedMembership = await getOrganizationMembership(
+            db,
+            organization.id,
+            user.id,
+          );
+          if (!recordedMembership) {
+            throw new Error("Organization membership was not recorded");
+          }
+          localMembershipId = recordedMembership.id;
+          workosMembershipId = workosMembership.id;
+        }
+
+        if (team) {
+          await createTeamMembership(db, team.id, user.id, localMembershipId);
+          await addWorkOSMembershipToTeam(c.env, {
+            organizationId: organization.id,
+            teamId: team.id,
+            organizationMembershipId: workosMembershipId,
+          });
+        }
+      },
+    });
+    return c.redirect(joinPath(token), 303);
+  } catch (error) {
+    if (error instanceof InviteLinkUnavailableError) {
+      // Another redemption, a revoke, or the expiry won the race for the last
+      // use, so this submit took none and wrote nothing.
+      const current = (await getInviteLinkById(db, link.id)) ?? link;
+      const currentStatus = inviteLinkStatus(current, timestamps.now());
+      return inviteLinkJoinPageResponse(
+        c,
+        {
+          kind: "inactive",
+          status: currentStatus === "active" ? "exhausted" : currentStatus,
+          organizationName: organization.name,
+          expiresOn: current.expires_on,
+        },
+        { token, user },
+      );
+    }
+
+    console.error(
+      JSON.stringify({
+        event: "invite_link.redeem",
+        outcome: "failed",
+        reason:
+          error instanceof Response ? `http_${error.status}` : "internal_error",
+      }),
+    );
+    // Nothing is undone here. The person's redemption row, whichever submit
+    // recorded it, keeps holding their counted use, so a retry finishes the
+    // join without taking another; a use taken without a row is only ever
+    // given back inside the operation, never here. A concurrent submit by the
+    // same person may have finished the join meanwhile.
+    try {
+      if (await hasJoinedInviteLinkTarget(db, target, user.id)) {
+        return c.redirect(joinPath(token), 303);
+      }
+    } catch {
+      console.error(
+        JSON.stringify({
+          event: "invite_link.redeem",
+          outcome: "recheck_failed",
+        }),
+      );
+    }
+    return inviteLinkJoinPageResponse(
+      c,
+      { kind: "failed", organizationName: organization.name },
+      { token, user },
+    );
+  }
+}
+
+app.get("/join/:token", async (c) => {
+  try {
+    const token = c.req.param("token");
+    const user = await getCurrentUser(c.req.raw, c.env);
+    const target = await loadInviteLinkJoinTarget(c.env.DB, token);
+    const page: InviteLinkJoinPage = target
+      ? await inviteLinkJoinPageForVisitor(c.env.DB, target, user)
+      : { kind: "invalid" };
+    return inviteLinkJoinPageResponse(c, page, { token, user });
+  } catch (error) {
+    if (isResponse(error)) return error;
+    console.error(
+      JSON.stringify({
+        event: "invite_link.page",
+        outcome: "failed",
+        reason: "internal_error",
+      }),
+    );
+    return c.text("Unable to open this invite link", 500);
+  }
+});
+
+app.post("/join/:token", async (c) => {
+  try {
+    const token = c.req.param("token");
+    const user = await getCurrentUser(c.req.raw, c.env);
+    if (!user) return c.redirect(inviteLinkLoginPath(token), 302);
+    const target = await loadInviteLinkJoinTarget(c.env.DB, token);
+    if (!target) {
+      return inviteLinkJoinPageResponse(
+        c,
+        { kind: "invalid" },
+        { token, user },
+      );
+    }
+    return await redeemInviteLink(c, target, user, token);
+  } catch (error) {
+    if (isResponse(error)) return error;
+    console.error(
+      JSON.stringify({
+        event: "invite_link.redeem",
+        outcome: "failed",
+        reason: "internal_error",
+      }),
+    );
+    return c.text("Unable to accept this invitation", 500);
+  }
+});
 
 /**
  * Create a new project (shiplet)

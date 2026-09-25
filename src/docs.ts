@@ -19,7 +19,7 @@ const DOCS_PUBLIC_CONTENT_SHA256: Record<string, string> = {
   "quickstart":
     "7fac82983b1114abc22bbab2132b1f32ffb18f4e3d2a586bc8c1702bf2c682e2",
   "access-control":
-    "2f643ec9eb0cdec1a026a9f806b9eb1a3a8a2337494b6e1631ed26a09aa90e79",
+    "79149325c91406a2390f14cd814e9a1eae1d3eac6010ac6181040518fa75967a",
   "publishing":
     "e5b55aef5d6d2177a884fe6ecd68f999a58c6630737b275c8e460d81ccb16a94",
   "extensions":
@@ -186,6 +186,10 @@ const DOCS_PAGES: DocsPage[] = [
 <h2>People and teams</h2>
 <p>Organizations contain members and teams. A Shiplet can also grant access to an exact invited email address. Invitations become effective for the matching signed-in identity.</p>
 <p>Open <strong>Account</strong> at <code>/account</code> to inspect or switch the signed-in identity. Open <strong>Workspace</strong> at <code>/workspace</code> to choose the active organization.</p>
+<h2>Invite links</h2>
+<p>Organization administrators create invite links in the <strong>Invite links</strong> section of <strong>Workspace</strong>. Each link targets the whole organization or exactly one team. It can allow a set number of uses or unlimited uses, expire after a number of days or never, and be reserved for specific email addresses. Administrators can copy the same link again later and revoke it at any time, and Shiplet records every link creation, join, and revocation in its audit history.</p>
+<p>A revoked, expired, or used-up link stops working immediately; ask an administrator for a new one. Anyone who has an unreserved link can sign in and join, so share it only where you would share membership.</p>
+<p>Opening a link shows the organization name, and the team name for a team link. Sign in if asked, then accept deliberately. Joining grants the member role, never administrator, and opening the link again with the same account does not take another use. A reserved link requires the signed-in email to match a listed address exactly, ignoring letter case; otherwise the page asks you to sign out and return with the listed email, or to switch accounts where account switching is enabled.</p>
 <h2>Agent access</h2>
 <p>Interactive MCP uses browser OAuth. A compatible external agent can use a claimed WorkOS <code>service_auth</code> registration when the environment has enabled it. CI and unattended jobs use organization API keys.</p>
 <p>A claimed registration retains the stable agent identity separately from the person who completed the claim. It is restricted to the exact organization in the access token, recognized scopes, and that person's current Shiplet membership and grants. Anonymous registrations and durable WorkOS agent API keys are not accepted in this release.</p>
