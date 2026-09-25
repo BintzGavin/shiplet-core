@@ -4254,7 +4254,7 @@ export const DashboardRuntimeScript = (nonce: KernelDocumentNonce) => `
       var replies = (item.replies || []).map(function(reply) {
         return "<div class=\\"feedback-reply\\">" + esc(reply.comment) + "</div>";
       }).join("");
-      var statusOptions = ["New", "In Progress", "Blocked", "Done", "Dropped"].map(function(status) {
+      var statusOptions = ["New", "In Progress", "Blocked", "Staging", "Done", "Dropped"].map(function(status) {
         return "<option value=\\"" + esc(status) + "\\"" + (item.status === status ? " selected" : "") + ">" + esc(status) + "</option>";
       }).join("");
       var element = item.selected_element && item.selected_element.selector ? item.selected_element.selector : item.pathname || "Page";
@@ -5509,7 +5509,7 @@ export function BuildGlobalFeedbackPage(options: {
       <form class="dashboard-actions" method="GET" action="/feedback">
         <select name="status" aria-label="Status filter">
           <option value="">Any status</option>
-          ${["New", "In Progress", "Blocked", "Done", "Dropped"]
+          ${["New", "In Progress", "Blocked", "Staging", "Done", "Dropped"]
             .map(
               (status) =>
                 `<option value="${escapeHtml(status)}">${escapeHtml(status)}</option>`,

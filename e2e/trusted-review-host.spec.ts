@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
 
-import { expect, test } from "@playwright/test";
+import { expect, test, type Response } from "@playwright/test";
 
 import {
   authHeaders,
@@ -13,6 +13,8 @@ import {
   publishStaticShiplet,
   testUser,
 } from "./helpers";
+
+const navigationR7EvidenceDir = "/private/tmp/shiplet-parity-navigation-r8-20260920";
 
 type PortableFile = {
   path: string;
@@ -167,7 +169,110 @@ Promise.all([
     },
   );
   expect(promoteResponse.ok(), await promoteResponse.text()).toBe(true);
-  return validation.validation.revisionId;
+  const currentLayerResponse = await request.get(
+    `/api/shiplets/${projectId}/review-layer`,
+    { headers },
+  );
+  expect(currentLayerResponse.status()).toBe(200);
+  const currentLayer = (await currentLayerResponse.json()) as {
+    version: string;
+    files: Array<{
+      path: string;
+      mediaType: string;
+      encoding: "utf8" | "base64";
+      content: string;
+    }>;
+  };
+  expect(currentLayer).toEqual({
+    version: expect.any(String),
+    files: [
+      {
+        path: "index.html",
+        mediaType: "text/html; charset=utf-8",
+        encoding: "base64",
+        content: expect.any(String),
+      },
+    ],
+  });
+  const previewResponse = await request.post(
+    `/api/shiplets/${projectId}/review-layer/previews`,
+    {
+      headers,
+      data: {
+        baseVersion: currentLayer.version,
+        changes: [
+          {
+            op: "put",
+            path: "index.html",
+            mediaType: "text/html; charset=utf-8",
+            encoding: "utf8",
+            content: widgetHtml,
+          },
+          {
+            op: "put",
+            path: "widget.js",
+            mediaType: "text/javascript; charset=utf-8",
+            encoding: "utf8",
+            content: widgetScript,
+          },
+        ],
+      },
+    },
+  );
+  expect(previewResponse.status(), await previewResponse.text()).toBe(201);
+  const preview = (await previewResponse.json()) as {
+    previewId: string;
+    baseVersion: string;
+  };
+  expect(preview).toMatchObject({
+    previewId: expect.any(String),
+    baseVersion: currentLayer.version,
+  });
+  expect(preview.previewId.length).toBeGreaterThan(0);
+  expect(
+    await (
+      await request.get(`/api/shiplets/${projectId}/review-layer`, { headers })
+    ).json(),
+  ).toEqual(currentLayer);
+  const applyResponse = await request.post(
+    `/api/shiplets/${projectId}/review-layer/previews/${preview.previewId}/apply`,
+    {
+      headers,
+      data: {
+        expectedVersion: currentLayer.version,
+        approval: true,
+      },
+    },
+  );
+  expect(applyResponse.status(), await applyResponse.text()).toBe(200);
+  const appliedLayerResponse = await request.get(
+    `/api/shiplets/${projectId}/review-layer`,
+    { headers },
+  );
+  expect(appliedLayerResponse.status()).toBe(200);
+  const appliedLayer = (await appliedLayerResponse.json()) as typeof currentLayer;
+  expect(appliedLayer).toEqual({
+    version: expect.any(String),
+    files: [
+      {
+        path: "index.html",
+        mediaType: "text/html; charset=utf-8",
+        encoding: "utf8",
+        content: widgetHtml,
+      },
+      {
+        path: "widget.js",
+        mediaType: "text/javascript; charset=utf-8",
+        encoding: "utf8",
+        content: widgetScript,
+      },
+    ],
+  });
+  expect(appliedLayer.version).not.toBe(currentLayer.version);
+  return {
+    revisionId: validation.validation.revisionId,
+    reviewLayerVersion: appliedLayer.version,
+  };
 }
 
 test.describe("trusted review host", () => {
@@ -237,11 +342,10 @@ test.describe("trusted review host", () => {
 
     await page.goto(`/${subdomain}`, { waitUntil: "domcontentloaded" });
     const artifact = page.frameLocator("[data-shiplet-artifact-frame]");
-    const openFile = artifact.getByRole("link", { name: "Open file" }).first();
-    await expect(openFile).not.toHaveAttribute("target", "_blank");
-    await page.getByRole("button", { name: "Close review panel" }).click();
-    await openFile.click();
+    await expect(page.locator("[data-shiplet-artifact-frame]")).toHaveCount(1);
     await expect(artifact.getByText(content)).toBeVisible();
+    await expect(artifact.getByRole("link", { name: "Open file" })).toHaveCount(0);
+    await expect(page.locator("[data-shiplet-artifact-frame]")).toHaveCount(1);
   });
 
   test("preserves exact tenant provenance without leaking its review path to confirmation", async ({
@@ -297,6 +401,19 @@ test.describe("trusted review host", () => {
   }) => {
     const user = testUser("trusted-capture");
     const errors = collectPageErrors(page);
+    const requestFailures: string[] = [];
+    const operationReadResponses: Array<{
+      response: Response;
+      requestId: string;
+      afterConfirmation: boolean;
+    }> = [];
+    let confirmationCompleted = false;
+    let confirmationRequestId = "";
+    page.on("requestfailed", (failedRequest) => {
+      requestFailures.push(
+        `${failedRequest.method()} ${failedRequest.url()} ${failedRequest.failure()?.errorText || "unknown"}`,
+      );
+    });
     const organization = await createOrganization(request, user);
     const published = await publishStaticShiplet(
       request,
@@ -312,6 +429,27 @@ test.describe("trusted review host", () => {
 
     await page.goto(`/${published.project.subdomain}`, {
       waitUntil: "domcontentloaded",
+    });
+    const operationPathPrefix = `/${published.project.subdomain}/__shiplet/review/operations/`;
+    page.on("response", (response) => {
+      if (response.request().method() !== "GET") return;
+      const url = new URL(response.url());
+      if (!url.pathname.startsWith(operationPathPrefix)) return;
+      const requestId = decodeURIComponent(
+        url.pathname.slice(operationPathPrefix.length),
+      );
+      if (!requestId || requestId.includes("/")) return;
+      operationReadResponses.push({
+        response,
+        requestId,
+        afterConfirmation: confirmationCompleted,
+      });
+    });
+    page.context().on("request", (observedRequest) => {
+      const url = new URL(observedRequest.url());
+      if (observedRequest.method() !== "POST" || url.pathname !== "/review/confirm") return;
+      const body = new URLSearchParams(observedRequest.postData() || "");
+      confirmationRequestId = body.get("request_id") || "";
     });
     await expect(
       page.locator("[data-shiplet-trusted-review-host='v1']"),
@@ -332,7 +470,7 @@ test.describe("trusted review host", () => {
         name: "Show annotation details and target properties",
       })
       .click();
-    await page.getByRole("button", { name: "Markup screenshot" }).click();
+    await page.getByRole("button", { name: "Draw on screenshot" }).click();
     const annotationCanvas = page.locator("[data-shiplet-annotation-canvas]");
     await expect(annotationCanvas).toBeVisible();
     const annotationBounds = await annotationCanvas.boundingBox();
@@ -416,13 +554,52 @@ test.describe("trusted review host", () => {
     );
     await page.locator("#shiplet-review-comment").fill(comment);
 
+    const operation404Promise = page.waitForResponse(
+      (response) =>
+        response.request().method() === "GET" &&
+        response.status() === 404 &&
+        new URL(response.url()).pathname.startsWith(operationPathPrefix),
+      { timeout: 8_000 },
+    );
     const popupPromise = page.waitForEvent("popup");
     await page
       .getByRole("button", { name: "Send annotation", exact: true })
       .click();
-    await expect(annotationCanvas).toHaveCount(0);
     const confirmation = await popupPromise;
+    const operation404 = await operation404Promise;
     await confirmation.waitForLoadState("domcontentloaded");
+    await expect(annotationCanvas).toBeVisible();
+    await expect(page.locator("#shiplet-review-comment")).toHaveValue(comment);
+    await expect(
+      page.getByRole("button", { name: "Send annotation", exact: true }),
+    ).toBeDisabled();
+    await expect(page.locator(".shiplet-review-composer-message")).toContainText(
+      "Submission status is unknown.",
+    );
+    await expect(page.locator(".shiplet-review-composer-message")).not.toContainText(
+      "Feedback saved.",
+    );
+    expect(confirmationRequestId).toMatch(/^request_[A-Za-z0-9._:-]+$/);
+    expect(operation404.status()).toBe(404);
+    const operation404Url = new URL(operation404.url());
+    const operation404RequestId = decodeURIComponent(
+      operation404Url.pathname.slice(operationPathPrefix.length),
+    );
+    expect(operation404Url.pathname).toBe(
+      `${operationPathPrefix}${encodeURIComponent(operation404RequestId)}`,
+    );
+    expect(operation404RequestId).toBe(confirmationRequestId);
+    expect(operation404Url.searchParams.get("effect")).toBe("feedback.create");
+    expect(operation404Url.searchParams.get("feedback_id")).toBeNull();
+    expect(await operation404.headerValue("cache-control")).toBe("private, no-store");
+    const boundRevisionId = await page.locator("html").getAttribute("data-revision-id");
+    const boundPageUrl = await page.locator("html").getAttribute("data-review-page-url");
+    expect(operation404Url.searchParams.get("revision_id")).toBe(boundRevisionId);
+    expect(operation404Url.searchParams.get("page_url")).toBe(boundPageUrl);
+    await page.screenshot({
+      path: `${navigationR7EvidenceDir}/backend-05-retained-unknown.png`,
+      fullPage: true,
+    });
     await expect(
       confirmation.getByRole("heading", { name: "Confirm feedback" }),
     ).toBeVisible();
@@ -433,11 +610,32 @@ test.describe("trusted review host", () => {
     await expect(
       confirmation.getByRole("heading", { name: "Feedback sent" }),
     ).toBeVisible();
+    confirmationCompleted = true;
+    await expect
+      .poll(() =>
+        operationReadResponses.filter((entry) => entry.response.status() === 404),
+      )
+      .toHaveLength(1);
+    const operation404Entries = operationReadResponses.filter(
+      (entry) => entry.response.status() === 404,
+    );
+    expect(operation404Entries).toHaveLength(1);
+    expect(operation404Entries[0].requestId).toBe(confirmationRequestId);
+    expect(operation404Entries[0].afterConfirmation).toBe(false);
 
+    await page
+      .getByRole("button", { name: "Cancel annotation mode", exact: true })
+      .click();
+    await expect(page.locator("#shiplet-annotation-composer")).toBeHidden();
+    await expect(page.locator(".shiplet-review-comments-launcher")).toBeVisible();
     await page.locator(".shiplet-review-comments-launcher").click();
     await page.getByLabel("Review options").click();
     await page.getByRole("button", { name: "Refresh" }).click();
     await expect(page.locator(".shiplet-review-list")).toContainText(comment);
+    await page.screenshot({
+      path: `${navigationR7EvidenceDir}/backend-05-saved.png`,
+      fullPage: true,
+    });
 
     const feedbackResponse = await request.get(
       `/api/projects/${encodeURIComponent(published.project.id)}/review-feedback`,
@@ -489,13 +687,28 @@ test.describe("trusted review host", () => {
       return count;
     }, saved!.screenshot_url!);
     expect(markupPixels).toBeGreaterThan(100);
-    await expectNoPageErrors(errors);
+    const generic404ConsoleErrors = errors.filter((message) =>
+      /^Failed to load resource: the server responded with a status of 404(?: \([^)]*\))?$/.test(
+        message,
+      ),
+    );
+    expect(generic404ConsoleErrors).toHaveLength(1);
+    expect(
+      errors.filter(
+        (message) =>
+          !message.includes("favicon") &&
+          !/^Failed to load resource: the server responded with a status of 404(?: \([^)]*\))?$/.test(
+            message,
+          ),
+      ),
+    ).toEqual([]);
+    expect(requestFailures).toEqual([]);
   });
 
-  test("terminates a stalled widget turn while trusted review controls remain responsive", async ({
-    page,
-    request,
-  }) => {
+  test("terminates a stalled widget turn while trusted review controls remain responsive", async (
+    { page, request },
+    testInfo,
+  ) => {
     const owner = testUser("trusted-widget-timeout");
     const errors = collectPageErrors(page);
     const organization = await createOrganization(request, owner);
@@ -523,9 +736,17 @@ test.describe("trusted review host", () => {
       waitUntil: "domcontentloaded",
     });
 
+    const commentsLauncher = page.locator(".shiplet-review-comments-launcher");
+    await expect(commentsLauncher).toBeVisible();
+    await commentsLauncher.click();
+    await expect(page.locator("#shiplet-kernel-review-panel")).toBeVisible();
+    const widgetFrame = page.locator("[data-shiplet-widget-frame]");
+    await expect(widgetFrame).toBeVisible();
     const widget = page.frameLocator("[data-shiplet-widget-frame]");
     await expect(widget.locator("#state")).toHaveText("Worker ready");
-    await widget.getByRole("button", { name: "Lock widget" }).click();
+    const lockWidget = widget.getByRole("button", { name: "Lock widget" });
+    await expect(lockWidget).toBeVisible();
+    await lockWidget.click();
     await expect(widget.getByRole("status")).toHaveText(
       "Custom widget exceeded its execution limit.",
       { timeout: 5_000 },
@@ -535,10 +756,178 @@ test.describe("trusted review host", () => {
     await restart.click();
     await expect(widget.locator("#state")).toHaveText("Worker ready");
     await expect(restart).toBeHidden();
-    await page.getByRole("button", { name: "Refresh" }).click();
-    await expect(page.locator(".shiplet-review-status")).toContainText(
-      /No comments yet|Review loaded/,
+    const reviewOptions = page.locator("summary[aria-label='Review options']");
+    await expect(reviewOptions).toBeVisible();
+    await reviewOptions.click();
+    await expect(reviewOptions.locator("xpath=..")).toHaveAttribute(
+      "open",
+      "",
     );
+    const refresh = page.locator("[data-shiplet-review-refresh='v1']");
+    await expect(refresh).toBeVisible();
+    await expect(refresh).toBeEnabled();
+    const refreshPath = `/${published.project.subdomain}/__shiplet/review/feedback`;
+    const refreshRequests = new Map<ReturnType<Response["request"]>, number>();
+    const refreshResponses: Array<Promise<{
+      offsetMs: number;
+      method: string;
+      pathnameClass: "trusted-review-feedback";
+      status: number;
+      exactPayloadKeys: boolean;
+      feedbackIsArray: boolean;
+      nextCursorIsBounded: boolean;
+      currentPage: boolean;
+      openState: boolean;
+      boundedLimit: boolean;
+      defaultRevisionScope: boolean;
+    }>> = [];
+    const reviewPageUrl = await page
+      .locator("html")
+      .getAttribute("data-review-page-url");
+    const isRefreshResponse = (response: Response) => {
+      const url = new URL(response.url());
+      return (
+        refreshRequests.has(response.request()) &&
+        response.request().method() === "GET" &&
+        url.pathname === refreshPath
+      );
+    };
+    let observationStartedAt = 0;
+    const recordRefreshRequest = (request: ReturnType<Response["request"]>) => {
+      const url = new URL(request.url());
+      if (
+        observationStartedAt > 0 &&
+        request.method() === "GET" &&
+        url.pathname === refreshPath
+      ) {
+        refreshRequests.set(
+          request,
+          Math.round(performance.now() - observationStartedAt),
+        );
+      }
+    };
+    let reportStabilityViolation: (() => void) | undefined;
+    const stabilityViolation = new Promise<void>((resolve) => {
+      reportStabilityViolation = resolve;
+    });
+    const recordRefreshResponse = (response: Response) => {
+      if (!isRefreshResponse(response)) return;
+      const recorded = (async () => {
+        const url = new URL(response.url());
+        let payload: { feedback?: unknown; nextCursor?: unknown } = {};
+        try {
+          payload = (await response.json()) as typeof payload;
+        } catch {
+          // The booleans below retain a body-free malformed-contract record.
+        }
+        const keys = Object.keys(payload).sort();
+        const entry = {
+          offsetMs: refreshRequests.get(response.request())!,
+          method: response.request().method(),
+          pathnameClass: "trusted-review-feedback" as const,
+          status: response.status(),
+          exactPayloadKeys:
+            keys.length === 2 &&
+            keys[0] === "feedback" &&
+            keys[1] === "nextCursor",
+          feedbackIsArray: Array.isArray(payload.feedback),
+          nextCursorIsBounded:
+            payload.nextCursor === null ||
+            (typeof payload.nextCursor === "string" &&
+              payload.nextCursor.length <= 2_048),
+          currentPage: url.searchParams.get("pageUrl") === reviewPageUrl,
+          openState: url.searchParams.get("state") === "open",
+          boundedLimit: url.searchParams.get("limit") === "100",
+          defaultRevisionScope: url.searchParams.get("revisionId") === null,
+        };
+        if (
+          entry.status !== 200 ||
+          !entry.exactPayloadKeys ||
+          !entry.feedbackIsArray ||
+          !entry.nextCursorIsBounded ||
+          !entry.currentPage ||
+          !entry.openState ||
+          !entry.boundedLimit ||
+          !entry.defaultRevisionScope
+        ) {
+          reportStabilityViolation?.();
+        }
+        return entry;
+      })();
+      refreshResponses.push(recorded);
+    };
+    page.on("request", recordRefreshRequest);
+    page.on("response", recordRefreshResponse);
+    try {
+      observationStartedAt = performance.now();
+      refreshRequests.clear();
+      const refreshResponsePromise = page.waitForResponse(isRefreshResponse, {
+        timeout: 8_000,
+      });
+      await refresh.click();
+      const refreshResponse = await refreshResponsePromise;
+      expect(refreshResponses).not.toHaveLength(0);
+      const firstResponse = await refreshResponses[0];
+      expect(refreshResponse.status()).toBe(200);
+      expect(firstResponse).toMatchObject({
+        method: "GET",
+        pathnameClass: "trusted-review-feedback",
+        status: 200,
+        exactPayloadKeys: true,
+        feedbackIsArray: true,
+        nextCursorIsBounded: true,
+        currentPage: true,
+        openState: true,
+        boundedLimit: true,
+        defaultRevisionScope: true,
+      });
+      const stabilityResult = await Promise.race([
+        page.waitForTimeout(12_000).then(() => "stable" as const),
+        stabilityViolation.then(() => "violation" as const),
+      ]);
+      expect(stabilityResult).toBe("stable");
+    } finally {
+      page.off("response", recordRefreshResponse);
+      page.off("request", recordRefreshRequest);
+    }
+    const refreshLedger = await Promise.all(refreshResponses);
+    expect(refreshLedger.length).toBeGreaterThanOrEqual(3);
+    expect(refreshLedger).toEqual(
+      refreshLedger.map((entry) => ({
+        ...entry,
+        status: 200,
+        exactPayloadKeys: true,
+        feedbackIsArray: true,
+        nextCursorIsBounded: true,
+        currentPage: true,
+        openState: true,
+        boundedLimit: true,
+        defaultRevisionScope: true,
+      })),
+    );
+    const readyStatus = page.locator(
+      '#shiplet-kernel-review-panel:not([hidden]) [data-shiplet-kernel-review-controls="v1"] > p.shiplet-review-status[role="status"]',
+    );
+    await expect(readyStatus).toHaveCount(1);
+    await expect(readyStatus).toBeVisible();
+    await expect(readyStatus).toContainText(/No comments yet|Review loaded/);
+    await expect(
+      page.locator("[data-shiplet-review-stale='v1']"),
+    ).toBeHidden();
+    await expect(page.locator("#shiplet-kernel-review-panel")).toBeVisible();
+    await expect(reviewOptions).toBeVisible();
+    await expect(reviewOptions.locator("xpath=..")).toHaveAttribute("open", "");
+    await expect(refresh).toBeVisible();
+    await expect(refresh).toBeEnabled();
+    await expect(widget.locator("#state")).toHaveText("Worker ready");
+    await testInfo.attach("backend06-facade-ledger", {
+      body: Buffer.from(JSON.stringify(refreshLedger, null, 2)),
+      contentType: "application/json",
+    });
+    await page.screenshot({
+      path: "/private/tmp/shiplet-parity-tail-t2-recovery-r3c-20260921/media/backend06-facade-stability.png",
+      fullPage: true,
+    });
     await expectNoPageErrors(errors);
   });
 });
@@ -640,33 +1029,60 @@ test.describe("trusted review collaboration controls", () => {
       waitUntil: "domcontentloaded",
     });
 
+    await page.locator(".shiplet-review-comments-launcher").click();
     await expect(page.locator(".shiplet-review-list")).toContainText(comment);
+    const thread = page.locator(
+      `[data-shiplet-review-thread="${created.feedback.id}"]`,
+    );
+    await thread.locator(".shiplet-review-thread-summary").click();
+    const statusDisclosure = thread.locator(
+      `summary[aria-label="More status options for ${created.feedback.ticket_label}"]`,
+    );
+    await expect(statusDisclosure).toBeVisible();
+    await statusDisclosure.click();
     const status = page.getByLabel(`Status ${created.feedback.ticket_label}`);
-    const observedPosts: string[] = [];
+    await expect(status).toBeVisible();
+    await expect(status).toHaveValue("New");
+    const statusPath = `/${encodeURIComponent(published.project.subdomain)}/__shiplet/review/feedback/${encodeURIComponent(created.feedback.id)}/status`;
+    const observedStatusRequests: Array<{ path: string; body: string | null }> = [];
     page.on("request", (request) => {
-      if (request.method() === "POST")
-        observedPosts.push(new URL(request.url()).pathname);
+      if (request.method() !== "POST") return;
+      const path = new URL(request.url()).pathname;
+      if (path === statusPath) {
+        observedStatusRequests.push({ path, body: request.postData() });
+      }
     });
-    await status.selectOption("In Progress");
-    const statusButton = page.getByRole("button", {
-      name: `Update status for ${created.feedback.ticket_label}`,
+    await status.evaluate((select) => {
+      select.addEventListener("change", (event) => {
+        document.documentElement.setAttribute(
+          "data-playwright-status-change-trusted",
+          String(event.isTrusted),
+        );
+      }, { once: true });
     });
-    await statusButton.evaluate((button) => {
-      button.addEventListener("click", (event) => {
-        button.setAttribute("data-playwright-trusted", String(event.isTrusted));
-      });
-    });
-    await statusButton.click();
-    await expect(statusButton).toHaveAttribute(
-      "data-playwright-trusted",
+    await status.click();
+    await page.keyboard.press("ArrowDown");
+    await page.keyboard.press("Enter");
+    await expect(page.locator("html")).toHaveAttribute(
+      "data-playwright-status-change-trusted",
       "true",
     );
     await expect
-      .poll(() => observedPosts, { timeout: 2_000 })
-      .toContain(
-        `/${encodeURIComponent(published.project.subdomain)}/__shiplet/review/feedback/${encodeURIComponent(created.feedback.id)}/status`,
-      );
+      .poll(
+        () => observedStatusRequests.map((request) => request.path),
+        { timeout: 2_000 },
+      )
+      .toContain(statusPath);
+    expect(observedStatusRequests).toHaveLength(1);
+    expect(observedStatusRequests[0]).toEqual({
+      path: statusPath,
+      body: JSON.stringify({ status: "In Progress" }),
+    });
     await expect(status).toHaveValue("In Progress");
+    await page.screenshot({
+      path: `${navigationR7EvidenceDir}/backend-08-native-status.png`,
+      fullPage: true,
+    });
     await page
       .getByLabel(`Reply text for ${created.feedback.ticket_label}`)
       .fill(reply);
@@ -868,7 +1284,7 @@ test.describe("trusted review collaboration controls", () => {
       },
     );
     const comment = `Custom widget proposal ${Date.now()}`;
-    const revisionId = await promoteCustomWidget(
+    const { revisionId, reviewLayerVersion } = await promoteCustomWidget(
       request,
       owner,
       published.project.id,
@@ -879,6 +1295,12 @@ test.describe("trusted review collaboration controls", () => {
       waitUntil: "domcontentloaded",
     });
 
+    const commentsLauncher = page.locator(".shiplet-review-comments-launcher");
+    await expect(commentsLauncher).toBeVisible();
+    await commentsLauncher.click();
+    await expect(page.locator("#shiplet-kernel-review-panel")).toBeVisible();
+    const widgetFrame = page.locator("[data-shiplet-widget-frame]");
+    await expect(widgetFrame).toBeVisible();
     const widget = page.frameLocator("[data-shiplet-widget-frame]");
     const widgetSrc = await page
       .locator("[data-shiplet-widget-frame]")
@@ -891,11 +1313,39 @@ test.describe("trusted review collaboration controls", () => {
     const widgetScriptResponse = await request.get(widgetScriptUrl.toString(), {
       headers: { ...authHeaders(owner), Origin: "http://localhost:8787" },
     });
-    expect(widgetScriptResponse.ok(), await widgetScriptResponse.text()).toBe(
-      true,
-    );
+    expect(widgetScriptResponse.status()).toBe(200);
     expect(widgetScriptResponse.headers()["content-type"]).toContain(
       "text/javascript",
+    );
+    expect(widgetScriptResponse.headers()["x-shiplet-revision"]).toBe(
+      revisionId,
+    );
+    expect(
+      widgetScriptResponse.headers()["x-shiplet-review-layer-version"],
+    ).toBe(reviewLayerVersion);
+    expect(widgetScriptResponse.headers()["cache-control"]).toBe(
+      "private, no-store, no-transform",
+    );
+    expect(widgetScriptResponse.headers()["x-content-type-options"]).toBe(
+      "nosniff",
+    );
+    expect(widgetScriptResponse.headers()["referrer-policy"]).toBe(
+      "no-referrer",
+    );
+    expect(widgetScriptResponse.headers()["cross-origin-opener-policy"]).toBe(
+      "same-origin",
+    );
+    expect(widgetScriptResponse.headers()["permissions-policy"]).toBe(
+      "camera=(), microphone=(), geolocation=(), payment=(), usb=(), serial=(), bluetooth=()",
+    );
+    const widgetScriptCsp =
+      widgetScriptResponse.headers()["content-security-policy"] || "";
+    expect(widgetScriptCsp).toContain("sandbox");
+    expect(widgetScriptCsp).toContain("connect-src 'none'");
+    expect(widgetScriptCsp).toContain("form-action 'none'");
+    expect(widgetScriptCsp).toContain("base-uri 'none'");
+    expect(widgetScriptCsp).toContain(
+      `frame-ancestors ${new URL(page.url()).origin}`,
     );
     await page.waitForTimeout(1_000);
     expect({
@@ -913,15 +1363,16 @@ test.describe("trusted review collaboration controls", () => {
     await expect(widget.locator("meta[http-equiv='refresh']")).toHaveCount(0);
     await expect(widget.locator("iframe")).toHaveCount(0);
     await expect(widget.locator("form")).not.toHaveAttribute("action");
-    await widget
-      .getByRole("button", { name: "Request widget feedback" })
-      .click();
+    const requestWidgetFeedback = widget.getByRole("button", {
+      name: "Request widget feedback",
+    });
+    await expect(requestWidgetFeedback).toBeVisible();
+    await requestWidgetFeedback.click();
     const confirmationPanel = page.locator(
       "[data-shiplet-widget-confirmation='v1']",
     );
     await expect(confirmationPanel).toContainText(comment);
 
-    const widgetFrame = page.locator("[data-shiplet-widget-frame]");
     await widgetFrame.evaluate((frame) => {
       (frame as HTMLIFrameElement).src = "about:blank";
     });
@@ -932,9 +1383,8 @@ test.describe("trusted review collaboration controls", () => {
     await expect(widget.locator("#state")).toHaveText(
       "Connected without credentials",
     );
-    await widget
-      .getByRole("button", { name: "Request widget feedback" })
-      .click();
+    await expect(requestWidgetFeedback).toBeVisible();
+    await requestWidgetFeedback.click();
     await expect(confirmationPanel).toContainText(comment);
 
     const beforeApproval = await request.get(
@@ -980,6 +1430,18 @@ test.describe("trusted review collaboration controls", () => {
     }
     await page.getByRole("button", { name: "Refresh" }).click();
     await expect(page.locator(".shiplet-review-list")).toContainText(comment);
+    const afterApproval = await request.get(
+      `/api/projects/${encodeURIComponent(published.project.id)}/review-feedback`,
+      { headers: { ...authHeaders(owner), Origin: "http://localhost:8787" } },
+    );
+    expect(afterApproval.ok()).toBe(true);
+    expect(
+      (
+        (await afterApproval.json()) as {
+          feedback: Array<{ comment: string }>;
+        }
+      ).feedback.filter((item) => item.comment === comment),
+    ).toHaveLength(1);
     await expect(page.locator("html")).toHaveAttribute(
       "data-revision-id",
       revisionId,

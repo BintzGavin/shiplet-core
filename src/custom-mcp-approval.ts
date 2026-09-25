@@ -1365,6 +1365,7 @@ function safeChangeSummary(capability: string, input: JsonSnapshot): string {
       (status === "New" ||
         status === "In Progress" ||
         status === "Blocked" ||
+        status === "Staging" ||
         status === "Done" ||
         status === "Dropped")
     ) {

@@ -52,7 +52,8 @@ element in the browser and remove it during cleanup. Reuse an existing loader.
 If a CSP exists, add the narrowly scoped script-src, style-src, and frame-src permissions
 from the install guide. Never replace the site's CSP wholesale.
 
-Verify: open feedback, sign in, select an element, submit and confirm a harmless
+Verify: choose Annotate, sign in before selecting an element, draw on its screenshot,
+submit and confirm a harmless
 test comment, check it from another authorized reviewer, navigate to another
 route, test a narrow viewport, and verify removing the element removes controls.
 Register each additional origin through Shiplet. Report what was tested.
@@ -92,16 +93,21 @@ SPA history changes are detected without replacing the host's history methods.
 
 ## Review together
 
-Choose **Feedback**, then **Annotate**, and select an element on the original
-page. Add the comment and confirm it in Shiplet's secure window. Other authorized
+Choose **Annotate** directly on the page. If your site review session is missing
+or expired, a dedicated Shiplet popup signs you in before element selection or
+writing a comment. An existing Shiplet login is reused automatically; only an
+explicit account switch asks you to sign in again. Select an element, then use
+**Draw** beside the comment field to draw on its screenshot, or open Details for
+more capture options. Add the comment and confirm it in Shiplet's secure window. Other authorized
 reviewers receive the shared comments, and the same records appear in Shiplet's
 Feedback view and its documented REST and Code Mode MCP interfaces. Click a
 numbered pin to open its thread. Reply, resolve, and reopen from the widget;
 confirm each change in the secure Shiplet window. Shared threads refresh every
 five seconds while the widget is visible.
 
-The site does not receive reviewer credentials. When third-party cookies are
-blocked, sign-in uses a secure Shiplet popup and a single-use handoff directly
+The site does not receive reviewer credentials. Browsers isolate Shiplet login
+cookies from other websites. The site review session is reused across navigation;
+establishing it uses a secure Shiplet popup and a single-use handoff directly
 to Shiplet's embedded frame. Allow that popup when prompted. A browser that
 blocks all embedded storage can still prevent review; use a supported browser
 or the hosted review flow.

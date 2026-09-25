@@ -104,6 +104,7 @@ async function fixture() {
     expiresOn: session.expiresOn,
   }).split(";", 1)[0];
   return {
+    organization,
     project,
     user,
     installationId,
@@ -141,6 +142,10 @@ describe("trusted embedded review confirmation", () => {
       "frame-ancestors 'none'",
     );
     const intentHtml = await intentResponse.text();
+    expect(intentHtml).toContain('data-shiplet-access-page="v1"');
+    const styleNonce = intentHtml.match(/<style nonce="([^"]+)">/)?.[1];
+    expect(styleNonce).toBeTruthy();
+    expect(intentResponse.headers.get("content-security-policy")).toContain(`style-src 'nonce-${styleNonce}'`);
     expect(intentHtml).toContain('data-shiplet-confirmation="v1"');
     expect(intentHtml).toContain("Confirm this bounded review event");
     expect(intentHtml).not.toContain("operation-receipt");
@@ -176,6 +181,7 @@ describe("trusted embedded review confirmation", () => {
     });
     expect(completed.status).toBe(200);
     const completedHtml = await completed.text();
+    expect(completedHtml).toContain('data-shiplet-access-page="v1"');
     expect(completedHtml).toContain('data-shiplet-confirmation="complete"');
     expect(completedHtml).not.toContain("operation-receipt");
 
@@ -221,7 +227,8 @@ describe("trusted embedded review confirmation", () => {
         approval: "confirm",
       }),
     });
-    expect(replay.status).toBe(409);
+    expect(replay.status).toBe(200);
+    expect(await replay.text()).toContain('data-shiplet-confirmation="complete"');
     const saved = await (env as Env).DB.prepare(
       "SELECT id FROM review_feedback WHERE project_id = ? AND client_feedback_id = ?",
     )
@@ -252,7 +259,48 @@ describe("trusted embedded review confirmation", () => {
     expect((await prepare({ action: "status", value: "invalid" })).status).toBe(
       400,
     );
-    const replyIntent = await prepare();
+    const stagingIntent = await prepare({ action: "status", value: "Staging" });
+    expect(stagingIntent.status).toBe(200);
+    const stagingIntentId = (await stagingIntent.text()).match(
+      /name="intent_id" value="([^"]+)"/,
+    )![1];
+    const stagingOutsider = await request("/embed/review/confirm/complete", {
+      method: "POST",
+      headers: {
+        Origin: "http://localhost",
+        "Content-Type": "application/x-www-form-urlencoded",
+        "x-shiplet-user-id": "user_embed_confirmation_outsider",
+        "x-shiplet-user-email": "embed-confirmation-outsider@example.com",
+      },
+      body: new URLSearchParams({
+        intent_id: stagingIntentId,
+        approval: "confirm",
+      }),
+    });
+    expect(stagingOutsider.status).toBe(403);
+    const stagingComplete = await request("/embed/review/confirm/complete", {
+      method: "POST",
+      headers: { ...OWNER, Origin: "http://localhost" },
+      body: new URLSearchParams({
+        intent_id: stagingIntentId,
+        approval: "confirm",
+      }),
+    });
+    expect(stagingComplete.status).toBe(200);
+    expect(
+      (
+        await (env as Env).DB.prepare(
+          "SELECT status FROM review_feedback WHERE id = ? AND project_id = ?",
+        )
+          .bind(saved!.id, project.id)
+          .first<{ status: string }>()
+      )?.status,
+    ).toBe("Staging");
+    const replyRequestId = `request_${crypto.randomUUID()}`;
+    const replyIntent = await prepare({
+      request_id: replyRequestId,
+      mentions_json: JSON.stringify([{ userId: user.id }]),
+    });
     expect(replyIntent.status).toBe(200);
     const replyIntentId = (await replyIntent.text()).match(
       /name="intent_id" value="([^"]+)"/,
@@ -267,7 +315,7 @@ describe("trusted embedded review confirmation", () => {
         }),
       });
     expect((await confirmReply()).status).toBe(200);
-    expect((await confirmReply()).status).toBe(409);
+    expect((await confirmReply()).status).toBe(200);
     expect(
       (
         await (env as Env).DB.prepare(
@@ -277,6 +325,34 @@ describe("trusted embedded review confirmation", () => {
           .first<{ count: number }>()
       )?.count,
     ).toBe(1);
+    expect(
+      (
+        await (env as Env).DB.prepare(
+          `SELECT COUNT(*) AS count FROM review_feedback_mentions
+           WHERE feedback_id = ? AND mentioned_user_id = ?`,
+        )
+          .bind(saved!.id, user.id)
+          .first<{ count: number }>()
+      )?.count,
+    ).toBe(1);
+    const replyOutcome = await request(
+      `/embed/review/operations/${replyRequestId}?${new URLSearchParams({
+        installation_id: installationId,
+        page_url: pageUrl,
+        effect: "feedback.reply",
+        feedback_id: saved!.id,
+      })}`,
+      { headers: { Cookie: cookie } },
+    );
+    expect(replyOutcome.status).toBe(200);
+    expect(await replyOutcome.json()).toMatchObject({
+      operation: {
+        requestId: replyRequestId,
+        effect: "feedback.reply",
+        state: "completed",
+        result: { feedbackId: saved!.id, replyId: expect.any(String) },
+      },
+    });
     const revokedIntent = await prepare({ action: "status", value: "Done" });
     const revokedId = (await revokedIntent.text()).match(
       /name="intent_id" value="([^"]+)"/,
@@ -366,5 +442,337 @@ describe("trusted embedded review confirmation", () => {
       },
     );
     expect(response.status).toBe(403);
+  });
+
+  it("preflights embedded mentions, rechecks membership, and requires outcome targets", async () => {
+    const {
+      organization,
+      project,
+      user,
+      installationId,
+      pageUrl,
+      cookie,
+      revisionId,
+    } = await fixture();
+    const feedbackResponse = await request(
+      `/api/projects/${project.id}/review-feedback`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json", ...OWNER },
+        body: JSON.stringify({
+          comment: "Embedded mention target",
+          pageUrl,
+          clientFeedbackId: `client-${crypto.randomUUID()}`,
+        }),
+      },
+    );
+    const { feedback } = (await feedbackResponse.json()) as {
+      feedback: { id: string };
+    };
+    const outsider = {
+      "x-shiplet-user-id": `user_embed_outsider_${crypto.randomUUID()}`,
+      "x-shiplet-user-email": `embed-outsider-${crypto.randomUUID()}@example.com`,
+    };
+    const member = {
+      "x-shiplet-user-id": `user_embed_member_${crypto.randomUUID()}`,
+      "x-shiplet-user-email": `embed-member-${crypto.randomUUID()}@example.com`,
+    };
+    for (const identity of [outsider, member]) {
+      expect(
+        (
+          await request("/api/organizations", {
+            method: "POST",
+            headers: { "Content-Type": "application/json", ...identity },
+            body: JSON.stringify({ name: `Embed identity ${crypto.randomUUID()}` }),
+          })
+        ).status,
+      ).toBe(201);
+    }
+    const membershipId = `membership_${crypto.randomUUID()}`;
+    const insertMember = () =>
+      (env as Env).DB.prepare(
+        `INSERT INTO organization_memberships
+         (id, organization_id, user_id, role, created_on)
+         VALUES (?, ?, ?, 'member', ?)`,
+      )
+        .bind(
+          membershipId,
+          organization.id,
+          member["x-shiplet-user-id"],
+          new Date().toISOString(),
+        )
+        .run();
+    await insertMember();
+
+    const topLevelRequestId = `request_${crypto.randomUUID()}`;
+    const topLevel = (mentions: Array<{ userId: string }>) =>
+      request("/embed/review/confirm", {
+        method: "POST",
+        headers: { ...OWNER, Origin: "http://localhost" },
+        body: new URLSearchParams({
+          installation_id: installationId,
+          shiplet_id: project.id,
+          revision_id: revisionId,
+          page_url: pageUrl,
+          request_id: topLevelRequestId,
+          operation: "feedback.create",
+          comment: "Embedded top-level mention",
+          client_feedback_id: `client-${crypto.randomUUID()}`,
+          mentions_json: JSON.stringify(mentions),
+        }),
+      });
+    expect(
+      (
+        await topLevel([
+          { userId: member["x-shiplet-user-id"] },
+          { userId: outsider["x-shiplet-user-id"] },
+        ])
+      ).status,
+    ).toBe(400);
+    expect(
+      (
+        await (env as Env).DB.prepare(
+          "SELECT COUNT(*) AS count FROM embed_review_operation_intents WHERE request_id = ?",
+        )
+          .bind(topLevelRequestId)
+          .first<{ count: number }>()
+      )?.count,
+    ).toBe(0);
+    const validTopLevel = await topLevel([]);
+    expect(validTopLevel.status).toBe(200);
+    const validTopLevelId = (await validTopLevel.text()).match(
+      /name="intent_id" value="([^"]+)"/,
+    )?.[1];
+    expect(
+      (
+        await request("/embed/review/confirm/complete", {
+          method: "POST",
+          headers: { ...OWNER, Origin: "http://localhost" },
+          body: new URLSearchParams({
+            intent_id: validTopLevelId || "",
+            approval: "confirm",
+          }),
+        })
+      ).status,
+    ).toBe(200);
+
+    const threadRequestId = `request_${crypto.randomUUID()}`;
+    const thread = (mentions: Array<{ userId: string }>, value = "Embedded reply") =>
+      request("/embed/review/thread", {
+        method: "POST",
+        headers: { ...OWNER, Origin: "http://localhost" },
+        body: new URLSearchParams({
+          installation_id: installationId,
+          shiplet_id: project.id,
+          revision_id: revisionId,
+          page_url: pageUrl,
+          feedback_id: feedback.id,
+          action: "replies",
+          value,
+          request_id: threadRequestId,
+          mentions_json: JSON.stringify(mentions),
+        }),
+      });
+    expect(
+      (
+        await thread([
+          { userId: member["x-shiplet-user-id"] },
+          { userId: outsider["x-shiplet-user-id"] },
+        ])
+      ).status,
+    ).toBe(400);
+    expect(
+      (
+        await (env as Env).DB.prepare(
+          "SELECT COUNT(*) AS count FROM embed_review_operation_intents WHERE request_id = ?",
+        )
+          .bind(threadRequestId)
+          .first<{ count: number }>()
+      )?.count,
+    ).toBe(0);
+    expect((await thread([], "x".repeat(5_001))).status).toBe(400);
+    expect(
+      (
+        await (env as Env).DB.prepare(
+          "SELECT COUNT(*) AS count FROM embed_review_operation_intents WHERE request_id = ?",
+        )
+          .bind(threadRequestId)
+          .first<{ count: number }>()
+      )?.count,
+    ).toBe(0);
+
+    const pending = await thread([{ userId: member["x-shiplet-user-id"] }]);
+    expect(pending.status).toBe(200);
+    const pendingId = (await pending.text()).match(
+      /name="intent_id" value="([^"]+)"/,
+    )?.[1];
+    expect(pendingId).toMatch(/^embed_intent_/);
+    const pendingWithoutTarget = await request(
+      `/embed/review/operations/${threadRequestId}?${new URLSearchParams({
+        installation_id: installationId,
+        page_url: pageUrl,
+        effect: "feedback.reply",
+      })}`,
+      { headers: { Cookie: cookie } },
+    );
+    expect(pendingWithoutTarget.status).toBe(404);
+    expect(pendingWithoutTarget.headers.get("cache-control")).toBe(
+      "private, no-store",
+    );
+    await (env as Env).DB.prepare(
+      "DELETE FROM organization_memberships WHERE id = ?",
+    )
+      .bind(membershipId)
+      .run();
+    const staleMemberComplete = await request("/embed/review/confirm/complete", {
+      method: "POST",
+      headers: { ...OWNER, Origin: "http://localhost" },
+      body: new URLSearchParams({
+        intent_id: pendingId || "",
+        approval: "confirm",
+      }),
+    });
+    expect(staleMemberComplete.status).toBe(400);
+    expect(await staleMemberComplete.text()).toBe("Invalid review mentions");
+    expect(
+      await (env as Env).DB.prepare(
+        `SELECT
+         (SELECT COUNT(*) FROM review_feedback_replies WHERE feedback_id = ?) AS replies,
+         (SELECT COUNT(*) FROM review_feedback_mentions WHERE feedback_id = ?) AS mentions,
+         (SELECT COUNT(*) FROM shiplet_access_grants
+          WHERE project_id = ? AND target_id = ?) AS grants,
+         (SELECT COUNT(*) FROM review_notifications
+          WHERE project_id = ? AND feedback_id = ?) AS notifications`,
+      )
+        .bind(
+          feedback.id,
+          feedback.id,
+          project.id,
+          member["x-shiplet-user-id"],
+          project.id,
+          feedback.id,
+        )
+        .first(),
+    ).toEqual({ replies: 0, mentions: 0, grants: 0, notifications: 0 });
+    expect(
+      await (env as Env).DB.prepare(
+        "SELECT confirmed_on, completed_on FROM embed_review_operation_intents WHERE id = ?",
+      )
+        .bind(pendingId)
+        .first(),
+    ).toEqual({ confirmed_on: null, completed_on: null });
+
+    await insertMember();
+    const completed = await request("/embed/review/confirm/complete", {
+      method: "POST",
+      headers: { ...OWNER, Origin: "http://localhost" },
+      body: new URLSearchParams({
+        intent_id: pendingId || "",
+        approval: "confirm",
+      }),
+    });
+    expect(completed.status).toBe(200);
+
+    const baseQuery = new URLSearchParams({
+      installation_id: installationId,
+      page_url: pageUrl,
+      effect: "feedback.reply",
+    });
+    for (const feedbackId of [null, "", `review_${crypto.randomUUID()}`]) {
+      const query = new URLSearchParams(baseQuery);
+      if (feedbackId !== null) query.set("feedback_id", feedbackId);
+      const response = await request(
+        `/embed/review/operations/${threadRequestId}?${query}`,
+        { headers: { Cookie: cookie } },
+      );
+      expect(response.status).toBe(404);
+      expect(response.headers.get("cache-control")).toBe("private, no-store");
+      expect(await response.json()).toEqual({
+        error: "review_operation_not_found",
+      });
+    }
+    const exactQuery = new URLSearchParams(baseQuery);
+    exactQuery.set("feedback_id", feedback.id);
+    expect(
+      (
+        await request(
+          `/embed/review/operations/${threadRequestId}?${exactQuery}`,
+          { headers: { Cookie: cookie } },
+        )
+      ).status,
+    ).toBe(200);
+
+    const createOutcome = await request(
+      `/embed/review/operations/${topLevelRequestId}?${new URLSearchParams({
+        installation_id: installationId,
+        page_url: pageUrl,
+        effect: "feedback.create",
+      })}`,
+      { headers: { Cookie: cookie } },
+    );
+    expect(createOutcome.status).toBe(200);
+
+    const staleRequestId = `request_${crypto.randomUUID()}`;
+    const stalePreparation = await request("/embed/review/thread", {
+      method: "POST",
+      headers: { ...OWNER, Origin: "http://localhost" },
+      body: new URLSearchParams({
+        installation_id: installationId,
+        shiplet_id: project.id,
+        revision_id: revisionId,
+        page_url: pageUrl,
+        feedback_id: feedback.id,
+        action: "status",
+        value: "Done",
+        request_id: staleRequestId,
+      }),
+    });
+    expect(stalePreparation.status).toBe(200);
+    const staleIntentId = (await stalePreparation.text()).match(
+      /name="intent_id" value="([^"]+)"/,
+    )?.[1];
+    const nextRevisionId = `revision_${crypto.randomUUID()}`;
+    await (env as Env).DB.batch([
+      (env as Env).DB.prepare(
+        `INSERT INTO shiplet_revisions (
+         id, project_id, parent_revision_id, package_json, package_digest,
+         content_digest, runtime_compatibility, validation_report_json,
+         custom_mcp_projection_json, created_by_actor_kind, created_by_actor_id,
+         created_on
+        ) SELECT ?, project_id, id, package_json, ?, content_digest,
+                 runtime_compatibility, validation_report_json,
+                 custom_mcp_projection_json, 'human', ?, ?
+          FROM shiplet_revisions WHERE id = ?`,
+      ).bind(
+        nextRevisionId,
+        `digest-${crypto.randomUUID()}`,
+        OWNER["x-shiplet-user-id"],
+        new Date().toISOString(),
+        revisionId,
+      ),
+      (env as Env).DB.prepare(
+        "UPDATE projects SET active_revision_id = ? WHERE id = ?",
+      ).bind(nextRevisionId, project.id),
+    ]);
+    expect(
+      (
+        await request("/embed/review/confirm/complete", {
+          method: "POST",
+          headers: { ...OWNER, Origin: "http://localhost" },
+          body: new URLSearchParams({
+            intent_id: staleIntentId || "",
+            approval: "confirm",
+          }),
+        })
+      ).status,
+    ).toBe(403);
+    expect(
+      await (env as Env).DB.prepare(
+        "SELECT confirmed_on, completed_on FROM embed_review_operation_intents WHERE id = ?",
+      )
+        .bind(staleIntentId)
+        .first(),
+    ).toEqual({ confirmed_on: null, completed_on: null });
+    expect(user.id).toBe(OWNER["x-shiplet-user-id"]);
   });
 });

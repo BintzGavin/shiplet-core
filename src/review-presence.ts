@@ -28,6 +28,13 @@ type PresenceCursor = {
 	scrollY: number;
 };
 
+type PresenceViewport = {
+	width: number;
+	height: number;
+	scrollX: number;
+	scrollY: number;
+};
+
 type PresenceAttachment = {
 	connectionId: string;
 	joinedAt: number;
@@ -36,11 +43,56 @@ type PresenceAttachment = {
 	viewer: PresenceViewer;
 	page: PresencePage;
 	cursor: PresenceCursor | null;
+	viewport: PresenceViewport | null;
 };
 
 const MAX_TEXT_LENGTH = 240;
 const MAX_AVATAR_DATA_URL_LENGTH = 750_000;
 const DEFAULT_COLOR = "#2f6e88";
+
+// Signal-flag cursor colors. Every live reviewer is assigned the least-used
+// color when they join so people on the same page are always distinguishable;
+// reconnects and extra tabs for the same viewer keep the color they already
+// have.
+export const PRESENCE_COLORS = [
+	"#c2502f",
+	"#2f6e88",
+	"#3f7d50",
+	"#c3922e",
+	"#8c4a75",
+	"#4f5fb8",
+	"#1f8a70",
+	"#b8336a",
+] as const;
+
+export function assignPresenceColor(
+	viewerId: string,
+	others: ReadonlyArray<{ id: string; color: string }>,
+	palette: readonly string[] = PRESENCE_COLORS,
+): string {
+	const existing = others.find((viewer) => viewer.id === viewerId);
+	if (existing && palette.includes(existing.color)) return existing.color;
+	const usage = new Map<string, number>();
+	for (const color of palette) usage.set(color, 0);
+	const counted = new Set<string>();
+	for (const viewer of others) {
+		if (counted.has(viewer.id)) continue;
+		counted.add(viewer.id);
+		if (usage.has(viewer.color)) {
+			usage.set(viewer.color, (usage.get(viewer.color) || 0) + 1);
+		}
+	}
+	let chosen = palette[0] || DEFAULT_COLOR;
+	let lowest = Number.POSITIVE_INFINITY;
+	for (const color of palette) {
+		const count = usage.get(color) || 0;
+		if (count < lowest) {
+			lowest = count;
+			chosen = color;
+		}
+	}
+	return chosen;
+}
 
 export class ReviewPresenceCoordinator extends DurableObject<Env> {
 	constructor(ctx: DurableObjectState, env: Env) {
@@ -64,6 +116,10 @@ export class ReviewPresenceCoordinator extends DurableObject<Env> {
 		const client = pair[0];
 		const server = pair[1];
 		const attachment = this.initialAttachment(request);
+		attachment.viewer.color = assignPresenceColor(
+			attachment.viewer.id,
+			this.colorRoster(),
+		);
 		server.serializeAttachment(attachment);
 		this.ctx.acceptWebSocket(server);
 		this.safeSend(server, {
@@ -110,6 +166,32 @@ export class ReviewPresenceCoordinator extends DurableObject<Env> {
 			this.broadcastCursor(ws, attachment);
 			return;
 		}
+
+		if (type === "cursor:leave") {
+			const attachment = { ...this.mergeAttachment(ws, payload, false), cursor: null };
+			ws.serializeAttachment(attachment);
+			this.broadcastToPage(ws, attachment, {
+				type: "cursor:leave",
+				viewer: attachment.viewer,
+				page: attachment.page,
+				at: Date.now(),
+			});
+			return;
+		}
+
+		if (type === "viewport:update") {
+			const attachment = this.mergeAttachment(ws, payload, false);
+			ws.serializeAttachment(attachment);
+			if (!attachment.viewport) return;
+			this.broadcastToPage(ws, attachment, {
+				type: "viewport:update",
+				viewer: attachment.viewer,
+				page: attachment.page,
+				viewport: attachment.viewport,
+				at: Date.now(),
+			});
+			return;
+		}
 	}
 
 	async webSocketClose(ws: WebSocket) {
@@ -150,10 +232,7 @@ export class ReviewPresenceCoordinator extends DurableObject<Env> {
 			email: email || null,
 			avatarPreset: avatarPreset || null,
 			avatarDataUrl: null,
-			color: normalizeColor(
-				request.headers.get("x-shiplet-presence-color"),
-				DEFAULT_COLOR,
-			),
+			color: DEFAULT_COLOR,
 		};
 
 		return {
@@ -171,6 +250,15 @@ export class ReviewPresenceCoordinator extends DurableObject<Env> {
 				null,
 			),
 			cursor: null,
+			viewport: normalizeViewport(
+				{
+					width: url.searchParams.get("viewportWidth"),
+					height: url.searchParams.get("viewportHeight"),
+					scrollX: url.searchParams.get("scrollX"),
+					scrollY: url.searchParams.get("scrollY"),
+				},
+				null,
+			),
 		};
 	}
 
@@ -189,6 +277,7 @@ export class ReviewPresenceCoordinator extends DurableObject<Env> {
 			viewer,
 			page: normalizePage(payload.page, current.page),
 			cursor: normalizeCursor(payload.cursor, current.cursor),
+			viewport: normalizeViewport(payload.viewport, current.viewport),
 		};
 	}
 
@@ -213,7 +302,18 @@ export class ReviewPresenceCoordinator extends DurableObject<Env> {
 			},
 			page: { pathname: "/", href: "", title: null },
 			cursor: null,
+			viewport: null,
 		};
+	}
+
+	private colorRoster(excludedSocket?: WebSocket) {
+		const roster: Array<{ id: string; color: string }> = [];
+		for (const ws of this.ctx.getWebSockets()) {
+			if (ws === excludedSocket) continue;
+			const attachment = this.attachmentFor(ws);
+			roster.push({ id: attachment.viewer.id, color: attachment.viewer.color });
+		}
+		return roster;
 	}
 
 	private viewers(excludedSocket?: WebSocket) {
@@ -234,6 +334,7 @@ export class ReviewPresenceCoordinator extends DurableObject<Env> {
 				connectionId: attachment.connectionId,
 				page: attachment.page,
 				cursor: attachment.cursor,
+				viewport: attachment.viewport,
 				joinedAt: attachment.joinedAt,
 				lastSeenAt: attachment.lastSeenAt,
 			}));
@@ -253,13 +354,20 @@ export class ReviewPresenceCoordinator extends DurableObject<Env> {
 
 	private broadcastCursor(sender: WebSocket, attachment: PresenceAttachment) {
 		if (!attachment.cursor) return;
-		const payload = {
+		this.broadcastToPage(sender, attachment, {
 			type: "cursor:update",
 			viewer: attachment.viewer,
 			page: attachment.page,
 			cursor: attachment.cursor,
 			at: Date.now(),
-		};
+		});
+	}
+
+	private broadcastToPage(
+		sender: WebSocket,
+		attachment: PresenceAttachment,
+		payload: unknown,
+	) {
 		for (const ws of this.ctx.getWebSockets()) {
 			if (ws === sender) continue;
 			const peer = this.attachmentFor(ws);
@@ -307,7 +415,9 @@ function normalizeViewer(
 		avatarPreset:
 			normalizeText(input.avatarPreset, MAX_TEXT_LENGTH) || current.avatarPreset,
 		avatarDataUrl: normalizeAvatarDataUrl(input.avatarDataUrl) || current.avatarDataUrl,
-		color: normalizeColor(input.color, current.color),
+		// Colors are assigned by the coordinator so every live reviewer stays
+		// distinguishable; client-supplied colors are ignored.
+		color: current.color,
 	};
 }
 
@@ -347,6 +457,24 @@ function normalizeCursor(
 	};
 }
 
+function normalizeViewport(
+	value: unknown,
+	fallback: PresenceViewport | null,
+): PresenceViewport | null {
+	if (!isRecord(value)) return fallback;
+	const width = normalizeFiniteNumber(value.width);
+	const height = normalizeFiniteNumber(value.height);
+	const scrollX = normalizeFiniteNumber(value.scrollX);
+	const scrollY = normalizeFiniteNumber(value.scrollY);
+	if (scrollX === null || scrollY === null) return fallback;
+	return {
+		width: width === null ? (fallback?.width ?? 0) : Math.max(0, width),
+		height: height === null ? (fallback?.height ?? 0) : Math.max(0, height),
+		scrollX,
+		scrollY,
+	};
+}
+
 function normalizePath(value: unknown) {
 	const raw = normalizeText(value, 2048);
 	if (!raw) return "";
@@ -370,11 +498,6 @@ function normalizeFiniteNumber(value: unknown) {
 function normalizeText(value: unknown, maxLength: number) {
 	if (typeof value !== "string") return "";
 	return value.trim().slice(0, maxLength);
-}
-
-function normalizeColor(value: unknown, fallback: string) {
-	const color = normalizeText(value, 32);
-	return /^#[0-9a-f]{6}$/i.test(color) ? color : fallback;
 }
 
 function normalizeAvatarDataUrl(value: unknown) {

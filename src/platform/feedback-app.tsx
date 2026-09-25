@@ -48,7 +48,14 @@ type StatusState = {
 
 const FEEDBACK_REFETCH_MS = 15_000;
 const FEEDBACK_STALE_MS = 10_000;
-const FEEDBACK_STATUSES = ["New", "In Progress", "Blocked", "Done", "Dropped"];
+const FEEDBACK_STATUSES = [
+	"New",
+	"In Progress",
+	"Blocked",
+	"Staging",
+	"Done",
+	"Dropped",
+];
 
 const FeedbackStoreContext = React.createContext<FeedbackStore | null>(null);
 

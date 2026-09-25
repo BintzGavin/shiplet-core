@@ -7,6 +7,7 @@ const SANDBOX_STATUSES = new Set<ReviewStatus>([
 	"New",
 	"In Progress",
 	"Blocked",
+	"Staging",
 	"Done",
 	"Dropped",
 ]);
@@ -52,6 +53,9 @@ type SandboxFeedbackRow = {
 	created_by_actor: string | null;
 	created_on: string;
 	updated_on: string;
+	revision_id: string | null;
+	modern_page_url_key: string | null;
+	rich_payload_json: string | null;
 };
 
 type SandboxReplyRow = {
@@ -89,6 +93,42 @@ type SandboxFeedbackListOptions = {
 	actorId?: string | null;
 	includeSharedUntrusted?: boolean;
 };
+
+export type SandboxModernListScope = {
+	sessionId: string;
+	projectId: string;
+	actorId: string;
+	pageUrlKey?: string;
+	pagePrefixKey?: string;
+	state: "open" | "closed" | "all";
+	revisionId?: string;
+	submittedByMe: boolean;
+	cursor?: string;
+	limit: number;
+};
+
+export type SandboxModernFeedbackRecord = SandboxFeedbackRecord & {
+	revision_id: string | null;
+};
+
+export type SandboxModernFeedbackPage = {
+	feedback: SandboxModernFeedbackRecord[];
+	nextCursor: string | null;
+};
+
+export type SandboxModernFeedbackPageResult =
+	| SandboxModernFeedbackPage
+	| { error: "sandbox_cursor_invalid" };
+
+export class SandboxModernQueryError extends Error {
+	readonly code: string;
+
+	constructor(code: string, message = code) {
+		super(message);
+		this.name = "SandboxModernQueryError";
+		this.code = code;
+	}
+}
 
 export type SandboxSnapshot = {
 	session: {
@@ -146,6 +186,17 @@ export type SandboxFeedbackRecord = {
 	created_on: string;
 	updated_on: string;
 	replies: SandboxReplyRecord[];
+	review_kind?: "comment" | "copy_request";
+	copy_changes?: unknown[] | null;
+	attachments?: Array<{
+		id: string;
+		name: string;
+		content_type: string;
+		byte_length: number;
+		digest: string;
+		ordinal: number;
+		content_url: string;
+	}>;
 };
 
 export type SandboxReplyRecord = {
@@ -156,6 +207,76 @@ export type SandboxReplyRecord = {
 	author_user_id: string | null;
 	author_email: string | null;
 	created_on: string;
+};
+
+export type SandboxDurableOperationEffect =
+	| "feedback.create"
+	| "feedback.reply"
+	| "feedback.status";
+
+export type SandboxDurableOperationState =
+	| "pending"
+	| "completed"
+	| "expired"
+	| "failed"
+	| "unknown"
+	| "cancelled";
+
+export type SandboxDurableOperationBinding = {
+	requestId: string;
+	actorId: string;
+	sessionId: string;
+	projectId: string;
+	revisionId: string;
+	pageUrl: string;
+	effect: SandboxDurableOperationEffect;
+	targetId: string | null;
+	payloadDigest: string;
+};
+
+export type SandboxDurableOperationPublic = {
+	requestId: string;
+	effect: SandboxDurableOperationEffect;
+	state: SandboxDurableOperationState;
+	result:
+		| { feedbackId: string }
+		| { feedbackId: string; replyId: string }
+		| null;
+};
+
+export type SandboxDurableOperationResult = {
+	operation: SandboxDurableOperationPublic;
+	feedback: SandboxFeedbackRecord | null;
+};
+
+export class SandboxOperationConflict extends Error {
+	readonly code = "sandbox_operation_conflict";
+
+	constructor() {
+		super("Sandbox operation binding conflict.");
+		this.name = "SandboxOperationConflict";
+	}
+}
+
+type SandboxDurableOperationRow = {
+	request_id: string;
+	actor_id: string;
+	session_id: string;
+	project_id: string;
+	revision_id: string;
+	page_url: string;
+	effect: SandboxDurableOperationEffect;
+	target_id: string | null;
+	payload_digest: string;
+	result_id: string;
+	state: SandboxDurableOperationState;
+	result_json: string | null;
+	failure_code: string | null;
+	created_on: string;
+	updated_on: string;
+	expires_on: string;
+	completed_on: string | null;
+	cancelled_on: string | null;
 };
 
 export class SandboxSession extends DurableObject<Env> {
@@ -202,7 +323,9 @@ export class SandboxSession extends DurableObject<Env> {
 				submitted_by_email TEXT,
 				created_by_actor TEXT,
 				created_on TEXT NOT NULL,
-				updated_on TEXT NOT NULL
+				updated_on TEXT NOT NULL,
+				revision_id TEXT NULL,
+				modern_page_url_key TEXT NULL
 			);
 			CREATE TABLE IF NOT EXISTS replies (
 				id TEXT PRIMARY KEY,
@@ -213,13 +336,51 @@ export class SandboxSession extends DurableObject<Env> {
 				created_by_actor TEXT,
 				created_on TEXT NOT NULL
 			);
+			CREATE TABLE IF NOT EXISTS durable_review_operations (
+				request_id TEXT PRIMARY KEY,
+				actor_id TEXT NOT NULL,
+				session_id TEXT NOT NULL,
+				project_id TEXT NOT NULL,
+				revision_id TEXT NOT NULL,
+				page_url TEXT NOT NULL,
+				effect TEXT NOT NULL,
+				target_id TEXT,
+				payload_digest TEXT NOT NULL,
+				result_id TEXT NOT NULL,
+				state TEXT NOT NULL,
+				result_json TEXT,
+				failure_code TEXT,
+				created_on TEXT NOT NULL,
+				updated_on TEXT NOT NULL,
+				expires_on TEXT NOT NULL,
+				completed_on TEXT,
+				cancelled_on TEXT
+			);
+			CREATE TABLE IF NOT EXISTS feedback_attachments (
+				feedback_id TEXT NOT NULL,
+				project_id TEXT NOT NULL,
+				actor_id TEXT NOT NULL,
+				attachment_id TEXT NOT NULL,
+				ordinal INTEGER NOT NULL,
+				file_name TEXT NOT NULL,
+				content_type TEXT NOT NULL,
+				byte_length INTEGER NOT NULL,
+				digest TEXT NOT NULL,
+				page_url TEXT NOT NULL,
+				revision_id TEXT NOT NULL,
+				PRIMARY KEY (feedback_id, attachment_id)
+			);
 			CREATE INDEX IF NOT EXISTS idx_feedback_project ON feedback(project_id, ticket_number);
 			CREATE INDEX IF NOT EXISTS idx_replies_feedback ON replies(feedback_id, created_on);
 		`);
 		this.ensureFeedbackColumn("screenshot_data_url", "TEXT");
 		this.ensureFeedbackColumn("screenshot_failure_note", "TEXT");
 		this.ensureFeedbackColumn("created_by_actor", "TEXT");
+		this.ensureFeedbackColumn("revision_id", "TEXT");
+		this.ensureFeedbackColumn("modern_page_url_key", "TEXT");
+		this.ensureFeedbackColumn("rich_payload_json", "TEXT");
 		this.ensureReplyColumn("created_by_actor", "TEXT");
+		this.recoverModernPageUrlKeys();
 		this.ctx.storage.sql.exec(
 			"CREATE INDEX IF NOT EXISTS idx_feedback_actor ON feedback(project_id, created_by_actor, ticket_number)",
 		);
@@ -239,6 +400,23 @@ export class SandboxSession extends DurableObject<Env> {
 			.toArray();
 		if (columns.some((column) => column.name === name)) return;
 		this.ctx.storage.sql.exec(`ALTER TABLE replies ADD COLUMN ${name} ${definition}`);
+	}
+
+	private recoverModernPageUrlKeys() {
+		const rows = this.ctx.storage.sql
+			.exec<{ id: string; page_url: string; modern_page_url_key: string | null }>(
+				"SELECT id, page_url, modern_page_url_key FROM feedback WHERE modern_page_url_key IS NULL",
+			)
+			.toArray();
+		for (const row of rows) {
+			const key = sandboxModernPageUrlKey(row.page_url);
+			if (!key) continue;
+			this.ctx.storage.sql.exec(
+				"UPDATE feedback SET modern_page_url_key = ? WHERE id = ? AND modern_page_url_key IS NULL",
+				key,
+				row.id,
+			);
+		}
 	}
 
 	async snapshot(
@@ -273,6 +451,7 @@ export class SandboxSession extends DurableObject<Env> {
 		appUrl: string,
 	): Promise<SandboxSnapshot> {
 		this.ctx.storage.sql.exec("DELETE FROM replies");
+		this.ctx.storage.sql.exec("DELETE FROM feedback_attachments");
 		this.ctx.storage.sql.exec("DELETE FROM feedback");
 		this.ctx.storage.sql.exec("DELETE FROM shiplets");
 		this.ctx.storage.sql.exec("DELETE FROM meta");
@@ -351,7 +530,18 @@ export class SandboxSession extends DurableObject<Env> {
 		this.purgeExpiredFeedback();
 		const ticketNumber = this.nextTicketNumber(projectId);
 		const id = `sbf_${randomToken(18)}`;
+		return this.insertFeedback(projectId, actorId, payload, id, null);
+	}
+
+	private async insertFeedback(
+		projectId: string,
+		actorId: string,
+		payload: SandboxFeedbackInput,
+		id: string,
+		richPayloadJson: string | null,
+	): Promise<SandboxFeedbackRecord> {
 		const createdOn = now();
+		const ticketNumber = this.nextTicketNumber(projectId);
 		const name = payload.name ? filterSandboxText(payload.name) : null;
 		const comment = filterSandboxText(payload.comment);
 		this.ctx.storage.sql.exec(
@@ -360,8 +550,9 @@ export class SandboxSession extends DurableObject<Env> {
 			  page_url, pathname, page_url_key, screenshot_data_url, screenshot_failure_note,
 			  screenshot_mode, viewport_json,
 			  coordinates_json, selected_element_json, capture_context_json,
-			  user_agent, submitted_by_email, created_by_actor, created_on, updated_on)
-			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			  user_agent, submitted_by_email, created_by_actor, created_on, updated_on,
+			  revision_id, modern_page_url_key, rich_payload_json)
+			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 			id,
 			projectId,
 			ticketNumber,
@@ -384,10 +575,13 @@ export class SandboxSession extends DurableObject<Env> {
 			actorId,
 			createdOn,
 			createdOn,
+			`sandbox_${projectId}`,
+			sandboxModernPageUrlKey(payload.pageUrl),
+			richPayloadJson,
 		);
-		const feedback = await this.getFeedback(sessionId, projectId, id);
+		const feedback = this.feedbackRow(projectId, id);
 		if (!feedback) throw new Error("Failed to create sandbox feedback.");
-		return feedback;
+		return this.feedbackFromRow(feedback);
 	}
 
 	async listFeedback(
@@ -401,6 +595,81 @@ export class SandboxSession extends DurableObject<Env> {
 		return this.listFeedbackRows(projectId, options).map((row) =>
 			this.feedbackFromRow(row, options),
 		);
+	}
+
+	async validateModernListScope(sessionId: string, projectId: string) {
+		this.ensureSeeded(sessionId);
+		this.assertProjectBelongsToSession(sessionId, projectId);
+		this.purgeExpiredFeedback();
+	}
+
+	async listModernFeedbackPage(
+		scope: SandboxModernListScope,
+	): Promise<SandboxModernFeedbackPageResult> {
+		this.ensureSeeded(scope.sessionId);
+		this.assertProjectBelongsToSession(scope.sessionId, scope.projectId);
+		this.purgeExpiredFeedback();
+
+		const cursorScope = await sandboxModernCursorScope(scope);
+		const where = ["project_id = ?"];
+		const bindings: Array<string | number> = [scope.projectId];
+		if (scope.pageUrlKey !== undefined) {
+			where.push("modern_page_url_key = ?");
+			bindings.push(scope.pageUrlKey);
+		} else if (scope.pagePrefixKey !== undefined) {
+			const prefix = sandboxModernPagePrefixPredicate(scope.pagePrefixKey);
+			where.push(prefix.sql);
+			bindings.push(...prefix.bindings);
+		}
+		if (scope.state === "open") {
+			where.push("status NOT IN ('Done', 'Dropped')");
+		} else if (scope.state === "closed") {
+			where.push("status IN ('Done', 'Dropped')");
+		}
+		if (scope.revisionId !== undefined) {
+			where.push("revision_id = ?");
+			bindings.push(scope.revisionId);
+		}
+		if (scope.submittedByMe) {
+			where.push("created_by_actor = ?");
+			bindings.push(scope.actorId);
+		}
+
+		if (scope.cursor !== undefined) {
+			const cursor = await decodeSandboxModernCursor(scope.cursor);
+			if (!cursor || cursor.scope !== cursorScope) {
+				return { error: "sandbox_cursor_invalid" };
+			}
+			where.push(
+				"(created_on < ? OR (created_on = ? AND id < ?))",
+			);
+			bindings.push(cursor.createdOn, cursor.createdOn, cursor.id);
+		}
+
+		const rows = this.ctx.storage.sql
+			.exec<SandboxFeedbackRow>(
+				`SELECT * FROM feedback
+				 WHERE ${where.join(" AND ")}
+				 ORDER BY created_on DESC, id DESC
+				 LIMIT ?`,
+				...bindings,
+				scope.limit + 1,
+			)
+			.toArray();
+		const pageRows = rows.slice(0, scope.limit);
+		const last = pageRows.at(-1);
+		return {
+			feedback: pageRows.map((row) => this.modernFeedbackFromRow(row)),
+			nextCursor:
+				rows.length > scope.limit && last
+					? await encodeSandboxModernCursor({
+						v: 1,
+						createdOn: last.created_on,
+						id: last.id,
+						scope: cursorScope,
+					})
+					: null,
+		};
 	}
 
 	async getFeedback(
@@ -493,6 +762,333 @@ export class SandboxSession extends DurableObject<Env> {
 		);
 	}
 
+	async prepareDurableOperation(binding: SandboxDurableOperationBinding) {
+		this.ensureSeeded(binding.sessionId);
+		this.assertProjectBelongsToSession(binding.sessionId, binding.projectId);
+		this.purgeExpiredFeedback();
+		let row = this.operationRow(binding.requestId);
+		if (row) {
+			row = this.expirePendingOperation(row);
+			if (!this.operationMatches(row, binding, true)) {
+				return { conflict: true as const };
+			}
+			return { operation: this.publicOperation(row), resultId: row.result_id };
+		}
+		const createdOn = now();
+		const resultId =
+			binding.effect === "feedback.reply"
+				? `sbr_${randomToken(18)}`
+				: binding.effect === "feedback.create"
+					? `sbf_${randomToken(18)}`
+					: binding.targetId!;
+		this.ctx.storage.sql.exec(
+			`INSERT INTO durable_review_operations
+			 (request_id, actor_id, session_id, project_id, revision_id, page_url,
+			  effect, target_id, payload_digest, result_id, state, result_json,
+			  failure_code, created_on, updated_on, expires_on, completed_on, cancelled_on)
+			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', NULL, NULL, ?, ?, ?, NULL, NULL)`,
+			binding.requestId,
+			binding.actorId,
+			binding.sessionId,
+			binding.projectId,
+			binding.revisionId,
+			binding.pageUrl,
+			binding.effect,
+			binding.targetId,
+			binding.payloadDigest,
+			resultId,
+			createdOn,
+			createdOn,
+			new Date(Date.now() + SANDBOX_FEEDBACK_TTL_MS).toISOString(),
+		);
+		row = this.operationRow(binding.requestId)!;
+		return { operation: this.publicOperation(row), resultId };
+	}
+
+	async findDurableOperation(
+		binding: Omit<SandboxDurableOperationBinding, "payloadDigest">,
+	): Promise<SandboxDurableOperationPublic | null> {
+		this.ensureSeeded(binding.sessionId);
+		this.assertProjectBelongsToSession(binding.sessionId, binding.projectId);
+		const row = this.operationRow(binding.requestId);
+		if (!row || !this.operationMatches(row, binding, false)) return null;
+		return this.publicOperation(this.expirePendingOperation(row));
+	}
+
+	async cancelDurableOperation(
+		binding: Omit<SandboxDurableOperationBinding, "payloadDigest">,
+	): Promise<SandboxDurableOperationPublic | null> {
+		this.ensureSeeded(binding.sessionId);
+		this.assertProjectBelongsToSession(binding.sessionId, binding.projectId);
+		let row = this.operationRow(binding.requestId);
+		if (!row || !this.operationMatches(row, binding, false)) return null;
+		row = this.expirePendingOperation(row);
+		if (row.state === "pending") {
+			const cancelledOn = now();
+			this.ctx.storage.transactionSync(() => {
+				this.ctx.storage.sql.exec(
+					`UPDATE durable_review_operations
+					 SET state = 'cancelled', updated_on = ?, cancelled_on = ?
+					 WHERE request_id = ? AND state = 'pending'`,
+					cancelledOn,
+					cancelledOn,
+					binding.requestId,
+				);
+			});
+			row = this.operationRow(binding.requestId)!;
+		}
+		return this.publicOperation(row);
+	}
+
+	async completeDurableOperation(
+		binding: SandboxDurableOperationBinding,
+		input:
+			| { kind: "create"; payload: SandboxFeedbackInput; richPayloadJson: string | null }
+			| { kind: "reply"; comment: string }
+			| { kind: "status"; status: string },
+	): Promise<SandboxDurableOperationResult | { conflict: true }> {
+		this.ensureSeeded(binding.sessionId);
+		this.assertProjectBelongsToSession(binding.sessionId, binding.projectId);
+		let row = this.operationRow(binding.requestId);
+		if (!row || !this.operationMatches(row, binding, true)) {
+			return { conflict: true };
+		}
+		row = this.expirePendingOperation(row);
+		if (row.state === "completed") {
+			return {
+				operation: this.publicOperation(row),
+				feedback: row.target_id || row.result_id
+					? await this.getFeedback(
+						binding.sessionId,
+						binding.projectId,
+						row.effect === "feedback.create" ? row.result_id : row.target_id!,
+					)
+					: null,
+			};
+		}
+		if (row.state !== "pending") {
+			return { operation: this.publicOperation(row), feedback: null };
+		}
+		if (
+			(input.kind === "create" && row.effect !== "feedback.create") ||
+			(input.kind === "reply" && row.effect !== "feedback.reply") ||
+			(input.kind === "status" && row.effect !== "feedback.status")
+		) {
+			throw new SandboxOperationConflict();
+		}
+		const completedOn = now();
+		let feedbackId = row.target_id || row.result_id;
+		let result: { feedbackId: string } | { feedbackId: string; replyId: string };
+		this.ctx.storage.transactionSync(() => {
+			const current = this.operationRow(binding.requestId);
+			if (!current || current.state !== "pending") return;
+			if (input.kind === "create") {
+				const ticketNumber = this.nextTicketNumber(binding.projectId);
+				const name = input.payload.name ? filterSandboxText(input.payload.name) : null;
+				const comment = filterSandboxText(input.payload.comment);
+				const rich = parseSandboxRichPayload(input.richPayloadJson);
+				const captureContext = rich
+					? {
+						...(input.payload.captureContext || {}),
+						screenshotAnnotations: rich.screenshotAnnotations,
+						captureFidelity: rich.captureFidelity,
+					}
+					: input.payload.captureContext;
+				this.ctx.storage.sql.exec(
+					`INSERT INTO feedback
+					 (id, project_id, ticket_number, client_feedback_id, name, comment, status,
+					  page_url, pathname, page_url_key, screenshot_data_url, screenshot_failure_note,
+					  screenshot_mode, viewport_json, coordinates_json, selected_element_json,
+					  capture_context_json, user_agent, submitted_by_email, created_by_actor,
+					  created_on, updated_on, revision_id, modern_page_url_key, rich_payload_json)
+					 VALUES (?, ?, ?, ?, ?, ?, 'New', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+					row!.result_id,
+					binding.projectId,
+					ticketNumber,
+					input.payload.clientFeedbackId,
+					name,
+					comment,
+					binding.pageUrl,
+					new URL(binding.pageUrl).pathname,
+					sandboxPageUrlKey(binding.pageUrl),
+					input.payload.screenshotDataUrl,
+					input.payload.screenshotFailureNote,
+					input.payload.screenshotMode,
+					stringifyJson(input.payload.viewport),
+					stringifyJson(input.payload.coordinates),
+					stringifyJson(input.payload.selectedElement),
+					stringifyJson(captureContext),
+					input.payload.userAgent,
+					name || "sandbox.reviewer@shiplet.cc",
+					binding.actorId,
+					completedOn,
+					completedOn,
+					binding.revisionId,
+					sandboxModernPageUrlKey(binding.pageUrl),
+					input.richPayloadJson,
+				);
+				for (const [ordinal, attachment] of (rich?.attachments || []).entries()) {
+					this.ctx.storage.sql.exec(
+						`INSERT INTO feedback_attachments
+						 (feedback_id, project_id, actor_id, attachment_id, ordinal, file_name,
+						  content_type, byte_length, digest, page_url, revision_id)
+						 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+						row!.result_id,
+						binding.projectId,
+						binding.actorId,
+						attachment.id,
+						ordinal,
+						attachment.name,
+						attachment.contentType,
+						attachment.byteLength,
+						attachment.digest,
+						binding.pageUrl,
+						binding.revisionId,
+					);
+				}
+				feedbackId = row!.result_id;
+				result = { feedbackId };
+			} else if (input.kind === "reply") {
+				const target = this.feedbackRow(binding.projectId, row!.target_id!);
+				if (!target) throw new Error("Sandbox durable target unavailable.");
+				this.ctx.storage.sql.exec(
+					`INSERT INTO replies (id, feedback_id, project_id, comment, author_email, created_by_actor, created_on)
+					 VALUES (?, ?, ?, ?, ?, ?, ?)`,
+					row!.result_id,
+					row!.target_id,
+					binding.projectId,
+					filterSandboxText(input.comment).slice(0, 2000),
+					"sandbox.agent@shiplet.cc",
+					binding.actorId,
+					completedOn,
+				);
+				feedbackId = row!.target_id!;
+				result = { feedbackId, replyId: row!.result_id };
+			} else {
+				if (!SANDBOX_STATUSES.has(input.status as ReviewStatus)) {
+					throw new Error("Invalid review status.");
+				}
+				const target = this.feedbackRow(binding.projectId, row!.target_id!);
+				if (!target) throw new Error("Sandbox durable target unavailable.");
+				this.ctx.storage.sql.exec(
+					"UPDATE feedback SET status = ?, updated_on = ? WHERE project_id = ? AND id = ?",
+					input.status,
+					completedOn,
+					binding.projectId,
+					row!.target_id,
+				);
+				feedbackId = row!.target_id!;
+				result = { feedbackId };
+			}
+			this.ctx.storage.sql.exec(
+				`UPDATE durable_review_operations
+				 SET state = 'completed', result_json = ?, failure_code = NULL,
+				     updated_on = ?, completed_on = ?
+				 WHERE request_id = ? AND state = 'pending'`,
+				JSON.stringify(result!),
+				completedOn,
+				completedOn,
+				binding.requestId,
+			);
+		});
+		row = this.operationRow(binding.requestId)!;
+		return {
+			operation: this.publicOperation(row),
+			feedback: await this.getFeedback(
+				binding.sessionId,
+				binding.projectId,
+				feedbackId,
+			),
+		};
+	}
+
+	async getDurableAttachment(input: {
+		sessionId: string;
+		projectId: string;
+		actorId: string;
+		feedbackId: string;
+		attachmentId: string;
+		pageUrl: string;
+		revisionId: string;
+	}) {
+		this.ensureSeeded(input.sessionId);
+		this.assertProjectBelongsToSession(input.sessionId, input.projectId);
+		return this.ctx.storage.sql
+			.exec<{
+				attachment_id: string;
+				file_name: string;
+				content_type: string;
+				byte_length: number;
+				digest: string;
+				ordinal: number;
+			}>(
+				`SELECT attachment_id, file_name, content_type, byte_length, digest, ordinal
+				 FROM feedback_attachments
+				 WHERE project_id = ? AND feedback_id = ? AND attachment_id = ?
+				   AND actor_id = ? AND page_url = ? AND revision_id = ?`,
+				input.projectId,
+				input.feedbackId,
+				input.attachmentId,
+				input.actorId,
+				input.pageUrl,
+				input.revisionId,
+			)
+			.toArray()[0] || null;
+	}
+
+	private operationRow(requestId: string) {
+		return this.ctx.storage.sql
+			.exec<SandboxDurableOperationRow>(
+				"SELECT * FROM durable_review_operations WHERE request_id = ?",
+				requestId,
+			)
+			.toArray()[0] || null;
+	}
+
+	private operationMatches(
+		row: SandboxDurableOperationRow,
+		binding: Omit<SandboxDurableOperationBinding, "payloadDigest"> & { payloadDigest?: string },
+		includePayload: boolean,
+	) {
+		return row.actor_id === binding.actorId &&
+			row.session_id === binding.sessionId &&
+			row.project_id === binding.projectId &&
+			row.revision_id === binding.revisionId &&
+			row.page_url === binding.pageUrl &&
+			row.effect === binding.effect &&
+			row.target_id === binding.targetId &&
+			(!includePayload || row.payload_digest === binding.payloadDigest);
+	}
+
+	private expirePendingOperation(row: SandboxDurableOperationRow) {
+		if (row.state !== "pending" || Date.parse(row.expires_on) > Date.now()) return row;
+		const updatedOn = now();
+		this.ctx.storage.sql.exec(
+			`UPDATE durable_review_operations SET state = 'expired', updated_on = ?
+			 WHERE request_id = ? AND state = 'pending'`,
+			updatedOn,
+			row.request_id,
+		);
+		return this.operationRow(row.request_id)!;
+	}
+
+	private publicOperation(row: SandboxDurableOperationRow): SandboxDurableOperationPublic {
+		let result: SandboxDurableOperationPublic["result"] = null;
+		if (row.state === "completed" && row.result_json) {
+			try {
+				const parsed = JSON.parse(row.result_json);
+				if (parsed && typeof parsed.feedbackId === "string") {
+					result = row.effect === "feedback.reply" && typeof parsed.replyId === "string"
+						? { feedbackId: parsed.feedbackId, replyId: parsed.replyId }
+						: { feedbackId: parsed.feedbackId };
+				}
+			} catch {
+				result = null;
+			}
+		}
+		return { requestId: row.request_id, effect: row.effect, state: row.state, result };
+	}
+
 	private ensureSeeded(sessionId: string) {
 		const seeded = this.ctx.storage.sql
 			.exec<{ value: string }>("SELECT value FROM meta WHERE key = 'seeded'")
@@ -510,6 +1106,7 @@ export class SandboxSession extends DurableObject<Env> {
 			.toArray();
 		for (const row of expired) {
 			this.ctx.storage.sql.exec("DELETE FROM replies WHERE feedback_id = ?", row.id);
+			this.ctx.storage.sql.exec("DELETE FROM feedback_attachments WHERE feedback_id = ?", row.id);
 			this.ctx.storage.sql.exec("DELETE FROM feedback WHERE id = ?", row.id);
 		}
 	}
@@ -532,8 +1129,9 @@ export class SandboxSession extends DurableObject<Env> {
 			 (id, project_id, ticket_number, client_feedback_id, name, comment, status,
 			  page_url, pathname, page_url_key, screenshot_mode, viewport_json,
 			  coordinates_json, selected_element_json, capture_context_json,
-			  submitted_by_email, created_by_actor, created_on, updated_on)
-			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			  submitted_by_email, created_by_actor, created_on, updated_on,
+			  revision_id, modern_page_url_key)
+			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 			`sbf_${randomToken(18)}`,
 			projectId,
 			1,
@@ -567,6 +1165,8 @@ export class SandboxSession extends DurableObject<Env> {
 			SANDBOX_SEED_ACTOR_ID,
 			createdOn,
 			createdOn,
+			`sandbox_${projectId}`,
+			sandboxModernPageUrlKey(`https://shiplet.cc/play/preview/${projectId}`),
 		);
 		this.ctx.storage.sql.exec(
 			"INSERT INTO meta (key, value) VALUES ('seeded', ?)",
@@ -667,6 +1267,36 @@ export class SandboxSession extends DurableObject<Env> {
 				author_email: reply.author_email,
 				created_on: reply.created_on,
 			}));
+		const rich = parseSandboxRichPayload(row.rich_payload_json);
+		const attachments = rich
+			? this.ctx.storage.sql
+					.exec<{
+						attachment_id: string;
+						file_name: string;
+						content_type: string;
+						byte_length: number;
+						digest: string;
+						ordinal: number;
+					}>(
+						`SELECT attachment_id, file_name, content_type, byte_length, digest, ordinal
+						 FROM feedback_attachments WHERE feedback_id = ? ORDER BY ordinal ASC`,
+						row.id,
+					)
+					.toArray()
+					.map((attachment) => ({
+						id: attachment.attachment_id,
+						name: attachment.file_name,
+						content_type: attachment.content_type,
+						byte_length: attachment.byte_length,
+						digest: attachment.digest,
+						ordinal: attachment.ordinal,
+						content_url:
+							`/api/projects/${encodeURIComponent(row.project_id)}/review-feedback/` +
+							`${encodeURIComponent(row.id)}/attachments/${encodeURIComponent(attachment.attachment_id)}` +
+							`?revision_id=${encodeURIComponent(row.revision_id || "")}` +
+							`&page_url=${encodeURIComponent(row.page_url)}`,
+					}))
+			: undefined;
 		return {
 			id: row.id,
 			project_id: row.project_id,
@@ -699,6 +1329,22 @@ export class SandboxSession extends DurableObject<Env> {
 			created_on: row.created_on,
 			updated_on: row.updated_on,
 			replies,
+			...(rich
+				? {
+					review_kind: rich.copyRequest ? "copy_request" as const : "comment" as const,
+					copy_changes: rich.copyRequest?.changes || null,
+					attachments,
+				}
+				: {}),
+		};
+	}
+
+	private modernFeedbackFromRow(
+		row: SandboxFeedbackRow,
+	): SandboxModernFeedbackRecord {
+		return {
+			...this.feedbackFromRow(row),
+			revision_id: row.revision_id ?? null,
 		};
 	}
 
@@ -779,6 +1425,62 @@ function parseJson(value: string | null): Record<string, unknown> | null {
 	}
 }
 
+type SandboxRichPayloadDescriptor = {
+	screenshotAnnotations: unknown;
+	captureFidelity: unknown;
+	attachments: Array<{
+		id: string;
+		name: string;
+		contentType: string;
+		byteLength: number;
+		digest: string;
+	}>;
+	copyRequest: { changes: unknown[] } | null;
+};
+
+function parseSandboxRichPayload(value: string | null): SandboxRichPayloadDescriptor | null {
+	if (!value) return null;
+	try {
+		const parsed = JSON.parse(value) as { richPayload?: unknown };
+		const rich = parsed?.richPayload;
+		if (!rich || typeof rich !== "object" || Array.isArray(rich)) return null;
+		const candidate = rich as Record<string, unknown>;
+		if (candidate.version !== 1 || !Array.isArray(candidate.attachments)) return null;
+		const attachments = candidate.attachments.map((item) => {
+			if (!item || typeof item !== "object" || Array.isArray(item)) throw new Error("invalid");
+			const attachment = item as Record<string, unknown>;
+			if (
+				typeof attachment.id !== "string" ||
+				typeof attachment.name !== "string" ||
+				typeof attachment.contentType !== "string" ||
+				typeof attachment.byteLength !== "number" ||
+				typeof attachment.digest !== "string" ||
+				!/^sha256:[0-9a-f]{64}$/.test(attachment.digest)
+			) throw new Error("invalid");
+			return {
+				id: attachment.id,
+				name: attachment.name,
+				contentType: attachment.contentType,
+				byteLength: attachment.byteLength,
+				digest: attachment.digest,
+			};
+		});
+		const copyRequest = candidate.copyRequest;
+		return {
+			screenshotAnnotations: candidate.screenshotAnnotations,
+			captureFidelity: candidate.captureFidelity,
+			attachments,
+			copyRequest:
+				copyRequest && typeof copyRequest === "object" && !Array.isArray(copyRequest) &&
+				Array.isArray((copyRequest as Record<string, unknown>).changes)
+					? { changes: (copyRequest as Record<string, unknown>).changes as unknown[] }
+					: null,
+		};
+	} catch {
+		return null;
+	}
+}
+
 function sandboxScreenshotContentType(value: string | null) {
 	const match = String(value || "").match(/^data:(image\/(?:png|jpeg|webp));base64,/);
 	return match ? match[1] : null;
@@ -816,6 +1518,163 @@ function sandboxPageUrlKey(pageUrl: string) {
 		return new URL(pageUrl).pathname || "/";
 	} catch {
 		return String(pageUrl || "/");
+	}
+}
+
+type SandboxModernCursor = {
+	v: 1;
+	createdOn: string;
+	id: string;
+	scope: string;
+	checksum: string;
+};
+
+export function sandboxModernPageUrlKey(value: string): string | null {
+	if (typeof value !== "string" || value.length === 0 || value.length > 2048) {
+		return null;
+	}
+	let url: URL;
+	try {
+		url = new URL(value);
+	} catch {
+		return null;
+	}
+	if (
+		(url.protocol !== "http:" && url.protocol !== "https:") ||
+		url.username ||
+		url.password
+	) {
+		return null;
+	}
+	const hashRoute = url.hash.startsWith("#/" );
+	const hashPath = hashRoute ? url.hash.slice(1).split("?")[0] : "";
+	if (/%(?:2f|5c)/i.test(url.pathname) || /%(?:2f|5c)/i.test(hashPath)) {
+		return null;
+	}
+	return `${url.origin}${url.pathname || "/"}${hashRoute ? `#${hashPath}` : ""}`;
+}
+
+export function sandboxModernPagePrefixKey(value: string): string | null {
+	const key = sandboxModernPageUrlKey(value);
+	if (!key) return null;
+	const hashIndex = key.indexOf("#/" );
+	if (hashIndex >= 0) {
+		const route = key.slice(hashIndex + 1);
+		const normalizedRoute = route.length > 1 ? route.replace(/\/+$/, "") : route;
+		return `${key.slice(0, hashIndex)}#${normalizedRoute}`;
+	}
+	const url = new URL(key);
+	const pathname = url.pathname.length > 1 ? url.pathname.replace(/\/+$/, "") : url.pathname;
+	return `${url.origin}${pathname}`;
+}
+
+function sandboxModernPagePrefixPredicate(prefixKey: string) {
+	const routePrefix = prefixKey.includes("#/" );
+	return {
+		sql: routePrefix
+			? "(modern_page_url_key COLLATE BINARY = ? OR (substr(modern_page_url_key, 1, length(?)) COLLATE BINARY = ? COLLATE BINARY AND substr(modern_page_url_key, length(?) + 1, 1) = '/'))"
+			: "(modern_page_url_key COLLATE BINARY = ? OR (substr(modern_page_url_key, 1, length(?)) COLLATE BINARY = ? COLLATE BINARY AND substr(modern_page_url_key, length(?) + 1, 1) = '/'))",
+		bindings: [prefixKey, prefixKey, prefixKey, prefixKey] as Array<string | number>,
+	};
+}
+
+async function sandboxSha256Hex(value: string) {
+	const digest = await crypto.subtle.digest(
+		"SHA-256",
+		new TextEncoder().encode(value),
+	);
+	return Array.from(new Uint8Array(digest))
+		.map((byte) => byte.toString(16).padStart(2, "0"))
+		.join("");
+}
+
+async function sandboxModernCursorScope(scope: SandboxModernListScope) {
+	return sandboxSha256Hex(
+		JSON.stringify({
+			v: 1,
+			sessionId: scope.sessionId,
+			projectId: scope.projectId,
+			actorId: scope.actorId,
+			page:
+				scope.pageUrlKey !== undefined
+					? { mode: "exact", key: scope.pageUrlKey }
+					: scope.pagePrefixKey !== undefined
+						? { mode: "prefix", key: scope.pagePrefixKey }
+						: { mode: "all", key: null },
+			state: scope.state,
+			revisionId: scope.revisionId ?? null,
+			submittedByMe: scope.submittedByMe,
+		}),
+	);
+}
+
+async function encodeSandboxModernCursor(
+	cursor: Omit<SandboxModernCursor, "checksum">,
+) {
+	const checksum = await sandboxSha256Hex(
+		JSON.stringify({
+			v: cursor.v,
+			createdOn: cursor.createdOn,
+			id: cursor.id,
+			scope: cursor.scope,
+		}),
+	);
+	const encoded = JSON.stringify({ ...cursor, checksum });
+	const bytes = new TextEncoder().encode(encoded);
+	let binary = "";
+	for (const byte of bytes) binary += String.fromCharCode(byte);
+	return btoa(binary)
+		.replace(/\+/g, "-")
+		.replace(/\//g, "_")
+		.replace(/=+$/g, "");
+}
+
+async function decodeSandboxModernCursor(value: string): Promise<SandboxModernCursor | null> {
+	if (
+		typeof value !== "string" ||
+		value.length === 0 ||
+		value.length > 1024 ||
+		!/^[A-Za-z0-9_-]+$/.test(value)
+	) {
+		return null;
+	}
+	try {
+		const padded = value.replace(/-/g, "+").replace(/_/g, "/").padEnd(
+			Math.ceil(value.length / 4) * 4,
+			"=",
+		);
+		const binary = atob(padded);
+		const parsed = JSON.parse(
+			new TextDecoder().decode(
+				Uint8Array.from(binary, (character) => character.charCodeAt(0)),
+			),
+		) as Partial<SandboxModernCursor>;
+		if (
+			parsed.v !== 1 ||
+			typeof parsed.createdOn !== "string" ||
+			parsed.createdOn.length === 0 ||
+			parsed.createdOn.length > 64 ||
+			typeof parsed.id !== "string" ||
+			parsed.id.length === 0 ||
+			parsed.id.length > 256 ||
+			typeof parsed.scope !== "string" ||
+			!/^[a-f0-9]{64}$/.test(parsed.scope) ||
+			typeof parsed.checksum !== "string" ||
+			!/^[a-f0-9]{64}$/.test(parsed.checksum)
+		) {
+			return null;
+		}
+		const expected = await sandboxSha256Hex(
+			JSON.stringify({
+				v: parsed.v,
+				createdOn: parsed.createdOn,
+				id: parsed.id,
+				scope: parsed.scope,
+			}),
+		);
+		return expected === parsed.checksum ? (parsed as SandboxModernCursor) : null;
+	} catch {
+		return null;
 	}
 }
 

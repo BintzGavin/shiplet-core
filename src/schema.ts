@@ -29,6 +29,12 @@ const PROJECT_ASSET_COLUMNS: Array<{ name: string; ddl: string }> = [
 	{ name: "object_key", ddl: "object_key TEXT" },
 ];
 
+const REVIEW_FEEDBACK_COLUMNS: Array<{ name: string; ddl: string }> = [
+	{ name: "revision_id", ddl: "revision_id TEXT" },
+	{ name: "review_kind", ddl: "review_kind TEXT NOT NULL DEFAULT 'comment'" },
+	{ name: "copy_changes_json", ddl: "copy_changes_json TEXT" },
+];
+
 async function addColumnIfMissing(
 	db: D1Database,
 	tableName: string,
@@ -283,6 +289,7 @@ export async function ensureSchema(db: D1Database) {
 					id TEXT PRIMARY KEY,
 					project_id TEXT NOT NULL,
 					organization_id TEXT NOT NULL,
+					revision_id TEXT,
 					ticket_number INTEGER NOT NULL,
 					client_feedback_id TEXT NOT NULL,
 					name TEXT,
@@ -312,7 +319,7 @@ export async function ensureSchema(db: D1Database) {
 					FOREIGN KEY (organization_id) REFERENCES organizations(id)
 				)`,
 			),
-		db
+	db
 			.prepare(
 				`CREATE TABLE IF NOT EXISTS review_feedback_replies (
 					id TEXT PRIMARY KEY,
@@ -324,6 +331,24 @@ export async function ensureSchema(db: D1Database) {
 					created_on TEXT NOT NULL,
 					FOREIGN KEY (feedback_id) REFERENCES review_feedback(id),
 					FOREIGN KEY (project_id) REFERENCES projects(id)
+				)`,
+			),
+		db
+			.prepare(
+				`CREATE TABLE IF NOT EXISTS review_feedback_attachments (
+					project_id TEXT NOT NULL,
+					feedback_id TEXT NOT NULL,
+					attachment_id TEXT NOT NULL,
+					ordinal INTEGER NOT NULL,
+					file_name TEXT NOT NULL,
+					content_type TEXT NOT NULL,
+					byte_length INTEGER NOT NULL,
+					digest TEXT NOT NULL,
+					object_key TEXT NOT NULL,
+					created_on TEXT NOT NULL,
+					PRIMARY KEY (project_id, feedback_id, attachment_id),
+					FOREIGN KEY (project_id) REFERENCES projects(id),
+					FOREIGN KEY (feedback_id) REFERENCES review_feedback(id)
 				)`,
 			),
 		db
@@ -577,6 +602,9 @@ export async function ensureSchema(db: D1Database) {
 	for (const column of PROJECT_ASSET_COLUMNS) {
 		await addColumnIfMissing(db, "project_assets", column);
 	}
+	for (const column of REVIEW_FEEDBACK_COLUMNS) {
+		await addColumnIfMissing(db, "review_feedback", column);
+	}
 	await addColumnIfMissing(db, "cli_authorization_requests", {
 		name: "exchange_marker",
 		ddl: "exchange_marker TEXT",
@@ -585,6 +613,15 @@ export async function ensureSchema(db: D1Database) {
 		name: "authorization_request_id",
 		ddl: "authorization_request_id TEXT",
 	});
+	for (const column of [
+		{ name: "result_feedback_id", ddl: "result_feedback_id TEXT" },
+		{ name: "result_reply_id", ddl: "result_reply_id TEXT" },
+		{ name: "result_event_id", ddl: "result_event_id TEXT" },
+		{ name: "failed_on", ddl: "failed_on TEXT" },
+		{ name: "failure_code", ddl: "failure_code TEXT" },
+	]) {
+		await addColumnIfMissing(db, "embed_review_operation_intents", column);
+	}
 
 	await db.batch([
 		db.prepare(
@@ -611,7 +648,15 @@ export async function ensureSchema(db: D1Database) {
 		),
 		db.prepare(
 			`CREATE INDEX IF NOT EXISTS idx_review_feedback_project_path
-			 ON review_feedback(project_id, page_url_key, created_on)`,
+			 ON review_feedback(project_id, page_url_key, created_on, id)`,
+		),
+		db.prepare(
+			`CREATE INDEX IF NOT EXISTS idx_review_feedback_project_revision
+			 ON review_feedback(project_id, revision_id, created_on, id)`,
+		),
+		db.prepare(
+			`CREATE INDEX IF NOT EXISTS idx_review_feedback_project_cursor
+			 ON review_feedback(project_id, created_on, id)`,
 		),
 		db.prepare(
 			`CREATE INDEX IF NOT EXISTS idx_review_replies_feedback
@@ -623,7 +668,11 @@ export async function ensureSchema(db: D1Database) {
 		),
 		db.prepare(
 			`CREATE INDEX IF NOT EXISTS idx_review_mentions_user
-			 ON review_feedback_mentions(mentioned_user_id, created_on)`,
+				 ON review_feedback_mentions(mentioned_user_id, created_on)`,
+		),
+		db.prepare(
+			`CREATE INDEX IF NOT EXISTS idx_review_feedback_attachments_feedback
+				 ON review_feedback_attachments(project_id, feedback_id, ordinal)`,
 		),
 		db.prepare(
 			`CREATE INDEX IF NOT EXISTS idx_review_notifications_recipient

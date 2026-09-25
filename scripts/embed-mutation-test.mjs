@@ -17,6 +17,43 @@ const repoRoot = path.resolve(
 );
 const mutations = [
   {
+    name: "synthetic clicks open the sign-in popup",
+    file: "src/embed-auth-client.ts",
+    from: '      if (!event.isTrusted) return;',
+    to: '      if (false) return;',
+  },
+  {
+    name: "popup handoff accepts a different window or origin",
+    file: "src/embed-auth-client.ts",
+    from: 'event.source !== popup || event.origin !== location.origin || ',
+    to: '',
+  },
+  {
+    name: "authentication loses the requested annotation action",
+    file: "src/embed-auth-client.ts",
+    from: 'sessionStorage.setItem("shiplet.embed.intent:" + installation, action)',
+    to: 'sessionStorage.setItem("shiplet.embed.intent:" + installation, "none")',
+  },
+  {
+    name: "embedded comments open automatically",
+    file: "src/trusted-review-host.ts",
+    from: 'else notifyEmbedView();',
+    to: 'else setPanelOpen(true);',
+  },
+
+  {
+    name: "account recovery silently reuses the current login",
+    file: "src/index.ts",
+    from: '          prompt: "login",',
+    to: "          prompt: undefined,",
+  },
+  {
+    name: "account recovery skips the registered return origin",
+    file: "src/index.ts",
+    from: '      if (!pageUrl) return failure("Invalid review page", 400);',
+    to: '      if (false) return failure("Invalid review page", 400);',
+  },
+  {
     name: "browser setup accepts a foreign form origin",
     file: "src/index.ts",
     additional: [
@@ -123,6 +160,8 @@ function copyHarness(destination) {
     "wordpress-embed.spec.ts",
     "embed-install.spec.ts",
     "embed-confirmation-api.spec.ts",
+    "embed-auth-client.spec.ts",
+    "trusted-review-host.spec.ts",
   ])
     cpSync(
       path.join(repoRoot, "test", file),
@@ -160,6 +199,8 @@ function runEmbedTests(workdir) {
       "test/wordpress-embed.spec.ts",
       "test/embed-install.spec.ts",
       "test/embed-confirmation-api.spec.ts",
+      "test/embed-auth-client.spec.ts",
+      "test/trusted-review-host.spec.ts",
       "--reporter=json",
       "--outputFile",
       reportPath,

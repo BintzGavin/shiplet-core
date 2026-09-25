@@ -52,7 +52,126 @@ function form(projectId: string, origin = "https://example.com", extra = {}) {
     }),
   };
 }
+
+function expectStyledReviewPage(response: Response, html: string) {
+  expect(response.headers.get("content-type")).toContain("text/html");
+  expect(response.headers.get("cache-control")).toBe("no-store");
+  expect(html).toContain('data-shiplet-access-page="v1"');
+  expect(html).toContain('name="viewport"');
+  const nonce = html.match(/<style nonce="([^"]+)">/)?.[1];
+  expect(nonce).toBeTruthy();
+  expect(response.headers.get("content-security-policy")).toContain(`style-src 'nonce-${nonce}'`);
+  expect(response.headers.get("content-security-policy")).toContain("style-src-attr 'none'");
+  expect(html).toContain("font-family:");
+  expect(html).toContain("min-height: 44px");
+}
+
+async function reviewInstallation() {
+  const id = await project();
+  await request("/embed/install", form(id));
+  return (await (env as Env).DB.prepare(
+    "SELECT id FROM embed_installations WHERE project_id = ? AND revoked_on IS NULL",
+  ).bind(id).first<{ id: string }>())!;
+}
+
 describe("framework-independent widget installation", () => {
+  it("[T2] confines outer dock and visibility synchronization to bounded presentation state", async () => {
+    const script = await (await request("/api/embed/widget.js")).text();
+    const styles = await (await request("/api/embed/widget.css")).text();
+
+    expect(script).toContain('shiplet.embed.presentation.v1');
+    expect(script).toContain("allowedDocks");
+    for (const dock of ["top-left", "top-right", "bottom-left", "bottom-right"]) expect(script).toContain(dock);
+    expect(styles).toContain(':host([data-dock=top-left])');
+    expect(styles).toContain(':host([data-dock=bottom-left])');
+    expect(script).not.toContain('data.draft');
+    expect(script).not.toContain('data.recipients');
+  });
+  it("serves stable-ticket contextual pin assets without moving write controls into the page", async () => {
+    const script = await (await request("/api/embed/widget.js")).text();
+    const styles = await (await request("/api/embed/widget.css")).text();
+
+    expect(script).toContain("feedbackId");
+    expect(script).toContain("ticket");
+    expect(script).toContain('protocol: "shiplet.embed.focus.v1"');
+    expect(script).toContain('["toolbar", "comments", "thread"');
+    expect(script).toContain('id="shiplet-embedded-review-surface"');
+    expect(script).toContain("items.slice(0, 250)");
+    expect(script).toContain("item.index >= 1000000");
+    expect(script).not.toContain("items.slice(0, 100)");
+    expect(script).toContain(
+      'button.setAttribute("aria-controls", "shiplet-embedded-review-surface")',
+    );
+    expect(script).not.toContain("review-feedback/replies");
+    expect(script).not.toContain("Confirm reply");
+    expect(styles).toContain(".surface[data-view=thread]");
+  });
+
+  it("shows the regular Annotate toolbar while signed out, without a nested login panel", async () => {
+    const installation = await reviewInstallation();
+    const response = await request(`/embed/review/start?${new URLSearchParams({
+      installation_id: installation.id,
+      return_url: "https://example.com/pricing",
+    })}`);
+    expect(response.status).toBe(200);
+    const html = await response.text();
+    expect(html).toContain('class="shiplet-review-launcher"');
+    expect(html).toContain('data-shiplet-embed-action="annotate"');
+    expect(html).toContain('data-shiplet-embed-action="comments"');
+    expect(html).toContain(">Annotate</button>");
+    expect(html).not.toContain("<h1");
+    expect(html).not.toContain("Open secure Shiplet sign-in");
+    expect(html).toContain("/api/review/host.css");
+    expect(response.headers.get("content-security-policy")).toContain("style-src 'self'");
+    expect(response.headers.get("content-security-policy")).toContain("frame-ancestors 'self' https://example.com");
+    expect(html).not.toContain("shiplet_embed_auth_");
+  });
+
+  it("explains denied access and offers an account switch without granting the wrong account access", async () => {
+    const installation = await reviewInstallation();
+    const path = `/embed/review/authorize?${new URLSearchParams({
+      installation_id: installation.id,
+      return_url: "https://example.com/pricing?plan=team",
+    })}`;
+    const response = await request(path, { headers: {
+      "x-shiplet-user-id": "user_embed_wrong_account",
+      "x-shiplet-user-email": "wrong-account@example.com",
+    } });
+    expect(response.status).toBe(403);
+    const html = await response.text();
+    expectStyledReviewPage(response, html);
+    expect(html).toContain("wrong-account@example.com");
+    expect(html).toContain("Sign in with another account");
+    expect(html).toContain("Ask the owner to invite this account");
+    expect(html).not.toContain("shiplet_embed_auth_");
+    const switchPath = html.match(/href="([^"]+switch_account=1[^"]*)"/)?.[1]?.replaceAll("&amp;", "&");
+    expect(switchPath).toBeTruthy();
+    const login = await request(switchPath!);
+    expect(login.status).toBe(302);
+    const destination = new URL(login.headers.get("location")!);
+    expect(destination.origin).toBe("https://authkit.test");
+    expect(destination.searchParams.get("prompt")).toBe("login");
+    const state = JSON.parse(atob(destination.searchParams.get("state")!));
+    expect(state.returnTo).toBe(path);
+    expect(state.returnTo).not.toContain("switch_account");
+  });
+
+  it("keeps account switching bound to a valid installation and exact registered return origin", async () => {
+    const installation = await reviewInstallation();
+    for (const [id, returnUrl] of [
+      [installation.id, "https://example.com.attacker.test/pricing"],
+      ["missing-installation", "https://example.com/pricing"],
+    ]) {
+      const response = await request(`/embed/review/authorize?${new URLSearchParams({
+        installation_id: id,
+        return_url: returnUrl,
+        switch_account: "1",
+      })}`);
+      expect(response.status).toBeGreaterThanOrEqual(400);
+      expect(response.headers.get("location")).toBeNull();
+      expectStyledReviewPage(response, await response.text());
+    }
+  });
   it("keeps hash-router pages distinct while removing credential-shaped fragment values", () => {
     expect(
       normalizeEmbedReviewPageUrl(
@@ -200,6 +319,8 @@ describe("framework-independent widget installation", () => {
       "frame-ancestors 'none'",
     );
     const html = await authorization.text();
+    expectStyledReviewPage(authorization, html);
+    expect(html).toContain('href="https://example.com/pricing"');
     const ticket = html.match(/shiplet_embed_auth_[A-Za-z0-9_-]+/)![0];
     const redeem = (origin: string) =>
       request("/embed/review/authorize", {

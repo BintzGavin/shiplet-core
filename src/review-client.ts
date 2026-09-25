@@ -497,6 +497,9 @@ ${bubbleLayoutHelpers}
 	let presenceSocket = null;
 	let presenceReconnectTimer = 0;
 	let lastCursorSentAt = 0;
+	let lastViewportSentAt = 0;
+	let viewportSendTimer = 0;
+	let followScrollUntil = 0;
 	let mentionRequestSerial = 0;
 	let feedbackLoadSerial = 0;
 	let feedbackPollTimer = 0;
@@ -685,7 +688,9 @@ ${bubbleLayoutHelpers}
 		".shiplet-review-cursor-layer{position:fixed;inset:0;z-index:2147482995;pointer-events:none;font-family:ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif}",
 		".shiplet-review-remote-cursor{position:absolute;left:0;top:0;transform:translate(-3px,-2px);transition:left .08s linear,top .08s linear;color:#20293a}",
 		".shiplet-review-remote-cursor svg{display:block;filter:drop-shadow(0 2px 4px rgba(32,41,58,.28))}",
-		".shiplet-review-remote-cursor span{position:absolute;left:14px;top:18px;max-width:160px;padding:4px 7px;border-radius:999px;background:#20293a;color:#fff;font-size:11px;font-weight:750;line-height:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}",
+		".shiplet-review-remote-cursor-label{position:absolute;left:14px;top:18px;display:inline-flex;align-items:center;gap:6px;max-width:220px;padding:3px 9px 3px 3px;border-radius:999px;background:#20293a;color:#fff;font-size:11px;font-weight:750;line-height:1;white-space:nowrap;box-shadow:0 2px 8px rgba(7,14,26,.3)}",
+		".shiplet-review-remote-cursor-avatar{display:inline-grid;place-items:center;flex:0 0 auto;width:18px;height:18px;border:1.5px solid #fff;border-radius:999px;background:#fdfcf8;background-repeat:no-repeat;color:#20293a;font:800 8px/1 ui-monospace,SFMono-Regular,Menlo,monospace;overflow:hidden}",
+		".shiplet-review-remote-cursor-name{overflow:hidden;text-overflow:ellipsis}",
 		".shiplet-review-annotation-layer{position:fixed;inset:0;z-index:2147482997;pointer-events:none;font-family:ui-sans-serif,system-ui,-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif}",
 		".shiplet-review-annotation-layer.is-editing{z-index:2147483001;pointer-events:auto;cursor:crosshair}",
 		".shiplet-review-annotation-editor{position:absolute;inset:0;background:rgba(32,41,58,.08)}",
@@ -1743,6 +1748,26 @@ ${bubbleLayoutHelpers}
 		});
 	}
 
+	function sendViewportPresence() {
+		viewportSendTimer = 0;
+		lastViewportSentAt = Date.now();
+		sendPresence({
+			type: "viewport:update",
+			page: currentPagePresence(),
+			viewport: currentViewportPresence(),
+		});
+	}
+
+	function queueViewportPresence() {
+		const elapsed = Date.now() - lastViewportSentAt;
+		if (elapsed >= 80) { sendViewportPresence(); return; }
+		if (!viewportSendTimer) viewportSendTimer = setTimeout(sendViewportPresence, 80 - elapsed);
+	}
+
+	function sendCursorLeave() {
+		sendPresence({ type: "cursor:leave", page: currentPagePresence() });
+	}
+
 	function sendCursorPresence(event) {
 		const now = Date.now();
 		if (now - lastCursorSentAt < 60) return;
@@ -1796,7 +1821,11 @@ ${bubbleLayoutHelpers}
 
 	function handlePresenceMessage(message) {
 		if (!message || !message.type) return;
-		if (message.type === "presence:update" && Array.isArray(message.viewers)) {
+		if (message.type === "presence:ready" && message.viewer && /^#[0-9a-f]{6}$/i.test(String(message.viewer.color || ""))) {
+			// The coordinator assigns each live reviewer a distinct color.
+			selfPresenceViewer.color = message.viewer.color;
+		}
+		if ((message.type === "presence:update" || message.type === "presence:ready") && Array.isArray(message.viewers)) {
 			state.presenceViewers = message.viewers;
 			reconcileRemoteCursors();
 			renderPresence();
@@ -1814,7 +1843,21 @@ ${bubbleLayoutHelpers}
 				at: Date.now(),
 			};
 			renderRemoteCursors();
-			if (state.followingId === viewer.id) keepCursorInView(message.cursor);
+			return;
+		}
+		if (message.type === "cursor:leave" && message.viewer && message.viewer.id) {
+			delete state.remoteCursors[message.viewer.id];
+			renderRemoteCursors();
+			return;
+		}
+		if (message.type === "viewport:update" && message.viewer && message.viewport) {
+			const viewer = message.viewer;
+			if (!viewer.id || viewer.id === selfPresenceViewer.id) return;
+			const known = state.presenceViewers.find((candidate) => candidate.id === viewer.id);
+			if (known) known.viewport = message.viewport;
+			if (state.followingId === viewer.id && (!message.page || message.page.pathname === location.pathname)) {
+				followViewport(message.viewport);
+			}
 		}
 	}
 
@@ -1836,8 +1879,9 @@ ${bubbleLayoutHelpers}
 				const isSelf = viewer.id === selfPresenceViewer.id;
 				const isFollowing = viewer.id === state.followingId;
 				const classes = "shiplet-review-presence-avatar" + (isSelf ? " is-self" : "") + (isFollowing ? " is-following" : "");
-				const label = isSelf ? "You are viewing this page" : "Follow " + (viewer.name || "reviewer");
-				return "<button type='button' class='" + classes + "' data-presence-avatar-id='" + esc(viewer.id || "") + "' aria-label='" + esc(label) + "' title='" + esc(viewer.name || "Reviewer") + "'" + (isSelf ? " disabled" : "") + " style=\"" + esc(avatarBackgroundForViewer(viewer)) + "\"><span>" + esc(initialsFor(viewer.name)) + "</span></button>";
+				const label = isSelf ? "You are viewing this page" : (isFollowing ? "Stop following " : "Follow ") + (viewer.name || "reviewer");
+				const ring = "border-color:" + cssUrl(cursorColor(viewer)) + ";";
+				return "<button type='button' class='" + classes + "' data-presence-avatar-id='" + esc(viewer.id || "") + "' aria-label='" + esc(label) + "' aria-pressed='" + (isFollowing ? "true" : "false") + "' title='" + esc(viewer.name || "Reviewer") + "'" + (isSelf ? " disabled" : "") + " style=\"" + esc(ring + avatarBackgroundForViewer(viewer)) + "\"><span>" + esc(initialsFor(viewer.name)) + "</span></button>";
 			}).join("") +
 		"</div>";
 	}
@@ -1862,9 +1906,12 @@ ${bubbleLayoutHelpers}
 			if (state.followingId !== entry.viewer.id) return "";
 		}
 		const color = cursorColor(entry.viewer);
-		return "<div class='shiplet-review-remote-cursor' style='left:" + left + "px;top:" + top + "px;color:" + esc(color) + "'>" +
+		return "<div class='shiplet-review-remote-cursor' data-remote-cursor-id='" + esc(entry.viewer.id || "") + "' style='left:" + left + "px;top:" + top + "px;color:" + esc(color) + "'>" +
 			"<svg width='24' height='24' viewBox='0 0 24 24' aria-hidden='true'><path d='M4 3.5 19.5 13 12.2 14.5 9.3 21 4 3.5Z' fill='currentColor' stroke='#fbf9f4' stroke-width='1.5' stroke-linejoin='round'/></svg>" +
-			"<span style='background:" + esc(color) + "'>" + esc(entry.viewer.name || "Reviewer") + "</span>" +
+			"<span class='shiplet-review-remote-cursor-label' style='background:" + esc(color) + "'>" +
+				"<span class='shiplet-review-remote-cursor-avatar' style=\"" + esc(avatarBackgroundForViewer(entry.viewer)) + "\">" + esc(initialsFor(entry.viewer.name)) + "</span>" +
+				"<span class='shiplet-review-remote-cursor-name'>" + esc(entry.viewer.name || "Reviewer") + "</span>" +
+			"</span>" +
 		"</div>";
 	}
 
@@ -1915,7 +1962,22 @@ ${bubbleLayoutHelpers}
 			location.href = targetHref;
 			return;
 		}
-		if (viewer.cursor) keepCursorInView(viewer.cursor);
+		if (viewer.viewport) followViewport(viewer.viewport);
+		else if (viewer.cursor) keepCursorInView(viewer.cursor);
+	}
+
+	function followViewport(viewport) {
+		const left = Math.max(0, Number(viewport.scrollX || 0));
+		const top = Math.max(0, Number(viewport.scrollY || 0));
+		if (Math.abs(left - window.scrollX) < 1 && Math.abs(top - window.scrollY) < 1) return;
+		followScrollUntil = Date.now() + 900;
+		window.scrollTo({ left, top, behavior: reducedMotion ? "auto" : "smooth" });
+	}
+
+	function interruptFollowing(event) {
+		if (!state.followingId) return;
+		if (event && event.type === "keydown" && !/^(?:Arrow(?:Up|Down|Left|Right)|Page(?:Up|Down)|Home|End|Escape| )$/.test(String(event.key || ""))) return;
+		stopFollowing();
 	}
 
 	function safeFollowHref(href) {
@@ -2313,7 +2375,7 @@ ${bubbleLayoutHelpers}
 				"</div>" +
 			"</li>";
 		}).join("");
-		const statusOptions = ["New", "In Progress", "Blocked", "Done", "Dropped"]
+		const statusOptions = ["New", "In Progress", "Blocked", "Staging", "Done", "Dropped"]
 			.map((status) => "<option value='" + esc(status) + "'" + (item.status === status ? " selected" : "") + ">" + esc(status) + "</option>")
 			.join("");
 		const replyCount = (item.replies || []).length;
@@ -3368,9 +3430,15 @@ ${bubbleLayoutHelpers}
 		renderBubbles();
 		renderAnnotations();
 		renderRemoteCursors();
-		sendPagePresence();
+		if (Date.now() >= followScrollUntil) queueViewportPresence();
+		else sendPagePresence();
 	}, { passive: true });
 	window.addEventListener("mousemove", sendCursorPresence, { passive: true });
+	document.addEventListener("mouseleave", sendCursorLeave);
+	window.addEventListener("wheel", interruptFollowing, { passive: true });
+	window.addEventListener("touchmove", interruptFollowing, { passive: true });
+	window.addEventListener("pointerdown", interruptFollowing, { passive: true });
+	window.addEventListener("keydown", interruptFollowing);
 	window.addEventListener("beforeunload", () => {
 		try {
 			if (presenceSocket) presenceSocket.close(1000, "page unloading");
