@@ -4915,10 +4915,22 @@ describe("Shiplet", () => {
       });
 
       try {
-        const response = await makeRequest("/api/external-url/metadata", {
+        const denied = await makeRequest("/api/external-url/metadata", {
           method: "POST",
           headers: {
             Authorization: "Bearer must-not-reach-origin",
+            Cookie: "shiplet_session=must-not-reach-origin",
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({ url: "https://newro-eats.vercel.app/" }),
+        });
+        expect(denied.status).toBe(401);
+        expect(originRequests).toHaveLength(0);
+
+        const response = await makeRequest("/api/external-url/metadata", {
+          method: "POST",
+          headers: {
+            Origin: "http://localhost",
             Cookie: "shiplet_session=must-not-reach-origin",
             "Content-Type": "application/json",
           },

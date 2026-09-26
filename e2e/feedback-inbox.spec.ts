@@ -1,6 +1,9 @@
-import { expect, test } from "@playwright/test";
+import { Buffer } from "node:buffer";
+
+import { expect, test, type Request } from "@playwright/test";
 
 import {
+  authHeaders,
   collectPageErrors,
   createOrganization,
   createReviewFeedback,
@@ -12,7 +15,7 @@ import {
 } from "./helpers";
 
 test.describe("feedback and inbox through the trusted review host", () => {
-  test("updates the trusted live count after secure human confirmation", async ({
+  test("updates the trusted live count after inline managed feedback", async ({
     page,
     request,
   }) => {
@@ -37,24 +40,188 @@ test.describe("feedback and inbox through the trusted review host", () => {
       .first()
       .click();
     await page.locator("#shiplet-review-comment").fill(comment);
-    const popupPromise = page.waitForEvent("popup");
+    let popupCount = 0;
+    page.on("popup", () => { popupCount += 1; });
+    const apiUrl = await page.locator("html").getAttribute("data-review-api-url");
+    expect(apiUrl).toBeTruthy();
+    const saved = page.waitForResponse((response) =>
+      response.url() === apiUrl &&
+      response.request().method() === "POST",
+    );
     await page
       .getByRole("button", { name: "Send annotation", exact: true })
       .click();
-    const confirmation = await popupPromise;
-    await confirmation.waitForLoadState("domcontentloaded");
-    await confirmation
-      .getByRole("button", { name: "Confirm and send feedback" })
-      .click();
-    await expect(
-      confirmation.getByRole("heading", { name: "Feedback sent" }),
-    ).toBeVisible();
+    expect((await saved).ok()).toBe(true);
+    await expect(page.locator(".shiplet-review-status")).toHaveText("Feedback sent.");
+    expect(popupCount).toBe(0);
     await page.locator(".shiplet-review-comments-launcher").click();
     await page.getByLabel("Review options").click();
     await page.getByRole("button", { name: "Refresh" }).click();
     await expect(page.locator(".shiplet-review-count")).toHaveText("1");
     await expect(page.locator(".shiplet-review-list")).toContainText(comment);
     await expectNoPageErrors(errors);
+  });
+
+  test("retries a committed inline comment after a lost response without duplicating it", async ({ page, request }) => {
+    const user = testUser("inline-retry");
+    const organization = await createOrganization(request, user);
+    const published = await publishStaticShiplet(request, user, organization.id, {
+      name: `Inline Retry Shiplet ${Date.now()}`,
+      html: "<!doctype html><title>Retry target</title><h1 id='retry-target' style='margin-top:120px'>Retry target</h1>",
+    });
+    await loginAs(page, user);
+    await page.goto(`/${published.project.subdomain}`, { waitUntil: "domcontentloaded" });
+    await page.getByRole("button", { name: /Annotate revision_/ }).click();
+    await page.frameLocator("[data-shiplet-artifact-frame]").locator("#retry-target").click();
+    const comment = `Keep this captured draft ${Date.now()}`;
+    const composer = page.locator("#shiplet-annotation-composer");
+    const commentField = composer.getByRole("textbox", { name: "Annotation", exact: true });
+    const composerMessage = composer.locator(".shiplet-review-composer-message");
+    await commentField.fill(comment);
+    const submitted: Array<{
+      requestId: unknown;
+      clientFeedbackId: unknown;
+      reviewRevisionId: unknown;
+      body: Buffer | null;
+    }> = [];
+    const directPostDiagnostics: Array<{
+      ordinal: number;
+      status: number | null;
+      networkCode: string | null;
+    }> = [];
+    const directPostOrdinals = new Map<Request, number>();
+    const allowedNetworkCodes = new Set([
+      "ERR_ABORTED",
+      "ERR_FAILED",
+      "ERR_CONNECTION_REFUSED",
+      "ERR_CONNECTION_RESET",
+      "ERR_TIMED_OUT",
+    ]);
+    let popupCount = 0;
+    page.on("popup", () => { popupCount += 1; });
+    const apiUrl = await page.locator("html").getAttribute("data-review-api-url");
+    expect(apiUrl).toBeTruthy();
+    let directPostOrdinal = 0;
+    page.on("request", (observedRequest) => {
+      if (
+        observedRequest.method() !== "POST" ||
+        observedRequest.url() !== String(apiUrl)
+      ) return;
+      directPostOrdinal += 1;
+      directPostOrdinals.set(observedRequest, directPostOrdinal);
+      directPostDiagnostics.push({
+        ordinal: directPostOrdinal,
+        status: null,
+        networkCode: null,
+      });
+    });
+    page.on("response", (response) => {
+      const ordinal = directPostOrdinals.get(response.request());
+      if (ordinal === undefined) return;
+      directPostDiagnostics[ordinal - 1].status = response.status();
+    });
+    page.on("requestfailed", (failedRequest) => {
+      const ordinal = directPostOrdinals.get(failedRequest);
+      if (ordinal === undefined) return;
+      const errorCode = failedRequest
+        .failure()
+        ?.errorText.match(/ERR_[A-Z_]+/)?.[0];
+      directPostDiagnostics[ordinal - 1].networkCode =
+        errorCode && allowedNetworkCodes.has(errorCode) ? errorCode : "OTHER";
+    });
+    await page.route(String(apiUrl), async (route) => {
+      if (route.request().method() !== "POST") return route.continue();
+      const payload = route.request().postDataJSON() as Record<string, unknown>;
+      submitted.push({
+        requestId: payload.requestId,
+        clientFeedbackId: payload.clientFeedbackId,
+        reviewRevisionId: payload.reviewRevisionId,
+        body: route.request().postDataBuffer(),
+      });
+      if (submitted.length === 1) {
+        const committed = await route.fetch();
+        directPostDiagnostics[0].status = committed.status();
+        expect(committed.ok()).toBe(true);
+        return route.abort("failed");
+      }
+      return route.continue();
+    });
+    const send = composer.getByRole("button", { name: "Send annotation", exact: true });
+    await send.click();
+    await expect(composerMessage).toContainText(/retry the same submission/i);
+    await expect(commentField).toHaveValue(comment);
+    await expect(composer.locator(".shiplet-review-target")).toContainText("retry-target");
+    const retry = composer.getByRole("button", {
+      name: "Retry submission",
+      exact: true,
+    });
+    await expect(retry).toBeVisible();
+    await expect(retry).toBeEnabled();
+    await retry.click();
+    await expect.poll(() => submitted.length).toBe(2);
+    await expect.poll(() => directPostDiagnostics[1]).toMatchObject({
+      ordinal: 2,
+      status: expect.any(Number),
+    });
+    await expect(composerMessage).toHaveText("Feedback sent");
+    await expect(composer).toBeHidden();
+    expect(submitted).toHaveLength(2);
+    const firstSubmission = submitted[0];
+    const secondSubmission = submitted[1];
+    for (const key of [
+      "requestId",
+      "clientFeedbackId",
+      "reviewRevisionId",
+    ] as const) {
+      const firstValue = firstSubmission[key];
+      const secondValue = secondSubmission[key];
+      expect(typeof firstValue === "string" && firstValue.length > 0).toBe(true);
+      expect(typeof secondValue === "string" && secondValue.length > 0).toBe(true);
+      expect(firstValue === secondValue).toBe(true);
+    }
+    expect(
+      firstSubmission.body !== null &&
+        secondSubmission.body !== null &&
+        firstSubmission.body.length > 0 &&
+        secondSubmission.body.length > 0 &&
+        Buffer.compare(firstSubmission.body, secondSubmission.body) === 0,
+    ).toBe(true);
+    expect(popupCount).toBe(0);
+    await page.locator(".shiplet-review-comments-launcher").click();
+    await expect(page.locator(".shiplet-review-count")).toHaveText("1");
+    await expect(page.locator(".shiplet-review-list")).toContainText(comment);
+
+    const feedbackResponse = await request.get(
+      `/api/projects/${encodeURIComponent(published.project.id)}/review-feedback?includeClosed=true`,
+      {
+        headers: {
+          ...authHeaders(user),
+          Origin: "http://localhost:8787",
+        },
+      },
+    );
+    expect(feedbackResponse.ok()).toBe(true);
+    const durableResult = (await feedbackResponse.json()) as {
+      feedback: Array<{
+        id: string;
+        client_feedback_id: string;
+        revision_id: string | null;
+        submitted_by_user_id: string | null;
+        selected_element: { selector?: string } | null;
+      }>;
+    };
+    expect(durableResult.feedback).toHaveLength(1);
+    const durableFeedback = durableResult.feedback[0];
+    expect(typeof durableFeedback.id === "string" && durableFeedback.id.length > 0).toBe(true);
+    expect(durableFeedback.client_feedback_id === firstSubmission.clientFeedbackId).toBe(true);
+    expect(durableFeedback.revision_id === firstSubmission.reviewRevisionId).toBe(true);
+    expect(durableFeedback.submitted_by_user_id === user.id).toBe(true);
+    expect(durableFeedback.selected_element?.selector?.includes("retry-target") ?? false).toBe(true);
+
+    await page.reload({ waitUntil: "domcontentloaded" });
+    await page.locator(".shiplet-review-comments-launcher").click();
+    await expect(page.locator(".shiplet-review-count")).toHaveText("1");
+    await expect(page.locator(".shiplet-review-list")).toContainText(comment);
   });
 
   test("polls new comments without a manual refresh", async ({ page, request }) => {
@@ -124,7 +291,7 @@ test.describe("feedback and inbox through the trusted review host", () => {
         name: "Show annotation details and target properties",
       })
       .click();
-    await page.getByRole("button", { name: "Markup screenshot" }).click();
+    await page.getByRole("button", { name: "Draw on screenshot" }).click();
     const canvas = page.locator("[data-shiplet-annotation-canvas]");
     await expect(canvas).toBeVisible();
     const bounds = await canvas.boundingBox();
@@ -143,7 +310,7 @@ test.describe("feedback and inbox through the trusted review host", () => {
     await expectNoPageErrors(errors);
   });
 
-  test("mounts the trusted host inside the dashboard preview", async ({
+  test("saves inline feedback inside the dashboard preview", async ({
     page,
     request,
   }) => {
@@ -165,6 +332,14 @@ test.describe("feedback and inbox through the trusted review host", () => {
     await launcher.focus();
     await launcher.press("Enter");
     await expect(preview.locator("#shiplet-kernel-review-panel")).toBeVisible();
+    await preview.getByRole("button", { name: /Annotate revision_/ }).click();
+    await preview.frameLocator("[data-shiplet-artifact-frame]").getByRole("heading").first().click();
+    const comment = `Dashboard preview feedback ${Date.now()}`;
+    await preview.locator("#shiplet-review-comment").fill(comment);
+    await preview.getByRole("button", { name: "Send annotation", exact: true }).click();
+    await expect(preview.locator(".shiplet-review-status")).toHaveText("Feedback sent.");
+    await expect(preview.locator(".shiplet-review-count")).toHaveText("1");
+    await expect(preview.locator(".shiplet-review-list")).toContainText(comment);
     await expectNoPageErrors(errors);
   });
 
@@ -222,7 +397,7 @@ test.describe("feedback and inbox through the trusted review host", () => {
     ).toHaveAttribute("data-shiplet-selecting", "true");
   });
 
-  test("collapses the panel after starting secure confirmation on mobile", async ({
+  test("collapses the panel after saving inline feedback on mobile", async ({
     page,
     request,
   }) => {
@@ -245,14 +420,12 @@ test.describe("feedback and inbox through the trusted review host", () => {
       .first()
       .click();
     await page.locator("#shiplet-review-comment").fill(`Mobile comment ${Date.now()}`);
-    const popupPromise = page.waitForEvent("popup");
     await page
       .getByRole("button", { name: "Send annotation", exact: true })
       .click();
-    const confirmation = await popupPromise;
+    await expect(page.locator(".shiplet-review-count")).toHaveText("1");
     await expect(page.locator("#shiplet-kernel-review-panel")).toBeHidden();
     await expect(page.locator(".shiplet-review-comments-launcher")).toBeVisible();
-    await confirmation.close();
   });
 
   test("shows feedback globally and creates an inbox notification for mentions", async ({

@@ -93,7 +93,6 @@ import {
   trustedArtifactBridgeScript,
 } from "./trusted-artifact-bridge";
 import {
-  deleteStaticAssets,
   serveStaticAsset,
   storeStaticAssets,
 } from "./static-assets";
@@ -4027,11 +4026,34 @@ function requireProjectOwner(project: Project, user: ShipletUser) {
 }
 
 async function deleteProjectPermanently(env: Env, project: Project) {
-  await deleteStaticAssets(env.DB, env.SHIPLET_ASSETS, project.id);
-  if (project.custom_hostname) {
-    await deleteCustomHostname(env, project.custom_hostname);
-  }
+  const assets = await env.DB
+    .prepare("SELECT object_key FROM project_assets WHERE project_id = ? AND object_key IS NOT NULL")
+    .bind(project.id)
+    .all<{ object_key: string }>();
   await permanentlyDeleteProjectRecords(env.DB, project.id);
+
+  let cleanupIncomplete = false;
+  for (const asset of assets.results || []) {
+    try {
+      if (!env.SHIPLET_ASSETS) {
+        cleanupIncomplete = true;
+        continue;
+      }
+      await env.SHIPLET_ASSETS.delete(asset.object_key);
+    } catch {
+      cleanupIncomplete = true;
+    }
+  }
+  if (project.custom_hostname) {
+    try {
+      if (!(await deleteCustomHostname(env, project.custom_hostname))) {
+        cleanupIncomplete = true;
+      }
+    } catch {
+      cleanupIncomplete = true;
+    }
+  }
+  return cleanupIncomplete;
 }
 
 function archivedShipletPageResponse(
@@ -5040,6 +5062,7 @@ async function applyDurableHumanFeedbackOperation(input: {
   user: ShipletUser;
   payload: Parameters<typeof createReviewFeedback>[3];
   requestId: string;
+  binding?: { installationId: string; revisionId: string };
 }) {
   if (!REVIEW_OPERATION_REQUEST_ID.test(input.requestId)) {
     throw new Response("Invalid review operation request ID", { status: 400 });
@@ -5049,7 +5072,12 @@ async function applyDurableHumanFeedbackOperation(input: {
     input.project,
     input.payload.mentions,
   );
-  const revisionId = trustedReviewRevisionId(input.project);
+  const activeRevisionId = trustedReviewRevisionId(input.project);
+  const installationId = input.binding?.installationId || `managed:${input.project.id}`;
+  const revisionId = input.binding?.revisionId || activeRevisionId;
+  if (!installationId || revisionId !== activeRevisionId) {
+    throw new Response("Shiplet revision changed; reopen review", { status: 409 });
+  }
   const payloadJson = await prepareDurableReviewPayload(
     input.env,
     input.project.id,
@@ -5059,7 +5087,7 @@ async function applyDurableHumanFeedbackOperation(input: {
   let operation: ReviewOperationRow;
   try {
     operation = await prepareReviewOperation(input.env.DB, {
-      installationId: `managed:${input.project.id}`,
+      installationId,
       projectId: input.project.id,
       revisionId,
       actorUserId: input.user.id,
@@ -5076,11 +5104,38 @@ async function applyDurableHumanFeedbackOperation(input: {
     throw error;
   }
   if (operation.completed_on && operation.result_feedback_id) {
-    return getReviewFeedback(
+    const existing = await getReviewFeedback(
       input.env.DB,
       input.project.id,
       operation.result_feedback_id,
     );
+    if (!existing) {
+      throw new Response("Review operation conflict", { status: 409 });
+    }
+    return existing;
+  }
+  if (operation.confirmed_on || operation.failed_on) {
+    throw new Response("Review operation conflict", { status: 409 });
+  }
+  const priorFeedback = await input.env.DB
+    .prepare(
+      "SELECT id, submitted_by_user_id FROM review_feedback WHERE project_id = ? AND client_feedback_id = ? LIMIT 1",
+    )
+    .bind(input.project.id, input.payload.clientFeedbackId)
+    .first<{ id: string; submitted_by_user_id: string | null }>();
+  if (priorFeedback) {
+    if (
+      priorFeedback.id === operation.result_feedback_id &&
+      priorFeedback.submitted_by_user_id === input.user.id
+    ) {
+      const existing = await getReviewFeedback(
+        input.env.DB,
+        input.project.id,
+        priorFeedback.id,
+      );
+      if (existing) return existing;
+    }
+    throw new Response("Review operation conflict", { status: 409 });
   }
   await stageDurableReviewPayload(
     input.env,
@@ -5107,11 +5162,25 @@ async function applyDurableHumanFeedbackOperation(input: {
     .bind(operation.id)
     .first<ReviewOperationRow>();
   if (current?.completed_on && current.result_feedback_id) {
-    return getReviewFeedback(
+    const existing = await getReviewFeedback(
       input.env.DB,
       input.project.id,
       current.result_feedback_id,
     );
+    if (existing) return existing;
+  }
+  if (current?.confirmed_on || current?.completed_on || current?.failed_on) {
+    throw new Response("Review operation conflict", { status: 409 });
+  }
+  const latestProject = await getProjectById(input.env.DB, input.project.id);
+  if (
+    !latestProject ||
+    trustedReviewRevisionId(latestProject) !== revisionId ||
+    latestProject.archived_on
+  ) {
+    throw new Response("Shiplet revision changed; reopen review", {
+      status: 409,
+    });
   }
   throw new Response("Review operation could not be recorded", { status: 500 });
 }
@@ -11310,6 +11379,9 @@ app.use("*", withDbAndInit, async (c, next) => {
         }
         if (!user) return c.text("Review access required", 401);
         const body = await readJson(c);
+        if (isRecord(body) && Object.prototype.hasOwnProperty.call(body, "reviewRevisionId")) {
+          return await createManagedDirectReviewFeedback(c, project, user, body);
+        }
         const validation = validateReviewFeedbackPayload(body);
         if (!validation.ok) {
           return json({ ok: false, errors: validation.errors }, 400);
@@ -11470,6 +11542,7 @@ app.use("*", withDbAndInit, async (c, next) => {
           ).toString(),
           reviewApiUrl: reviewApiUrl.toString(),
           reviewPageUrl: canonicalReviewPageUrl.toString(),
+          submissionMode: "direct",
           allowArtifactDownloads: standalonePreviewDownloadsAllowed(
             project,
             requestedArtifactPath,
@@ -12184,6 +12257,17 @@ app.get("/auth/login", async (c) => {
         returnTo,
       });
       return invitationConsentPageResponse(c, signedConsent);
+    }
+
+    if (
+      !accountAction &&
+      !hasExplicitAuthorization(c.req.header("authorization")) &&
+      getSessionCookie(c.req.raw, c.env)
+    ) {
+      const currentUser = await getCurrentUser(c.req.raw, c.env);
+      if (currentUser) {
+        return c.redirect(await resolvePostAuthReturnTo(c, returnTo, currentUser), 302);
+      }
     }
 
     return workOSLoginRedirect(c, {
@@ -14250,6 +14334,154 @@ function managedReviewPageBinding(input: {
   return { ok: false as const };
 }
 
+function validTrustedDirectReviewCapture(input: Record<string, unknown>) {
+  const fields = [
+    "screenshotDataUrl",
+    "screenshotFailureNote",
+    "screenshotMode",
+    "viewport",
+    "coordinates",
+    "selectedElement",
+    "captureContext",
+  ];
+  if (!fields.some((field) => Object.prototype.hasOwnProperty.call(input, field))) {
+    return true;
+  }
+  const capture = Object.fromEntries(fields.map((field) => [field, input[field] ?? null]));
+  if (capture.screenshotMode === "element") {
+    return parseTrustedArtifactCapturePayload(capture) !== null;
+  }
+  if (capture.screenshotMode !== "page") return false;
+  const hasExactKeys = (
+    value: unknown,
+    keys: string[],
+  ): value is Record<string, unknown> =>
+    isRecord(value) &&
+    Object.keys(value).sort().join("|") === [...keys].sort().join("|");
+  const within = (value: unknown, minimum: number, maximum: number) =>
+    typeof value === "number" && Number.isFinite(value) &&
+    value >= minimum && value <= maximum;
+  const viewport = capture.viewport;
+  const coordinates = capture.coordinates;
+  const context = capture.captureContext;
+  return (
+    capture.selectedElement === null &&
+    hasExactKeys(viewport, ["width", "height", "devicePixelRatio"]) &&
+    within(viewport.width, 1, 100_000) &&
+    within(viewport.height, 1, 100_000) &&
+    within(viewport.devicePixelRatio, 0.1, 10) &&
+    hasExactKeys(coordinates, ["pageX", "pageY", "viewportX", "viewportY"]) &&
+    within(coordinates.pageX, -10_000_000, 10_000_000) &&
+    within(coordinates.pageY, -10_000_000, 10_000_000) &&
+    within(coordinates.viewportX, -100_000, 100_000) &&
+    within(coordinates.viewportY, -100_000, 100_000) &&
+    hasExactKeys(context, ["documentWidth", "documentHeight", "scrollX", "scrollY"]) &&
+    within(context.documentWidth, 1, 100_000) &&
+    within(context.documentHeight, 1, 100_000) &&
+    within(context.scrollX, -10_000_000, 10_000_000) &&
+    within(context.scrollY, -10_000_000, 10_000_000) &&
+    (capture.screenshotFailureNote === null ||
+      (typeof capture.screenshotFailureNote === "string" && capture.screenshotFailureNote.length <= 500))
+  );
+}
+
+async function createManagedDirectReviewFeedback(
+  c: any,
+  project: Project,
+  routeUser: ShipletUser | null,
+  input: unknown,
+) {
+  const rejection = tenantReviewMutationRejection(c.req.raw);
+  if (rejection) return rejection;
+  if (c.req.raw.headers.has("authorization")) {
+    return privateReviewJson({ error: "review_browser_session_required" }, 401);
+  }
+  if (!isRecord(input)) {
+    return privateReviewJson({ error: "review_feedback_invalid" }, 400);
+  }
+  const currentUser = routeUser
+    ? await getUser(c.env.DB, routeUser.id)
+    : null;
+  const currentProject = await getProjectById(c.env.DB, project.id);
+  if (!currentUser) {
+    return privateReviewJson({ error: "review_access_required" }, 401);
+  }
+  if (
+    !currentProject ||
+    currentProject.archived_on ||
+    !(await canViewProject(c.env.DB, currentProject, currentUser.id))
+  ) {
+    return privateReviewJson({ error: "review_access_required" }, 403);
+  }
+  const submittedRevision = input.reviewRevisionId;
+  if (
+    typeof submittedRevision !== "string" ||
+    !REVIEW_OPERATION_REQUEST_ID.test(submittedRevision)
+  ) {
+    return privateReviewJson({ error: "review_revision_invalid" }, 400);
+  }
+  if (submittedRevision !== trustedReviewRevisionId(currentProject)) {
+    return privateReviewJson({ error: "review_revision_changed" }, 409);
+  }
+  let requestId: string | null;
+  try {
+    requestId = optionalReviewOperationRequestId(input);
+  } catch (error) {
+    if (isResponse(error)) return error;
+    throw error;
+  }
+  if (requestId === null) {
+    return privateReviewJson({ error: "review_operation_request_id_required" }, 400);
+  }
+
+  if (!validTrustedDirectReviewCapture(input)) {
+    return privateReviewJson({ error: "review_capture_invalid" }, 400);
+  }
+  const mentionForm = new FormData();
+  if (Object.prototype.hasOwnProperty.call(input, "mentions")) {
+    mentionForm.set("mentions_json", JSON.stringify(input.mentions) || "");
+  }
+  const mentions = trustedReviewMentionsFromForm(mentionForm);
+  if (!mentions.ok) {
+    return privateReviewJson({ error: "review_mentions_invalid" }, 400);
+  }
+  const validation = validateReviewFeedbackPayload({
+    ...input,
+    mentions: mentions.value,
+  });
+  if (!validation.ok) {
+    return privateReviewJson({ ok: false, errors: validation.errors }, 400);
+  }
+  let submittedPage: URL;
+  try {
+    submittedPage = new URL(validation.value.pageUrl);
+  } catch {
+    return privateReviewJson({ error: "review_page_invalid" }, 400);
+  }
+  if (
+    !managedReviewPageBinding({
+      env: c.env,
+      requestUrl: c.req.url,
+      project: currentProject,
+      submittedPage,
+    }).ok
+  ) {
+    return privateReviewJson({ error: "review_page_mismatch" }, 403);
+  }
+
+  const feedback = await applyDurableHumanFeedbackOperation({
+    env: c.env,
+    project: currentProject,
+    user: currentUser,
+    payload: validation.value,
+    requestId,
+  });
+  if (!feedback || !feedback.id) {
+    return privateReviewJson({ error: "review_feedback_not_persisted" }, 500);
+  }
+  return privateReviewJson({ ok: true, feedback }, 201);
+}
+
 function trustedReviewCaptureFromForm(
   formData: FormData,
 ):
@@ -15479,6 +15711,7 @@ app.get("/embed/review/host", async (c) => {
       hostScriptUrl: `${origin}/api/review/host.js`,
       reviewApiUrl: `${origin}/embed/review/feedback?${bindingQuery}`,
       reviewPageUrl: pageUrl,
+      submissionMode: "direct",
       frameAncestorOrigins: [session.siteOrigin],
       embeddedSiteOrigin: session.siteOrigin,
     });
@@ -15625,10 +15858,10 @@ app.post("/embed/review/feedback", async (c) => {
       return c.text("Trusted review JSON request required", 403);
     }
     const receiptHandle = c.req.header("x-shiplet-operation-receipt") || "";
-    if (!receiptHandle) return c.text("Operation receipt required", 403);
     const { session, project, user, pageUrl } =
       await requireEmbedReviewSession(c);
-    const validation = validateReviewFeedbackPayload(await readJson(c));
+    const body = await readJson(c);
+    const validation = validateReviewFeedbackPayload(body);
     if (!validation.ok) {
       return json({ ok: false, errors: validation.errors }, 400);
     }
@@ -15638,6 +15871,46 @@ app.post("/embed/review/feedback", async (c) => {
     );
     if (submittedPage !== pageUrl) {
       return c.text("Embedded review page mismatch", 403);
+    }
+    if (!receiptHandle) {
+      const submittedRevision = isRecord(body) ? body.reviewRevisionId : undefined;
+      if (
+        typeof submittedRevision !== "string" ||
+        !REVIEW_OPERATION_REQUEST_ID.test(submittedRevision)
+      ) {
+        return privateReviewJson({ error: "review_revision_invalid" }, 400);
+      }
+      if (submittedRevision !== session.revisionId) {
+        return privateReviewJson({ error: "review_revision_changed" }, 409);
+      }
+      if (!validTrustedDirectReviewCapture(body)) {
+        return privateReviewJson({ error: "review_capture_invalid" }, 400);
+      }
+      const platformSessionCookie =
+        getCookie(c.req.raw, SESSION_COOKIE) ||
+        getCookie(c.req.raw, LEGACY_SESSION_COOKIE);
+      if (platformSessionCookie) {
+        const visibleUser = await getCurrentUser(c.req.raw, c.env);
+        if (!visibleUser || visibleUser.id !== session.actorUserId) {
+          return privateReviewJson({ error: "review_actor_mismatch" }, 403);
+        }
+      }
+      const requestId = optionalReviewOperationRequestId(body);
+      if (requestId === null) {
+        return privateReviewJson({ error: "review_operation_request_id_required" }, 400);
+      }
+      const feedback = await applyDurableHumanFeedbackOperation({
+        env: c.env,
+        project,
+        user,
+        payload: validation.value,
+        requestId,
+        binding: {
+          installationId: session.installationId,
+          revisionId: session.revisionId,
+        },
+      });
+      return privateReviewJson({ ok: true, feedback }, 201);
     }
     const receiptHash =
       await digestEmbedReviewOperationReceiptHandle(receiptHandle);
@@ -18525,8 +18798,8 @@ app.delete("/api/projects/:projectId", async (c) => {
       return c.text("Type the shiplet subdomain to confirm deletion.", 400);
     }
 
-    await deleteProjectPermanently(c.env, project);
-    return json({ deleted: true, projectId: project.id });
+    const cleanupIncomplete = await deleteProjectPermanently(c.env, project);
+    return json({ deleted: true, projectId: project.id, cleanupIncomplete });
   } catch (error) {
     if (isResponse(error)) return error;
     const message = error instanceof Error ? error.message : "Unknown error";
@@ -20315,6 +20588,7 @@ app.get("/shiplets/:projectId/review-host", async (c) => {
           appUrl,
         ).toString(),
         reviewPageUrl: artifactAbsoluteUrl(c.env, c.req.url, project),
+        submissionMode: "direct",
         allowArtifactDownloads: standalonePreviewDownloadsAllowed(project),
       }),
       c.env,
@@ -22334,6 +22608,10 @@ app.post("/api/projects/:projectId/review-feedback", async (c) => {
 
     const project = await requireReviewProject(c);
     const user = await getReviewRequestUser(c.env, c.req.raw);
+    const body = await readJson(c);
+    if (isRecord(body) && Object.prototype.hasOwnProperty.call(body, "reviewRevisionId")) {
+      return await createManagedDirectReviewFeedback(c, project, user, body);
+    }
     const authorization = await authorizeReviewRequest(
       c.env,
       c.req.raw,
@@ -22341,7 +22619,6 @@ app.post("/api/projects/:projectId/review-feedback", async (c) => {
       user,
       ["feedback:write"],
     );
-    const body = await readJson(c);
     const validation = validateReviewFeedbackPayload(body);
     if (!validation.ok) {
       return json({ ok: false, errors: validation.errors }, 400);

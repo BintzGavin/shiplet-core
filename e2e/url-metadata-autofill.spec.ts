@@ -25,6 +25,7 @@ test("pasting a URL autofills untouched Shiplet identity fields without overwrit
   });
 
   await page.goto("/");
+  await page.getByText("Experimental options", { exact: true }).click();
   await page.locator('label[for="sourceModeUrl"]').click();
   await page.locator("#externalUrl").fill("https://newro-eats.vercel.app/");
 

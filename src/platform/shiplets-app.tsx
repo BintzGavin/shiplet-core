@@ -466,6 +466,7 @@ function ShipletsList(props: {
 		[selectedProjectIds],
 	);
 	const [copiedProjectId, setCopiedProjectId] = React.useState("");
+	const [copyFailedProjectId, setCopyFailedProjectId] = React.useState("");
 	const organizationNames = React.useMemo(
 		() =>
 			new Map(
@@ -477,19 +478,24 @@ function ShipletsList(props: {
 		[props.organizations],
 	);
 	const copyUrl = React.useCallback(async (project: Project, publicUrl: string) => {
-		try {
-			if (navigator.clipboard && window.isSecureContext) {
-				await navigator.clipboard.writeText(publicUrl);
-			} else {
-				fallbackCopy(publicUrl);
+		const absoluteUrl = new URL(publicUrl, window.location.origin).href;
+		let copied: boolean;
+		if (navigator.clipboard && window.isSecureContext) {
+			try {
+				await navigator.clipboard.writeText(absoluteUrl);
+				copied = true;
+			} catch {
+				copied = fallbackCopy(absoluteUrl);
 			}
-			setCopiedProjectId(project.id);
-			window.setTimeout(() => setCopiedProjectId(""), 1200);
-		} catch {
-			fallbackCopy(publicUrl);
-			setCopiedProjectId(project.id);
-			window.setTimeout(() => setCopiedProjectId(""), 1200);
+		} else {
+			copied = fallbackCopy(absoluteUrl);
 		}
+		setCopiedProjectId(copied ? project.id : "");
+		setCopyFailedProjectId(copied ? "" : project.id);
+		window.setTimeout(() => {
+			setCopiedProjectId("");
+			setCopyFailedProjectId("");
+		}, 1200);
 	}, []);
 	const columns = React.useMemo<ColumnDef<Project>[]>(
 		() => [
@@ -579,6 +585,7 @@ function ShipletsList(props: {
 					const publicUrl = publicShipletUrl(project, props.customDomain);
 					const previewUrl = `/shiplets/${encodeURIComponent(project.id)}/preview`;
 					const copied = copiedProjectId === project.id;
+					const copyFailed = copyFailedProjectId === project.id;
 					return (
 						<div className="shiplet-list-actions">
 							<a className="btn btn-secondary btn-sm" href={publicUrl}>
@@ -591,9 +598,12 @@ function ShipletsList(props: {
 								className={`btn btn-secondary btn-sm${copied ? " is-copied" : ""}`}
 								type="button"
 								data-copy-value={publicUrl}
-								onClick={() => void copyUrl(project, publicUrl)}
+								onClick={(event) => {
+									event.stopPropagation();
+									void copyUrl(project, publicUrl);
+								}}
 							>
-								{copied ? "Copied" : "Copy URL"}
+								{copied ? "Copied" : copyFailed ? "Copy failed. Try again" : "Copy URL"}
 							</button>
 							{props.archived ? (
 								<button
@@ -621,6 +631,7 @@ function ShipletsList(props: {
 		],
 		[
 			copiedProjectId,
+			copyFailedProjectId,
 			copyUrl,
 			organizationNames,
 			props.archived,
@@ -816,11 +827,12 @@ function fallbackCopy(value: string) {
 	document.body.appendChild(textarea);
 	textarea.select();
 	try {
-		document.execCommand("copy");
+		return document.execCommand("copy");
 	} catch {
-		// Best effort only; the action button still keeps the URL visible.
+		return false;
+	} finally {
+		textarea.remove();
 	}
-	textarea.remove();
 }
 
 function dispatchDashboardUpdate(detail: unknown) {
