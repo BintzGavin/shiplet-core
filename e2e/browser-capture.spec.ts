@@ -84,12 +84,8 @@ test("real companion captures CSP-protected canvas pixels, redacts locally, publ
     await capture.getByRole("button", { name: /^Annotate / }).click();
     await artifact.locator("#browser-capture").click({ position: { x: 400, y: 400 } });
     await capture.locator(".shiplet-review-form textarea").fill("Make this canvas panel easier to read.");
-    const confirmPromise = capture.waitForEvent("popup");
     await capture.getByRole("button", { name: "Send annotation", exact: true }).click();
-    const confirm = await confirmPromise;
-    await confirm.getByRole("button", { name: "Confirm and send feedback" }).click();
-    await expect(confirm.getByRole("heading", { name: "Feedback sent" })).toBeVisible();
-    await confirm.close();
+    await expect(capture.locator(".shiplet-review-status")).toHaveText("Feedback sent.");
     const api = await request.get(`/api/projects/${projectId}/review-feedback`, { headers: authHeaders(owner) });
     const { feedback } = await api.json();
     expect(feedback).toHaveLength(1);
@@ -122,11 +118,8 @@ test("real companion captures CSP-protected canvas pixels, redacts locally, publ
       await teammatePage.getByRole("button", { name: /^Annotate / }).click();
       await teammatePage.locator("iframe[data-shiplet-artifact-frame]").contentFrame().locator("#browser-capture").click({ position: { x: 650, y: 450 } });
       await teammatePage.locator(".shiplet-review-form textarea").fill("Move this right edge in a little.");
-      const secondPromise = teammatePage.waitForEvent("popup");
       await teammatePage.getByRole("button", { name: "Send annotation", exact: true }).click();
-      const second = await secondPromise;
-      await second.getByRole("button", { name: "Confirm and send feedback" }).click();
-      await expect(second.getByRole("heading", { name: "Feedback sent" })).toBeVisible(); await second.close();
+      await expect(teammatePage.locator(".shiplet-review-status")).toHaveText("Feedback sent.");
       const both = await context.request.get(`/api/projects/${projectId}/review-feedback?includeClosed=true`, { headers: { Origin: "http://localhost:8787" } });
       const records = (await both.json()).feedback;
       expect(records).toHaveLength(2);

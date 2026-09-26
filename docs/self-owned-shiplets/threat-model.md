@@ -56,9 +56,16 @@ providers behind narrow kernel adapters.
 - RPC validates exact source window, opaque origin expectation, channel nonce,
   message schema, replay ID, expiry, Shiplet, revision, generation, actor,
   action, resource, and bounded payload before reaching the broker.
-- Human effects require a separate unframeable same-origin confirmation that
-  renders every exact field as escaped/text-only content. Widget-provided actor
-  identity is ignored.
+- Widget-requested human effects and reviews embedded on external websites
+  require a separate unframeable same-origin confirmation that renders every
+  exact field as escaped/text-only content. Widget-provided actor identity is
+  ignored.
+- Built-in feedback on a managed trusted host is submitted directly from its
+  composer. The same-origin JSON route checks current reviewer membership,
+  page binding, revision, and payload-bound retry identity, then uses the same
+  transactional intent fence to commit feedback and its audit. Browser identity
+  stays in the platform session or scoped HttpOnly tenant cookie; the artifact
+  and custom widget do not receive it.
 - Runtime-v1 widget packages support classic scripts and direct package-local
   leaf resources only. Module/import-map/worker graphs, CSS dependencies,
   responsive source sets, and unresolved paths fail before persistence; the

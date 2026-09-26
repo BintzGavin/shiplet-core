@@ -395,20 +395,76 @@ test.describe("trusted review host", () => {
     );
   });
 
-  test("selects artifact context and creates human-attributed feedback through secure confirmation", async ({
+  test("submits the built-in Page comment in place with one disabled request and no popup", async ({
     page,
     request,
   }) => {
+    const user = testUser("trusted-one-submit");
+    const organization = await createOrganization(request, user);
+    const published = await publishStaticShiplet(request, user, organization.id, {
+      name: `Trusted one submit ${Date.now()}`,
+      html: "<!doctype html><html><body><h1>One submit target</h1></body></html>",
+    });
+    await loginAs(page, user);
+    await page.goto(`/${published.project.subdomain}`, { waitUntil: "domcontentloaded" });
+    await expect(page.locator("[data-shiplet-trusted-review-host='v1']")).toBeVisible();
+
+    let postCount = 0;
+    let release: (() => void) | undefined;
+    const held = new Promise<void>((resolve) => { release = resolve; });
+    await page.route("**/*", async (route) => {
+      const observed = route.request();
+      const url = new URL(observed.url());
+      if (observed.method() !== "POST" || !url.pathname.endsWith("/__shiplet/review/feedback")) {
+        await route.continue();
+        return;
+      }
+      postCount += 1;
+      await held;
+      await route.fulfill({
+        status: 201,
+        contentType: "application/json",
+        body: JSON.stringify({
+          ok: true,
+          feedback: {
+            id: "feedback_direct",
+            ticket_label: "PF-DIRECT",
+            ticket_number: 1,
+            comment: "One direct page comment",
+            status: "New",
+            page_url: `http://localhost:8787/${published.project.subdomain}`,
+            replies: [],
+            mentions: [],
+          },
+        }),
+      });
+    });
+
+    await page.locator(".shiplet-review-comments-launcher").click();
+    await page.getByRole("button", { name: "New comment", exact: true }).click();
+    await page.getByRole("button", { name: "Page comment", exact: true }).click();
+    const composer = page.locator("#shiplet-annotation-composer");
+    await expect(composer).toBeVisible();
+    await composer.locator("#shiplet-review-comment").fill("One direct page comment");
+    const submit = composer.getByRole("button", { name: "Send annotation", exact: true });
+    const pageCount = page.context().pages().length;
+    const submission = submit.click();
+    await expect.poll(() => postCount).toBe(1);
+    await expect(submit).toBeDisabled();
+    expect(page.context().pages()).toHaveLength(pageCount);
+    release?.();
+    await submission;
+    await expect(composer).toBeHidden();
+    await page.screenshot({ path: `${navigationR7EvidenceDir}/hosted-one-submit.png`, fullPage: true });
+  });
+
+  test("selects artifact context and saves human-attributed feedback in place", async ({
+    page,
+    request,
+  }, testInfo) => {
     const user = testUser("trusted-capture");
     const errors = collectPageErrors(page);
     const requestFailures: string[] = [];
-    const operationReadResponses: Array<{
-      response: Response;
-      requestId: string;
-      afterConfirmation: boolean;
-    }> = [];
-    let confirmationCompleted = false;
-    let confirmationRequestId = "";
     page.on("requestfailed", (failedRequest) => {
       requestFailures.push(
         `${failedRequest.method()} ${failedRequest.url()} ${failedRequest.failure()?.errorText || "unknown"}`,
@@ -430,27 +486,6 @@ test.describe("trusted review host", () => {
     await page.goto(`/${published.project.subdomain}`, {
       waitUntil: "domcontentloaded",
     });
-    const operationPathPrefix = `/${published.project.subdomain}/__shiplet/review/operations/`;
-    page.on("response", (response) => {
-      if (response.request().method() !== "GET") return;
-      const url = new URL(response.url());
-      if (!url.pathname.startsWith(operationPathPrefix)) return;
-      const requestId = decodeURIComponent(
-        url.pathname.slice(operationPathPrefix.length),
-      );
-      if (!requestId || requestId.includes("/")) return;
-      operationReadResponses.push({
-        response,
-        requestId,
-        afterConfirmation: confirmationCompleted,
-      });
-    });
-    page.context().on("request", (observedRequest) => {
-      const url = new URL(observedRequest.url());
-      if (observedRequest.method() !== "POST" || url.pathname !== "/review/confirm") return;
-      const body = new URLSearchParams(observedRequest.postData() || "");
-      confirmationRequestId = body.get("request_id") || "";
-    });
     await expect(
       page.locator("[data-shiplet-trusted-review-host='v1']"),
     ).toBeVisible();
@@ -471,7 +506,14 @@ test.describe("trusted review host", () => {
       })
       .click();
     await page.getByRole("button", { name: "Draw on screenshot" }).click();
-    const annotationCanvas = page.locator("[data-shiplet-annotation-canvas]");
+    const annotationEditor = page.getByRole("region", {
+      name: "Draw on screenshot",
+      exact: true,
+    });
+    const annotationCanvas = annotationEditor.locator(
+      'canvas[aria-label="Screenshot drawing canvas"][data-shiplet-annotation-canvas="v1"]',
+    );
+    await expect(annotationEditor).toBeVisible();
     await expect(annotationCanvas).toBeVisible();
     const annotationBounds = await annotationCanvas.boundingBox();
     expect(annotationBounds).toBeTruthy();
@@ -485,7 +527,7 @@ test.describe("trusted review host", () => {
     await page.getByRole("button", { name: "Done drawing" }).click();
     await expect(annotationCanvas).toBeVisible();
     await expect(
-      page.locator(".shiplet-review-annotation-editor"),
+      annotationEditor,
     ).toHaveAttribute("data-drawing", "false");
     const drawnBoundsBeforeScroll = await annotationCanvas.evaluate((node) => {
       const canvas = node as HTMLCanvasElement;
@@ -552,88 +594,49 @@ test.describe("trusted review host", () => {
     expect(drawnBoundsAfterScroll!.minimumY).toBeLessThan(
       drawnBoundsBeforeScroll!.minimumY - 50,
     );
-    await page.locator("#shiplet-review-comment").fill(comment);
-
-    const operation404Promise = page.waitForResponse(
-      (response) =>
-        response.request().method() === "GET" &&
-        response.status() === 404 &&
-        new URL(response.url()).pathname.startsWith(operationPathPrefix),
-      { timeout: 8_000 },
-    );
-    const popupPromise = page.waitForEvent("popup");
-    await page
-      .getByRole("button", { name: "Send annotation", exact: true })
-      .click();
-    const confirmation = await popupPromise;
-    const operation404 = await operation404Promise;
-    await confirmation.waitForLoadState("domcontentloaded");
-    await expect(annotationCanvas).toBeVisible();
-    await expect(page.locator("#shiplet-review-comment")).toHaveValue(comment);
-    await expect(
-      page.getByRole("button", { name: "Send annotation", exact: true }),
-    ).toBeDisabled();
-    await expect(page.locator(".shiplet-review-composer-message")).toContainText(
-      "Submission status is unknown.",
-    );
-    await expect(page.locator(".shiplet-review-composer-message")).not.toContainText(
-      "Feedback saved.",
-    );
-    expect(confirmationRequestId).toMatch(/^request_[A-Za-z0-9._:-]+$/);
-    expect(operation404.status()).toBe(404);
-    const operation404Url = new URL(operation404.url());
-    const operation404RequestId = decodeURIComponent(
-      operation404Url.pathname.slice(operationPathPrefix.length),
-    );
-    expect(operation404Url.pathname).toBe(
-      `${operationPathPrefix}${encodeURIComponent(operation404RequestId)}`,
-    );
-    expect(operation404RequestId).toBe(confirmationRequestId);
-    expect(operation404Url.searchParams.get("effect")).toBe("feedback.create");
-    expect(operation404Url.searchParams.get("feedback_id")).toBeNull();
-    expect(await operation404.headerValue("cache-control")).toBe("private, no-store");
-    const boundRevisionId = await page.locator("html").getAttribute("data-revision-id");
-    const boundPageUrl = await page.locator("html").getAttribute("data-review-page-url");
-    expect(operation404Url.searchParams.get("revision_id")).toBe(boundRevisionId);
-    expect(operation404Url.searchParams.get("page_url")).toBe(boundPageUrl);
     await page.screenshot({
-      path: `${navigationR7EvidenceDir}/backend-05-retained-unknown.png`,
+      path: testInfo.outputPath("rich-context-capture-before-submit.png"),
       fullPage: true,
     });
-    await expect(
-      confirmation.getByRole("heading", { name: "Confirm feedback" }),
-    ).toBeVisible();
-    await expect(confirmation.getByText(comment)).toBeVisible();
-    await confirmation
-      .getByRole("button", { name: "Confirm and send feedback" })
-      .click();
-    await expect(
-      confirmation.getByRole("heading", { name: "Feedback sent" }),
-    ).toBeVisible();
-    confirmationCompleted = true;
-    await expect
-      .poll(() =>
-        operationReadResponses.filter((entry) => entry.response.status() === 404),
-      )
-      .toHaveLength(1);
-    const operation404Entries = operationReadResponses.filter(
-      (entry) => entry.response.status() === 404,
+    const commentField = composer.getByRole("textbox", {
+      name: "Annotation",
+      exact: true,
+    });
+    await commentField.fill(comment);
+    let popupCount = 0;
+    page.on("popup", () => { popupCount += 1; });
+    const apiUrl = await page.locator("html").getAttribute("data-review-api-url");
+    expect(apiUrl).toBeTruthy();
+    const feedbackResponsePromise = page.waitForResponse(
+      (response) =>
+        response.url() === apiUrl && response.request().method() === "POST",
     );
-    expect(operation404Entries).toHaveLength(1);
-    expect(operation404Entries[0].requestId).toBe(confirmationRequestId);
-    expect(operation404Entries[0].afterConfirmation).toBe(false);
-
-    await page
-      .getByRole("button", { name: "Cancel annotation mode", exact: true })
+    await composer
+      .getByRole("button", { name: "Send annotation", exact: true })
       .click();
-    await expect(page.locator("#shiplet-annotation-composer")).toBeHidden();
-    await expect(page.locator(".shiplet-review-comments-launcher")).toBeVisible();
+    const submissionResponse = await feedbackResponsePromise;
+    expect(submissionResponse.ok()).toBe(true);
+    expect(popupCount).toBe(0);
+    await expect(composer).toBeHidden();
+    await page.reload({ waitUntil: "domcontentloaded" });
+    await expect(
+      page.locator("[data-shiplet-trusted-review-host='v1']"),
+    ).toBeVisible();
     await page.locator(".shiplet-review-comments-launcher").click();
-    await page.getByLabel("Review options").click();
-    await page.getByRole("button", { name: "Refresh" }).click();
-    await expect(page.locator(".shiplet-review-list")).toContainText(comment);
+    const reviewList = page.locator(".shiplet-review-list");
+    await expect(page.locator(".shiplet-review-count")).toHaveText("1");
+    const savedThreads = reviewList.locator(
+      ":scope > [data-shiplet-review-thread]",
+    );
+    await expect(savedThreads).toHaveCount(1);
+    await expect(
+      savedThreads.locator(".shiplet-review-thread-summary-comment"),
+    ).toHaveText(comment);
+    const savedPin = page.locator(".shiplet-review-pin");
+    await expect(savedPin).toHaveCount(1);
+    await expect(savedPin).toBeVisible();
     await page.screenshot({
-      path: `${navigationR7EvidenceDir}/backend-05-saved.png`,
+      path: testInfo.outputPath("rich-context-saved-after-reload.png"),
       fullPage: true,
     });
 
@@ -655,6 +658,7 @@ test.describe("trusted review host", () => {
         selected_element: { selector?: string } | null;
       }>;
     };
+    expect(body.feedback).toHaveLength(1);
     const saved = body.feedback.find((item) => item.comment === comment);
     expect(saved).toMatchObject({ screenshot_mode: "element" });
     expect(saved?.selected_element?.selector).toContain("hero");
@@ -687,21 +691,7 @@ test.describe("trusted review host", () => {
       return count;
     }, saved!.screenshot_url!);
     expect(markupPixels).toBeGreaterThan(100);
-    const generic404ConsoleErrors = errors.filter((message) =>
-      /^Failed to load resource: the server responded with a status of 404(?: \([^)]*\))?$/.test(
-        message,
-      ),
-    );
-    expect(generic404ConsoleErrors).toHaveLength(1);
-    expect(
-      errors.filter(
-        (message) =>
-          !message.includes("favicon") &&
-          !/^Failed to load resource: the server responded with a status of 404(?: \([^)]*\))?$/.test(
-            message,
-          ),
-      ),
-    ).toEqual([]);
+    await expectNoPageErrors(errors);
     expect(requestFailures).toEqual([]);
   });
 

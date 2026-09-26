@@ -219,6 +219,151 @@ function private404(response: Response) {
 }
 
 describe("rich confirmation, trusted assets, and mention authority", () => {
+  it("accepts same-origin embedded direct rich submit exactly once with bound replay and conflict checks", async () => {
+    const { organization, project, revisionId, pageUrl } = await fixture();
+    const embed = await embedBinding(project.id, organization.id, revisionId, pageUrl);
+    const requestId = `request_${crypto.randomUUID()}`;
+    const body = richBody(pageUrl, richPayload(), { requestId, reviewRevisionId: revisionId });
+    const headers = {
+      Origin: "http://localhost",
+      "Content-Type": "application/json",
+      Cookie: embed.cookie,
+    };
+    const first = await request(
+      `/embed/review/feedback?installation_id=${encodeURIComponent(embed.installationId)}`,
+      { method: "POST", headers, body: JSON.stringify(body) },
+    );
+    expect(first.status, await first.clone().text()).toBe(201);
+    const firstBody = (await first.json()) as { feedback: any };
+    expect(firstBody.feedback.attachments).toHaveLength(1);
+
+    const replay = await request(
+      `/embed/review/feedback?installation_id=${encodeURIComponent(embed.installationId)}`,
+      { method: "POST", headers, body: JSON.stringify(body) },
+    );
+    expect(replay.status, await replay.clone().text()).toBe(201);
+    const replayBody = (await replay.json()) as { feedback: any };
+    expect(replayBody.feedback.id).toBe(firstBody.feedback.id);
+
+    const conflict = await request(
+      `/embed/review/feedback?installation_id=${encodeURIComponent(embed.installationId)}`,
+      {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ ...body, comment: "Changed after durable submit" }),
+      },
+    );
+    expect(conflict.status).toBe(409);
+
+    const wrongOrigin = await request(
+      `/embed/review/feedback?installation_id=${encodeURIComponent(embed.installationId)}`,
+      {
+        method: "POST",
+        headers: { ...headers, Origin: "https://wrong.example" },
+        body: JSON.stringify({ ...body, requestId: `request_${crypto.randomUUID()}` }),
+      },
+    );
+    expect(wrongOrigin.status).toBe(403);
+
+    const wrongPage = await request(
+      `/embed/review/feedback?installation_id=${encodeURIComponent(embed.installationId)}`,
+      {
+        method: "POST",
+        headers,
+        body: JSON.stringify({
+          ...body,
+          requestId: `request_${crypto.randomUUID()}`,
+          pageUrl: `${pageUrl}/wrong`,
+        }),
+      },
+    );
+    expect(wrongPage.status).toBe(403);
+
+    const stored = await (env as Env).DB.prepare(
+      "SELECT payload_json FROM embed_review_operation_intents WHERE request_id = ?",
+    ).bind(requestId).first<{ payload_json: string }>();
+    expect(stored?.payload_json).toContain("captureFidelity");
+    expect(stored?.payload_json).toContain("copyRequest");
+  });
+
+  it("preserves the shared durable screenshot when a concurrent same-ID rich retry loses its batch fence", async () => {
+    const { organization, project, revisionId, pageUrl } = await fixture();
+    const embed = await embedBinding(project.id, organization.id, revisionId, pageUrl);
+    const screenshot = pngBytes(300_000);
+    const body = richBody(pageUrl, richPayload(), {
+      requestId: `request_${crypto.randomUUID()}`,
+      reviewRevisionId: revisionId,
+      screenshotDataUrl: dataUrl(screenshot),
+      screenshotFailureNote: null,
+      screenshotMode: "page",
+      viewport: { width: 1280, height: 720, devicePixelRatio: 1 },
+      coordinates: { pageX: 0, pageY: 0, viewportX: 0, viewportY: 0 },
+      selectedElement: null,
+      captureContext: { documentWidth: 1280, documentHeight: 1600, scrollX: 0, scrollY: 0 },
+    });
+    const screenshotKey = `projects/${project.id}/feedback/`;
+    const assets = (env as Env).REVIEW_ASSETS!;
+    let promotionReads = 0;
+    let releasePromotionReads!: () => void;
+    const bothPromotionReads = new Promise<void>((resolve) => { releasePromotionReads = resolve; });
+    const gatedAssets = new Proxy(assets, {
+      get(target, property) {
+        const original = Reflect.get(target, property, target);
+        if (property === "get") {
+          return async (key: string, ...options: unknown[]) => {
+            const object = await Reflect.apply(original, target, [key, ...options]);
+            if (key.startsWith(screenshotKey) && !key.slice(screenshotKey.length).includes("/")) {
+              promotionReads += 1;
+              if (promotionReads === 2) releasePromotionReads();
+              await bothPromotionReads;
+            }
+            return object;
+          };
+        }
+        return typeof original === "function" ? original.bind(target) : original;
+      },
+    }) as R2Bucket;
+    const runtime = { ...(env as Env), REVIEW_ASSETS: gatedAssets } as Env;
+    const headers = {
+      Origin: "http://localhost",
+      "Content-Type": "application/json",
+      Cookie: embed.cookie,
+    };
+    const submit = () => request(
+      `/embed/review/feedback?installation_id=${encodeURIComponent(embed.installationId)}`,
+      { method: "POST", headers, body: JSON.stringify(body) },
+      runtime,
+    );
+
+    const responses = await Promise.all([submit(), submit()]);
+    expect(promotionReads).toBe(2);
+    const responseBodies = await Promise.all(responses.map(async (response) => {
+      expect(response.status, await response.clone().text()).toBe(201);
+      return response.json() as Promise<{ feedback: { id: string } }>;
+    }));
+    expect(responseBodies[0]?.feedback.id).toBe(responseBodies[1]?.feedback.id);
+
+    const feedbackId = responseBodies[0]!.feedback.id;
+    const replay = await submit();
+    expect(replay.status, await replay.clone().text()).toBe(201);
+    expect((await replay.json() as { feedback: { id: string } }).feedback.id).toBe(feedbackId);
+
+    const counts = await (env as Env).DB.prepare(
+      `SELECT
+       (SELECT COUNT(*) FROM review_feedback WHERE project_id = ?) AS feedback,
+       (SELECT COUNT(*) FROM shiplet_events WHERE project_id = ? AND event_kind = 'review.feedback-created') AS events,
+       (SELECT COUNT(*) FROM shiplet_audit_events WHERE project_id = ? AND event_kind = 'review.feedback_created') AS audits`,
+    ).bind(project.id, project.id, project.id).first<any>();
+    expect(counts).toMatchObject({ feedback: 1, events: 1, audits: 1 });
+
+    const screenshotResponse = await request(
+      `/api/projects/${project.id}/review-feedback/${feedbackId}/screenshot`,
+      { headers: OWNER },
+    );
+    expect(screenshotResponse.status).toBe(200);
+    expect(new Uint8Array(await screenshotResponse.arrayBuffer())).toEqual(screenshot);
+  });
+
   it("preserves rich structure through general confirmation, completion, replay, list, and detail", async () => {
     const { project, revisionId, pageUrl } = await fixture();
     const payload = richPayload();

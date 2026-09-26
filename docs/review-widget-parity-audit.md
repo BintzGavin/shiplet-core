@@ -30,6 +30,36 @@ P3 covers optional convenience/preferences.
 | Keyboard/preferences | 4 | 1 | 2 | 0 |
 | Boundaries/integration | 0 | 1 | 0 | 3 |
 
+## Focused release acceptance (2026-09-26)
+
+This focused acceptance records a reconciled candidate based on `main` at
+`d7a6ed6`. It supersedes the 2026-09-21 **Mandatory residual block** only as
+release-blocker policy for this minimal one-submit release. It does not revise
+historical ledger statuses, close all 56 contracts, or validate the currently
+served production bundles; remaining parity evidence stays open.
+
+| ID / group | Current disposition | Evidence |
+| --- | --- | --- |
+| Hosted direct one-submit | Accepted for this release slice: held request disables submit; no popup. | `e2e/trusted-review-host.spec.ts` |
+| Direct submission retry | Accepted for tested path: committed lost response retries the same nonempty request/client/revision IDs and byte-identical body; one durable row survives reload. | `e2e/feedback-inbox.spec.ts` |
+| Rich saved feedback | Accepted for tested path: saved row, pin, selected element, and annotated image pixels survive reload; zero popups. | `e2e/trusted-review-host.spec.ts` |
+| WRITE-07 large capture | Accepted for tested path: >2 MiB page-fidelity capture persists and retries saved bytes after the two-cause repair. | `test/trusted-review-host.spec.ts` |
+| Concurrent screenshot retry | Accepted for tested path: the durable screenshot retains the winner. | `test/review-rich-confirmation-api.spec.ts` |
+| Focused regressions | 116 focused regressions passed. | `test/trusted-review-host.spec.ts`; `test/review-rich-confirmation-api.spec.ts` |
+
+**Gate:** The final full `npm run verify` passed: typecheck; all 2,036 Vitest
+tests and 26 Node tests; four Worker dry-runs; license audit; and security audit
+with 0 vulnerabilities. Browser retry04 and rich06 acceptance also passed.
+Release and deployment remain pending; no production behavior is claimed as
+validated. This is candidate evidence only; prior production bytes and
+deployments remain separate.
+
+**Deferred:** Backend06/Backend11 and UX-07 external-runtime/custom-action
+coverage; non-Chromium, touch, assistive-technology, and concurrent-reviewer
+browser coverage; BOUND-03/04 authorized integrations; WRITE-15 native-select
+gesture; five Wrangler-dependent external-harness mutants. Sandbox Mentions
+remains an intentional, recoverable unsupported capability.
+
 ## Final canonical reconciliation (2026-09-21)
 
 This is the final canonical ledger reconciliation for the accepted parity boundary. Stable IDs and historical baseline cells remain intact; the tracking cells below record the current evidence-backed disposition. The prior implementation snapshot is retained in the historical row cells and does not override this reconciliation.
