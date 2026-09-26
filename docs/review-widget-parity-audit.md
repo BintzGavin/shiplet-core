@@ -32,27 +32,35 @@ P3 covers optional convenience/preferences.
 
 ## Focused release acceptance (2026-09-26)
 
-This focused acceptance records a reconciled candidate based on `main` at
-`d7a6ed6`. It supersedes the 2026-09-21 **Mandatory residual block** only as
-release-blocker policy for this minimal one-submit release. It does not revise
-historical ledger statuses, close all 56 contracts, or validate the currently
-served production bundles; remaining parity evidence stays open.
+This record covers the narrow one-submit release shipped as public tag `v0.1.45`
+from [core PR #10](https://github.com/BintzGavin/shiplet-core/pull/10), merge
+commit `fe19ea838b6699e630c38d43b2c5cf1f03775c5c`. It supersedes the 2026-09-21
+**Mandatory residual block** only as release-blocker policy for this minimal
+release. Historical ledger statuses and the full 56-contract parity assessment
+remain unchanged.
 
 | ID / group | Current disposition | Evidence |
 | --- | --- | --- |
-| Hosted direct one-submit | Accepted for this release slice: held request disables submit; no popup. | `e2e/trusted-review-host.spec.ts` |
-| Direct submission retry | Accepted for tested path: committed lost response retries the same nonempty request/client/revision IDs and byte-identical body; one durable row survives reload. | `e2e/feedback-inbox.spec.ts` |
-| Rich saved feedback | Accepted for tested path: saved row, pin, selected element, and annotated image pixels survive reload; zero popups. | `e2e/trusted-review-host.spec.ts` |
-| WRITE-07 large capture | Accepted for tested path: >2 MiB page-fidelity capture persists and retries saved bytes after the two-cause repair. | `test/trusted-review-host.spec.ts` |
-| Concurrent screenshot retry | Accepted for tested path: the durable screenshot retains the winner. | `test/review-rich-confirmation-api.spec.ts` |
-| Focused regressions | 116 focused regressions passed. | `test/trusted-review-host.spec.ts`; `test/review-rich-confirmation-api.spec.ts` |
+| Hosted direct one-submit | Production Chrome: PF1 and PF2 submissions saved in place with no confirmation or new tab in observed checks. Held-request pending-disable timing remains local-only. | `e2e/trusted-review-host.spec.ts`; Chrome production acceptance |
+| Direct submission retry | Accepted locally: a committed lost response retries the same nonempty request/client/revision IDs and byte-identical body; one durable row survives reload. Browser retry04 passed. | `e2e/feedback-inbox.spec.ts` |
+| Production page comment | PF1 saved and reappeared after reload. Production Page screenshot/drawing was not tested. | Chrome production acceptance |
+| Production contextual annotation and reply | PF2 contextual annotation saved; its target pin/card was visible and its screenshot action was available. One reply persisted after reload. | Chrome production acceptance |
+| WRITE-07 large capture | Local-only: >2 MiB page-fidelity capture persists and retries saved bytes. This does not establish production Page screenshot/drawing behavior. | `test/trusted-review-host.spec.ts` |
+| Concurrent screenshot retry | Accepted locally: the durable screenshot retains the winning capture. | `test/review-rich-confirmation-api.spec.ts` |
+| Rehearsal smoke | Six scripted checks passed with scheduled-path attestation. | Private deployment evidence retained outside this repository |
+| Production scripted smoke | All seven scripted checks passed against the deployed release. | Private smoke evidence retained outside this repository |
+| Production fixture cleanup | The synthetic fixture was archived and recoverable; the active Shiplets list returned zero matches. | Chrome production acceptance |
+| Focused regressions | 116 focused regressions passed. Browser rich06 acceptance passed. | `test/trusted-review-host.spec.ts`; `test/review-rich-confirmation-api.spec.ts` |
 
-**Gate:** The final full `npm run verify` passed: typecheck; all 2,036 Vitest
-tests and 26 Node tests; four Worker dry-runs; license audit; and security audit
-with 0 vulnerabilities. Browser retry04 and rich06 acceptance also passed.
-Release and deployment remain pending; no production behavior is claimed as
-validated. This is candidate evidence only; prior production bytes and
-deployments remain separate.
+**Gate:** The narrowed one-submit release gate is complete for `v0.1.45` at the
+merge commit above. The final full `npm run verify` passed: typecheck; all 2,036
+Vitest tests and 26 Node tests; four Worker dry-runs; license audit; and security
+audit with 0 vulnerabilities. Rehearsal, production scripted smoke, and the
+bounded Chrome observations above passed. The feedback list was evaluated only
+after Workspace was ready; the earlier “No comments yet” view was an
+intermediate loading state. These results clear release blockers only within
+this user-narrowed scope; they do not close all 56 contracts or establish the
+deferred browser/runtime matrix.
 
 **Deferred:** Backend06/Backend11 and UX-07 external-runtime/custom-action
 coverage; non-Chromium, touch, assistive-technology, and concurrent-reviewer
