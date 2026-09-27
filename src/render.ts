@@ -357,6 +357,9 @@ hr.solid {
 @keyframes shiplet-sky-fair-drift { 0%, 100% { transform: translateX(-10px); } 50% { transform: translateX(16px); } }
 @keyframes shiplet-sky-storm-drift { 0%, 100% { transform: translateX(-22px); } 50% { transform: translateX(24px); } }
 @keyframes shiplet-sky-cell-drift { 0%, 100% { transform: translateX(-5px); } 50% { transform: translateX(6px); } }
+@keyframes shiplet-sky-leave { to { opacity: 0; transform: translateY(-8px); } }
+@keyframes shiplet-sky-storm-arrive { from { opacity: 0; transform: translateY(-16px); } }
+@keyframes shiplet-sky-daylight-arrive { from { opacity: 0; transform: translateY(12px); } }
 /* One 11s cycle for every strike: a double flicker 110ms apart, then 5s of
    dark. Separate bolts can never stack past two flashes a second. */
 @keyframes shiplet-sky-strike-a {
@@ -539,6 +542,10 @@ html:not(.js) .harbor-scene-svg :is(.scene-cloud-near, .scene-cloud-far, .scene-
   .shiplet-sky-lightning-b { animation: shiplet-sky-strike-b 11s linear infinite; }
   .shiplet-sky-flash-a { animation: shiplet-sky-flash-a 11s linear infinite; }
   .shiplet-sky-flash-b { animation: shiplet-sky-flash-b 11s linear infinite; }
+  .shiplet-brand-header[data-weather-turning="daylight"] .shiplet-sky-scene[data-sky="storm"],
+  .shiplet-brand-header[data-weather-turning="storm"] .shiplet-sky-scene[data-sky="daylight"] { animation: shiplet-sky-leave 0.9s var(--ease-out) both; }
+  .shiplet-brand-header[data-weather-turning="daylight"] .shiplet-sky-scene[data-sky="daylight"] { animation: shiplet-sky-daylight-arrive 1.8s var(--ease-out) both; }
+  .shiplet-brand-header[data-weather-turning="storm"] .shiplet-sky-scene[data-sky="storm"] { animation: shiplet-sky-storm-arrive 1.8s var(--ease-out) both; }
   .scene-go .harbor-scene-svg .draw-path {
     animation: harbor-line-resolve 620ms var(--ease-out) both;
     animation-delay: calc(var(--di, 0) * var(--harbor-line-step));
@@ -998,6 +1005,9 @@ html:not(.js) .shiplet-brand-mark :is(.shiplet-mark-vessel, .shiplet-mark-water-
 .shiplet-sky-scene { position: absolute; inset: 0; }
 .shiplet-sky-scene[data-sky="daylight"], .shiplet-waterline-sea[data-sea="calm"] { display: var(--sky-daylight); }
 .shiplet-sky-scene[data-sky="storm"], .shiplet-waterline-sea[data-sea="storm"] { display: var(--sky-storm); }
+/* While the weather turns, both skies show: the old one leaves as the new one
+   arrives. Reduced motion never turns; it swaps at once. */
+.shiplet-brand-header[data-weather-turning] .shiplet-sky-scene { display: block; }
 /* Matches the header's content box so bright details stay between the mark and the nav. */
 .shiplet-sky-frame {
   position: absolute;
@@ -3220,14 +3230,14 @@ function HeaderSky() {
     SkyCloud("shiplet-sky-storm-cloud shiplet-sky-deck", "0 0 200 44", STORM_DECK_LOBES[index % 2], true),
   ).join("");
   return `<div class="shiplet-sky" aria-hidden="true">
-    <div class="shiplet-sky-scene" data-sky="daylight">
+    <div class="shiplet-sky-scene" data-sky="daylight" data-harbor-motion>
       <div class="shiplet-sky-frame">
         <svg class="shiplet-sky-sun" viewBox="-24 -24 48 48" xmlns="http://www.w3.org/2000/svg" aria-hidden="true" focusable="false"><circle class="shiplet-sky-sun-halo" data-harbor-motion r="16"/><path class="shiplet-sky-sun-rays" data-harbor-motion d="M0-13.5v-5.5M0 13.5v5.5M13.5 0h5.5M-13.5 0h-5.5M9.5-9.5l3.9-3.9M-9.5 9.5l-3.9 3.9M9.5 9.5l3.9 3.9M-9.5-9.5l-3.9-3.9"/><circle class="shiplet-sky-sun-disc" r="8.5"/></svg>
         ${SkyCloud("shiplet-sky-fair-cloud shiplet-sky-fair-cloud-a", "0 0 56 24", FAIR_CLOUD_LOBES)}
         ${SkyCloud("shiplet-sky-fair-cloud shiplet-sky-fair-cloud-b shiplet-sky-wide", "0 0 56 24", FAIR_CLOUD_LOBES)}
       </div>
     </div>
-    <div class="shiplet-sky-scene" data-sky="storm">
+    <div class="shiplet-sky-scene" data-sky="storm" data-harbor-motion>
       ${deck}
       <div class="shiplet-sky-frame">
         ${StormCell("a", false)}
@@ -3562,8 +3572,15 @@ const EnhanceScript = (nonce: KernelDocumentNonce) => `
 					return { surface: layer.querySelector(".shiplet-waterline-drawn"), body: layer.querySelector(".shiplet-waterline-body"), foam: layer.querySelector(".shiplet-waterline-foam") };
 				});
 			});
-			// Daylight rides the calm sea; the night watch keeps the storm.
-			var activeSea = currentTheme() === "dark" ? "storm" : "calm";
+			// Daylight rides the calm sea; the night watch keeps the storm. When the
+			// theme turns, storminess eases from one to the other (0 calm, 1 storm)
+			// and each frame blends both surfaces into the sea that is showing.
+			var visibleSea = currentTheme() === "dark" ? "storm" : "calm";
+			var storminess = visibleSea === "storm" ? 1 : 0;
+			var turnFrom = storminess;
+			var turnTo = storminess;
+			var turnProgress = 1;
+			var weatherTimer = 0;
 			var vessel = header.querySelector(".shiplet-mark-vessel");
 			var contact = header.querySelector(".shiplet-mark-water-motion");
 			var depth = header.querySelector(".shiplet-mark-depth");
@@ -3580,9 +3597,9 @@ const EnhanceScript = (nonce: KernelDocumentNonce) => `
 			var previousFrame = 0;
 			var frameRequest = 0;
 			function drawWater(still) {
-				var seaLayers = seaNodes[activeSea];
-				seas[activeSea].forEach(function (model, index) {
-					var frame = sampleWater(waterWidth, waterTime, model, index === 2 ? buoyX : shipX);
+				var seaLayers = seaNodes[visibleSea];
+				seas.calm.forEach(function (calm, index) {
+					var frame = sampleWater(waterWidth, waterTime, calm, index === 2 ? buoyX : shipX, seas.storm[index], storminess);
 					var nodes = seaLayers[index];
 					nodes.surface.setAttribute("d", frame.surface);
 					nodes.body.setAttribute("d", frame.body);
@@ -3594,15 +3611,27 @@ const EnhanceScript = (nonce: KernelDocumentNonce) => `
 						if (depth) depth.style.translate = still ? "" : "0 " + (heave * 3.2).toFixed(2) + "px";
 						if (wake) wake.style.translate = still ? "" : "0 " + heave.toFixed(2) + "px";
 					}
-					if (index === 2 && buoy) buoy.setAttribute("transform", "translate(" + (buoyX - 11).toFixed(2) + " " + (model.level + frame.heave - 22).toFixed(2) + ")");
+					if (index === 2 && buoy) buoy.setAttribute("transform", "translate(" + (buoyX - 11).toFixed(2) + " " + (frame.level + frame.heave - 22).toFixed(2) + ")");
 				});
+			}
+			function settleWeather() {
+				storminess = turnFrom = turnTo;
+				turnProgress = 1;
+				clearTimeout(weatherTimer);
+				header.removeAttribute("data-weather-turning");
 			}
 			function tickWater(now) {
 				frameRequest = 0;
 				if (header.getAttribute("data-header-motion") !== "running") return;
 				// A capped delta avoids a jump after an inactive page or a slow frame.
-				if (previousFrame) waterTime += Math.min((now - previousFrame) / 1000, 0.05);
+				var delta = previousFrame ? Math.min((now - previousFrame) / 1000, 0.05) : 0;
 				previousFrame = now;
+				waterTime += delta;
+				// The turn shares the water's clock, so it pauses with it.
+				if (turnProgress < 1) {
+					turnProgress = Math.min(1, turnProgress + delta / 2.6);
+					storminess = turnFrom + (turnTo - turnFrom) * turnProgress * turnProgress * (3 - 2 * turnProgress);
+				}
 				drawWater(false);
 				frameRequest = requestAnimationFrame(tickWater);
 			}
@@ -3614,7 +3643,10 @@ const EnhanceScript = (nonce: KernelDocumentNonce) => `
 					cancelAnimationFrame(frameRequest);
 					frameRequest = 0;
 					previousFrame = 0;
-					if (prefersStill) drawWater(true);
+					if (prefersStill) {
+						settleWeather();
+						drawWater(true);
+					}
 				} else if (!frameRequest) frameRequest = requestAnimationFrame(tickWater);
 			}
 			function measureWater() {
@@ -3648,9 +3680,22 @@ const EnhanceScript = (nonce: KernelDocumentNonce) => `
 				}).observe(header);
 			}
 			syncHeaderMotion();
-			// The hidden sea keeps a stale frame, so redraw the new one at once.
+			// The newly shown sea starts from the current blend, so the swap itself
+			// is invisible; a paused or still header settles at once.
 			syncSea = function () {
-				activeSea = currentTheme() === "dark" ? "storm" : "calm";
+				visibleSea = currentTheme() === "dark" ? "storm" : "calm";
+				var target = visibleSea === "storm" ? 1 : 0;
+				if (target !== turnTo) {
+					turnFrom = storminess;
+					turnTo = target;
+					turnProgress = 0;
+					if (header.getAttribute("data-header-motion") === "running") {
+						// Both skies show while the old one leaves and the new one arrives.
+						clearTimeout(weatherTimer);
+						header.setAttribute("data-weather-turning", visibleSea === "storm" ? "storm" : "daylight");
+						weatherTimer = setTimeout(function () { header.removeAttribute("data-weather-turning"); }, 2000);
+					} else settleWeather();
+				}
 				drawWater(!motionPreference || motionPreference.matches);
 			};
 		}

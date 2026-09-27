@@ -121,10 +121,11 @@ for (const variant of ["public", "authenticated"] as const) {
 		await page.emulateMedia({ colorScheme: "light" });
 		await expect(visibleSea(header)).toHaveAttribute("data-sea", "calm");
 		const nearCalm = header.locator('[data-sea="calm"] .shiplet-waterline-near .shiplet-waterline-drawn');
-		const calm = await swellProfile(nearCalm);
-		expect(calm.swells).toBeGreaterThanOrEqual(1);
-		expect(calm.swells * 2).toBeLessThanOrEqual(storm.swells);
-		expect(calm.height).toBeLessThan(storm.height * 0.6);
+		// The sea eases out of the storm over a couple of seconds before it settles.
+		await expect.poll(async () => {
+			const calm = await swellProfile(nearCalm);
+			return calm.swells >= 1 && calm.swells * 2 <= storm.swells && calm.height < storm.height * 0.6;
+		}, { timeout: 6000 }).toBe(true);
 		const initial = await waterShapes(header);
 		expect(initial).toHaveLength(3);
 		await expect.poll(() => waterShapes(header)).not.toEqual(initial);

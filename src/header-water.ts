@@ -30,18 +30,30 @@ export const HEADER_SEAS: Readonly<Record<HeaderSeaState, readonly HeaderWaterLa
 
 /** Self-contained so the same sampler draws the static SVG and browser frames.
  * Long swells, a steeper crest harmonic, and crossing ripples prevent a frozen
- * sine-wave strip. The budget stays bounded even on an ultrawide display. */
-export function headerWaterFrame(width: number, time: number, layer: HeaderWaterLayer, anchorX: number) {
+ * sine-wave strip. The budget stays bounded even on an ultrawide display.
+ *
+ * While the weather turns, `amount` (0-1) blends this layer toward the same
+ * layer of another sea. Both surfaces keep moving; only their share of the
+ * height shifts, so chop fades out or builds instead of snapping. */
+export function headerWaterFrame(width: number, time: number, layer: HeaderWaterLayer, anchorX: number, toward: HeaderWaterLayer = layer, amount = 0) {
 	// Method syntax stays self-contained in keepNames builds: no injected
 	// function-name helper needs to leak into the browser script.
-	const water = { heightAt(x: number) {
-		const phase = x * Math.PI * 2 / layer.wavelength + time * layer.speed + layer.phase;
-		return layer.level - layer.amplitude * (
-			Math.cos(phase) + layer.chop * (0.22 * Math.cos(2 * phase + 0.45) + 0.09 * Math.sin(phase * 2.7 - time * 0.8))
-			+ 0.23 * Math.sin(phase * 0.61 + time * 0.47)
-		);
-	} };
-	const steps = Math.min(240, Math.ceil((width + 32) / layer.step));
+	const water = {
+		swell(sea: HeaderWaterLayer, x: number) {
+			const phase = x * Math.PI * 2 / sea.wavelength + time * sea.speed + sea.phase;
+			return sea.amplitude * (
+				Math.cos(phase) + sea.chop * (0.22 * Math.cos(2 * phase + 0.45) + 0.09 * Math.sin(phase * 2.7 - time * 0.8))
+				+ 0.23 * Math.sin(phase * 0.61 + time * 0.47)
+			);
+		},
+		heightAt(x: number) {
+			return level - ((1 - amount) * water.swell(layer, x) + amount * water.swell(toward, x));
+		},
+	};
+	// Weighted this way, either end of a turn reproduces its pure sea exactly.
+	const level = layer.level * (1 - amount) + toward.level * amount;
+	const amplitude = layer.amplitude * (1 - amount) + toward.amplitude * amount;
+	const steps = Math.min(240, Math.ceil((width + 32) / Math.min(layer.step, toward.step)));
 	let surface = "";
 	let foam = "";
 	let crestOpen = false;
@@ -51,7 +63,7 @@ export function headerWaterFrame(width: number, time: number, layer: HeaderWater
 		const point = `${Number(x.toFixed(2))} ${y.toFixed(2)}`;
 		surface += `${index ? "L" : "M"}${point}`;
 		// Highlights belong to high water, breaking up along its windward face.
-		const crest = y < layer.level - layer.amplitude * 0.5 && Math.sin(x * 0.075 - time * 1.3 + layer.phase) > -0.45;
+		const crest = y < level - amplitude * 0.5 && Math.sin(x * 0.075 - time * 1.3 + layer.phase) > -0.45;
 		if (crest) foam += `${crestOpen ? "L" : "M"}${Number(x.toFixed(2))} ${(y - 0.35).toFixed(2)}`;
 		crestOpen = crest;
 	}
@@ -59,7 +71,8 @@ export function headerWaterFrame(width: number, time: number, layer: HeaderWater
 		surface,
 		body: `${surface}L${width + 16} 44L-16 44Z`,
 		foam: foam || "M-16 44",
-		heave: water.heightAt(anchorX) - layer.level,
+		level,
+		heave: water.heightAt(anchorX) - level,
 		pitch: Math.max(-6, Math.min(6, Math.atan2(water.heightAt(anchorX + 12) - water.heightAt(anchorX - 12), 24) * 180 / Math.PI)),
 	};
 }

@@ -190,14 +190,20 @@ preview-comment tools while keeping Shiplet's Harbor Office palette:
   original choppy sea under a churning storm deck with two lightning cells.
   The sky sits behind the water and controls; the sun and bolts stay between
   the mark and the nav at every width.
+- **The weather turns, it never snaps.** A theme change eases the sea between
+  its two states over 2.6s: both surfaces keep moving while their share of the
+  height shifts, so the chop fades into long swells or builds back up. The
+  skies cross over at the same time — the storm deck rolls down as the sun
+  sinks away, or lifts off as the sun rises. The turn runs on the water's own
+  clock, so it pauses with the header; reduced motion swaps at once.
 - **Lightning is flash-safe.** Every strike shares one 11s cycle: a double
   flicker 110ms apart, strikes about 5s apart, so the header never passes two
   flashes a second (WCAG 2.3.1). Bolts are small and the cloud glow is a
   low-luminance change. Reduced motion, no-JS, and paused headers show the
   storm clouds with no bolt.
 - The static SVG and animated frames share one surface sampler. Both seas ship
-  in the static SVG; the theme tokens show one and the script samples only the
-  visible sea, redrawing it at once when the theme changes. Its point count
+  in the static SVG; the theme tokens show one and the script draws only the
+  visible sea, blending the two states into it while the weather turns. Its point count
   is capped at 241 per layer; there are no frame-time layout reads, animation
   dependencies, or pointer tracking. Native CSS handles small detail motion.
   Hidden tabs, suspended pages, and offscreen headers stop the frame loop and

@@ -55,11 +55,36 @@ describe("compact harbor surface", () => {
 		// Half the night watch's pitch clamp: the ship rocks, it does not lurch.
 		for (const frame of frames) expect(Math.abs(frame.pitch)).toBeLessThanOrEqual(3);
 	});
+	it("Given the weather turning, When the blend between seas moves in small steps, Then no point of the surface jumps", () => {
+		for (const [index, calm] of HEADER_SEAS.calm.entries()) {
+			const storm = HEADER_SEAS.storm[index];
+			for (const time of [0, 3.7, 41]) {
+				let previous = surfacePoints(headerWaterFrame(1280, time, calm, 150, storm, 0).surface);
+				for (let step = 1; step <= 20; step++) {
+					const current = surfacePoints(headerWaterFrame(1280, time, calm, 150, storm, step / 20).surface);
+					expect(current.map(([x]) => x)).toEqual(previous.map(([x]) => x));
+					expect(Math.max(...current.map(([, y], point) => Math.abs(y - previous[point][1])))).toBeLessThan(1.2);
+					previous = current;
+				}
+			}
+		}
+	});
+	it("Given a finished turn, When the blend rests at either end, Then it draws exactly that pure sea", () => {
+		for (const [index, calm] of HEADER_SEAS.calm.entries()) {
+			const storm = HEADER_SEAS.storm[index];
+			for (const time of [0, 2.5, 40]) {
+				expect(headerWaterFrame(1280, time, calm, 150, storm, 1)).toEqual(headerWaterFrame(1280, time, storm, 150));
+				// Live frames sample at the finer step so resolution never changes mid-turn.
+				expect(headerWaterFrame(1280, time, calm, 150, storm, 0)).toEqual(headerWaterFrame(1280, time, { ...calm, step: storm.step }, 150));
+			}
+		}
+	});
 	it("Given mobile through ultrawide screens, When a frame is drawn, Then every layer covers both edges with a bounded point count", () => {
+		const turning = HEADER_SEAS.calm.map((calm, index) => [calm, HEADER_SEAS.storm[index], 0.5] as const);
 		for (const width of [320, 390, 768, 1280, 1920, 3840, 7680]) {
-			for (const layer of ALL_LAYERS) {
+			for (const [layer, toward, amount] of [...ALL_LAYERS.map(layer => [layer, layer, 0] as const), ...turning]) {
 				for (const time of [0, 0.5, 2, 4, 40, 10000]) {
-					const frame = headerWaterFrame(width, time, layer, width / 3);
+					const frame = headerWaterFrame(width, time, layer, width / 3, toward, amount);
 					expect(frame.surface).toMatch(/^M-16 /);
 					expect(frame.body).toContain(`L${width + 16} 44L-16 44Z`);
 					expect(frame.surface.split("L").length).toBeLessThanOrEqual(242);

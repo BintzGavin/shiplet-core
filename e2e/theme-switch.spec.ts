@@ -70,11 +70,50 @@ for (const variant of ["public", "authenticated"] as const) {
 	});
 }
 
+/** Height of the visible near swell from trough to crest, sampled along the whole surface. */
+async function nearSwellHeight(page: Page) {
+	return page.getByRole("banner").locator(".shiplet-waterline-sea:visible .shiplet-waterline-near .shiplet-waterline-drawn").evaluate(element => {
+		const path = element as SVGPathElement;
+		const length = path.getTotalLength();
+		const heights = Array.from({ length: 200 }, (_, index) => path.getPointAtLength(length * index / 199).y);
+		return Math.max(...heights) - Math.min(...heights);
+	});
+}
+
+test("Given either harbor, When the reader switches themes, Then the sea eases into the other state and the skies cross over instead of snapping", async ({ page }) => {
+	await page.setViewportSize({ width: 1280, height: 800 });
+	await page.emulateMedia({ colorScheme: "dark", reducedMotion: "no-preference" });
+	const { header, themeSwitch } = await openHeader(page);
+	await expect(header).toHaveAttribute("data-header-motion", "running");
+	for (const [leaving, arriving] of [["storm", "daylight"], ["daylight", "storm"]] as const) {
+		const before = await nearSwellHeight(page);
+		await themeSwitch.click();
+		// Both skies show while one leaves and the other arrives.
+		await expect(header.locator(`[data-sky="${arriving}"]`)).toBeVisible();
+		expect(await header.locator(`[data-sky="${leaving}"]`).isVisible()).toBe(true);
+		const samples: number[] = [];
+		for (let index = 0; index < 34; index++) {
+			samples.push(await nearSwellHeight(page));
+			await page.waitForTimeout(100);
+		}
+		const after = samples.at(-1)!;
+		const low = Math.min(before, after);
+		const range = Math.abs(before - after);
+		expect(range).toBeGreaterThan(Math.max(before, after) * 0.35);
+		const turning = samples.filter(height => low + range * 0.15 < height && height < low + range * 0.85);
+		expect(turning.length).toBeGreaterThanOrEqual(5);
+		for (let index = 1; index < samples.length; index++) expect(Math.abs(samples[index] - samples[index - 1])).toBeLessThan(range * 0.4);
+		await expect(header.locator(`[data-sky="${leaving}"]`)).toBeHidden();
+	}
+});
+
 test("Given keyboard use, When the switch is focused and toggled with Space or Enter, Then the theme flips each time", async ({ page }) => {
 	await page.emulateMedia({ colorScheme: "light", reducedMotion: "reduce" });
 	const { themeSwitch } = await openHeader(page);
 	await themeSwitch.focus();
 	await page.keyboard.press("Space");
+	// Reduced motion changes the weather at once: no cross-over, no easing.
+	await expect(page.getByRole("banner").locator('[data-sky="daylight"]')).toBeHidden({ timeout: 200 });
 	await expectHarbor(page, "dark");
 	await page.keyboard.press("Enter");
 	await expectHarbor(page, "light");
