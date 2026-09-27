@@ -26,6 +26,7 @@ unclear labels"):
 | Stamp-styled status badges | Renaming "Publish" to "Set sail" |
 | Mono "deck label" eyebrows above sections | Nautical jargon in form labels |
 | A waterline rule under the header | Decorative gradients, oversized heroes |
+| A sea that follows the theme | Weather that signals status or blocks controls |
 | Warm copy in empty states & confirmations | Cute icons that obscure meaning |
 
 Control labels are always plain: Publish, Settings, Invite, Revoke, Sign out.
@@ -97,13 +98,22 @@ Hover states derive via `color-mix()` — no hand-tuned hover hexes.
 
 ### Night watch (dark theme)
 
-Dark mode ships as a pure semantic-tier override under
-`@media (prefers-color-scheme: dark)` — primitives and components are
-untouched. Key moves: paper becomes deep harbor navy, the buoy action
+Dark mode ships as a pure semantic-tier override — primitives and components
+are untouched. Key moves: paper becomes deep harbor navy, the buoy action
 lightens and flips to dark text (`--action-contrast`), links/focus shift to a
 lighter harbor, and status tints invert to dark surfaces with light text.
 The inline brand mark reads `--mark-ink` / `--mark-harbor` so the hull stays
-visible on dark. `color-scheme: light dark` lets native controls follow.
+visible on dark.
+
+The theme follows `prefers-color-scheme` until the reader picks one with the
+header switch. The choice lives in `localStorage` (`shiplet-theme`) and a
+nonce-bound head script applies it as `html[data-theme]` before first paint.
+One token block (`NIGHT_WATCH_TOKENS` in `src/render.ts`) serves both
+`@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) }` and
+`:root[data-theme="dark"]`, so the two paths cannot drift. An explicit choice
+also pins `color-scheme` for native controls; otherwise `light dark` follows
+the system. Display tokens (`--sea-calm` / `--sea-storm`) pick the header
+sea the same way, so it is right at first paint and without JS.
 
 ## 5. Typography
 
@@ -142,6 +152,10 @@ old grid wallpaper was failing to do.
 - **Inputs/selects/textareas**: native semantic elements, 1px ink border,
   paper-0 fill, harbor focus ring. Placeholders at AA-readable contrast.
 - **Focus**: `:focus-visible` → 2px solid `--ring` with 2px offset, everywhere.
+- **Theme switch**: a sturdy sun/moon pill in the header utility nav
+  (`role="switch"`, labelled "Dark mode"). The knob position comes from theme
+  tokens, so it is right before the script reports `aria-checked`. It is
+  hidden under `@media (scripting: none)` because it cannot work there.
 - **Stamps** (`.status-badge`, feedback ticket chips): mono uppercase, 1.5px
   border, tinted fill — looks rubber-stamped onto the manifest.
 - **Tables**: ledger style — mono micro headers, hairline rows, row hover in
@@ -170,7 +184,23 @@ preview-comment tools while keeping Shiplet's Harbor Office palette:
   pitches with the water at its position, with an anchored pennant and trailing
   wake. No extra ship, logo outline, or play/pause button is introduced. Header
   height and navigation remain fixed while only the artwork moves.
-- The static SVG and animated frames share one surface sampler. Its point count
+- **Weather follows the theme.** Daylight rides a calm sea — the same three
+  layers stretched into long, low, slow swells with little chop. The night
+  watch keeps the original choppy sea. The sky stays clear in both: no sun,
+  clouds, or ambient weather competes with the controls.
+- **The weather turns, it never snaps.** A theme change eases the sea between
+  its two states over 2.6s: both surfaces keep moving while their share of the
+  height shifts, so the chop fades into long swells or builds back up. The
+  turn runs on the water's own clock, so it pauses with the header; reduced
+  motion swaps at once.
+- **One strike opens the night watch.** Turning on dark mode sends a single
+  bolt from the top of the header into the sea, between the mark and the nav:
+  one double flicker 110ms apart, then dark (well under WCAG 2.3.1's three
+  flashes a second). Pages that open in dark mode, turns toward daylight,
+  reduced motion, and no-JS never strike.
+- The static SVG and animated frames share one surface sampler. Both seas ship
+  in the static SVG; the theme tokens show one and the script draws only the
+  visible sea, blending the two states into it while the weather turns. Its point count
   is capped at 241 per layer; there are no frame-time layout reads, animation
   dependencies, or pointer tracking. Native CSS handles small detail motion.
   Hidden tabs, suspended pages, and offscreen headers stop the frame loop and
@@ -207,9 +237,10 @@ watermark per screen; decorations never sit under dense text.
 ## 9. Layout
 
 - Content max-width 1080px, 24px gutters (16px mobile).
-- Shared shell: compact mark-only home control plus utility navigation over the
-  waterline rule. The mark is the primary vessel; header waterline decoration is
-  limited to waves, navigation markers, and control-adjacent ripples.
+- Shared shell: compact mark-only home control plus utility navigation (Docs,
+  theme switch, account) over the waterline rule. The mark is the primary
+  vessel; header waterline decoration is limited to waves, navigation markers,
+  and control-adjacent ripples, with the theme's sky behind them.
 - Publish page: one column, dropzone-first.
 - Settings: sticky local nav rail + stacked sections (collapses on mobile).
 - The Bridge: preview iframe ~2fr, side stack (invites / feedback / MCP) 1fr.

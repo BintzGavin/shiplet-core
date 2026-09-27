@@ -4507,7 +4507,7 @@ describe("Shiplet", () => {
       }
       expect(header).toContain('data-header-variant="authenticated"');
       expect(header).not.toContain("shiplet-header-motion-control");
-      expect(header.match(/class="shiplet-waterline-body"/g)).toHaveLength(3);
+      expect(header.match(/class="shiplet-waterline-body"/g)).toHaveLength(6);
       expect(header.match(/<svg class="shiplet-waterline-svg"/g)).toHaveLength(
         1,
       );
@@ -4614,6 +4614,82 @@ describe("Shiplet", () => {
       expect(html).toContain("shiplet-focus-strip");
       expect(html).toContain("domain-input-group");
       expect(html).toContain('id="subdomainSuffix">.shiplet.cc</span>');
+    });
+
+    it("should let readers switch between a calm daylight harbor and a night-watch storm", async () => {
+      const pages = [
+        await (await makeRequest("/")).text(),
+        await (await requestHelper("/docs/quickstart")).text(),
+      ];
+      for (const html of pages) {
+        const head = html.match(/<head>[\s\S]*?<\/head>/)?.[0] || "";
+        const header =
+          html.match(
+            /<header class="shiplet-brand-header"[^>]*>[\s\S]*?<\/header>/,
+          )?.[0] || "";
+
+        // A stored choice is applied by a nonce-bound head script before any
+        // styled paint, and blocked storage cannot throw.
+        const themeScript =
+          head.match(
+            /<script data-shiplet-kernel-script="v1" nonce="[^"]+">[^<]*localStorage\.getItem\("shiplet-theme"\)[^<]*<\/script>/,
+          )?.[0] || "";
+        expect(themeScript).toContain('setAttribute("data-theme"');
+        expect(themeScript).toMatch(/try\s*\{/);
+        expect(head.indexOf(themeScript)).toBeLessThan(head.indexOf("<style>"));
+
+        const themeSwitch =
+          header.match(/<button class="shiplet-theme-switch"[^>]*>/)?.[0] || "";
+        expect(themeSwitch).toContain('type="button"');
+        expect(themeSwitch).toContain('role="switch"');
+        expect(themeSwitch).toContain('aria-label="Dark mode"');
+        expect(themeSwitch).toContain("data-theme-switch");
+        expect(extractFirstNav(html, "shiplet-brand-nav")).toContain(
+          'class="shiplet-theme-switch"',
+        );
+
+        // Both harbors are drawn server-side so first paint and no-JS views
+        // match the system theme; the sky never enters the accessibility tree.
+        expect(header.match(/class="shiplet-waterline-sea"/g)).toHaveLength(2);
+        expect(header).toContain('data-sea="calm"');
+        expect(header).toContain('data-sea="storm"');
+        // The sky stays clear: no sun or clouds, only one bolt that waits
+        // for the reader to turn on the night watch.
+        expect(header).toContain('<div class="shiplet-sky" aria-hidden="true">');
+        expect(header).not.toMatch(/shiplet-sky-(?:sun|fair-cloud|storm-cloud|deck|scene)/);
+        expect(header).not.toContain("data-sky=");
+        const strike =
+          header.match(
+            /<[^>]*class="shiplet-sky-(?:lightning|flash)"[^>]*>/g,
+          ) || [];
+        expect(strike).toHaveLength(2);
+        for (const part of strike) expect(part).toContain("data-harbor-motion");
+      }
+
+      const css = pages[0];
+      // Night watch stays one semantic-tier override: the system preference
+      // applies unless the reader picked daylight, and an explicit pick wins.
+      expect(css).toMatch(
+        /@media \(prefers-color-scheme: dark\) \{\s*:root:not\(\[data-theme="light"\]\) \{[^}]*--bg: oklch\(21% 0\.025 255\);/,
+      );
+      expect(css).toMatch(
+        /:root\[data-theme="dark"\] \{\s*color-scheme: dark;[^}]*--bg: oklch\(21% 0\.025 255\);/,
+      );
+      expect(css).toContain(':root[data-theme="light"] { color-scheme: light; }');
+      expect(css).toContain(
+        '.shiplet-waterline-sea[data-sea="calm"] { display: var(--sea-calm); }',
+      );
+      expect(css).toContain(
+        '.shiplet-waterline-sea[data-sea="storm"] { display: var(--sea-storm); }',
+      );
+      // The strike only runs while the weather turns toward the storm.
+      expect(css).toMatch(
+        /@media \(prefers-reduced-motion: no-preference\) \{[^@]*\.shiplet-brand-header\[data-weather-turning="storm"\] \.shiplet-sky-lightning \{ animation: shiplet-sky-strike [^;]*\bboth; \}/,
+      );
+      expect(css).not.toMatch(/\.shiplet-sky-lightning[^{]*\{[^}]*infinite/);
+      expect(css).toContain(
+        "@media (scripting: none) { .shiplet-theme-switch { display: none; } }",
+      );
     });
 
     it("should wire drag and drop upload into the publish file input", async () => {
