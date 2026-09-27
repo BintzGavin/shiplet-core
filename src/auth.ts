@@ -26,7 +26,13 @@ function parseCookies(header: string | null) {
 
 	for (const part of header.split(";")) {
 		const [name, ...valueParts] = part.trim().split("=");
-		if (name) cookies.set(name, decodeURIComponent(valueParts.join("=")));
+		if (!name) continue;
+		try {
+			cookies.set(name, decodeURIComponent(valueParts.join("=")));
+		} catch {
+			// Ignore malformed cookies without discarding unrelated valid sessions.
+			continue;
+		}
 	}
 
 	return cookies;
@@ -155,6 +161,7 @@ export async function getCurrentUser(
 ): Promise<ShipletUser | null> {
 	const cliUserId = await authenticateCliSession(env.DB, request);
 	if (cliUserId) return getUser(env.DB, cliUserId);
+	if (request.headers.get("authorization")?.trim()) return null;
 	if (env.SHIPLET_AUTH_MODE === "test") {
 		const userId = request.headers.get("x-shiplet-user-id");
 		if (!userId) {

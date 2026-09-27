@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
-import { execFileSync } from "node:child_process";
-import { mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { execFileSync, spawnSync } from "node:child_process";
+import { copyFile, mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -20,6 +20,47 @@ const example = Object.freeze({
 	databaseId: "11111111-2222-4333-8444-555555555555",
 	appUrl: "https://acme-shiplet.example.workers.dev",
 	authkitIssuer: "https://acme.authkit.app",
+});
+
+test("Given a user-owned config, when deploying, then supported options reach Wrangler and invalid options launch nothing", async () => {
+	const fixture = await mkdtemp(path.join(tmpdir(), "shiplet-deploy-args-"));
+	try {
+		const script = path.join(fixture, "scripts", "self-host-deploy.mjs");
+		const wrangler = path.join(fixture, "node_modules", ".bin", "wrangler");
+		const config = path.join(fixture, "operator.jsonc");
+		const calls = path.join(fixture, "calls.json");
+		await mkdir(path.dirname(script), { recursive: true });
+		await mkdir(path.dirname(wrangler), { recursive: true });
+		await copyFile(path.join(root, "scripts", "self-host-deploy.mjs"), script);
+		await writeFile(config, "{}\n");
+		await writeFile(wrangler, `#!/usr/bin/env node\nconst fs = require("node:fs");\nfs.writeFileSync(${JSON.stringify(calls)}, JSON.stringify(process.argv.slice(2)));\nprocess.exit(7);\n`, { mode: 0o755 });
+		const run = (...args) => spawnSync(process.execPath, [script, ...args], {
+			cwd: fixture,
+			encoding: "utf8",
+		});
+		const assertNoChild = async (args) => {
+			await rm(calls, { force: true });
+			const result = run(...args);
+			assert.equal(result.status, 2, `${args.join(" ")}: ${result.stderr}`);
+			await assert.rejects(readFile(calls, "utf8"), { code: "ENOENT" });
+		};
+
+		assert.equal(run("--config", config).status, 7);
+		assert.deepEqual(JSON.parse(await readFile(calls, "utf8")), ["deploy", "--config", config]);
+		assert.equal(run("--config", config, "--dry-run", "--env", "staging").status, 7);
+		assert.deepEqual(JSON.parse(await readFile(calls, "utf8")), ["deploy", "--config", config, "--dry-run", "--env", "staging"]);
+		for (const args of [
+			["--config", config, "--unknown"],
+			["--config", config, "unexpected"],
+			["--config", config, "--env"],
+			["--config", config, "--config", config],
+			["--config", config, "--env", "staging", "--env", "production"],
+		]) {
+			await assertNoChild(args);
+		}
+	} finally {
+		await rm(fixture, { recursive: true, force: true });
+	}
 });
 
 test("Given static-only inputs, when config is generated, then Shiplet keeps advanced Cloudflare infrastructure absent", () => {

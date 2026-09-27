@@ -3410,17 +3410,27 @@ const EnhanceScript = (nonce: KernelDocumentNonce) => `
 			var button = target && target.closest ? target.closest("[data-copy-value]") : null;
 			if (!button) return;
 			var value = button.getAttribute("data-copy-value") || "";
-			var previousLabel = button.getAttribute("aria-label") || "Copy MCP endpoint";
-			function markCopied() {
-				button.classList.add("is-copied");
-				button.setAttribute("aria-label", "Copied");
-				button.setAttribute("title", "Copied");
-				window.setTimeout(function () {
+			var feedback = button._copyFeedback || {
+				label: button.getAttribute("aria-label"),
+				title: button.getAttribute("title"),
+			};
+			button._copyFeedback = feedback;
+			function markResult(copied) {
+				window.clearTimeout(feedback.timer);
+				var message = copied ? "Copied" : "Copy failed. Try again";
+				button.classList.toggle("is-copied", copied);
+				button.setAttribute("aria-label", message);
+				button.setAttribute("title", message);
+				feedback.timer = window.setTimeout(function () {
 					button.classList.remove("is-copied");
-					button.setAttribute("aria-label", previousLabel);
-					button.setAttribute("title", previousLabel);
+					if (feedback.label === null) button.removeAttribute("aria-label");
+					else button.setAttribute("aria-label", feedback.label);
+					if (feedback.title === null) button.removeAttribute("title");
+					else button.setAttribute("title", feedback.title);
+					delete button._copyFeedback;
 				}, 1200);
 			}
+			function markCopied() { markResult(true); }
 			function fallbackCopy() {
 				var textarea = d.createElement("textarea");
 				textarea.value = value;
@@ -3429,12 +3439,13 @@ const EnhanceScript = (nonce: KernelDocumentNonce) => `
 				textarea.style.left = "-9999px";
 				d.body.appendChild(textarea);
 				textarea.select();
-				try { d.execCommand("copy"); } catch (error) {}
+				var copied = false;
+				try { copied = d.execCommand("copy"); } catch (error) {}
 				textarea.remove();
-				markCopied();
+				markResult(copied);
 			}
 			if (navigator.clipboard && window.isSecureContext) {
-				navigator.clipboard.writeText(value).then(markCopied).catch(fallbackCopy);
+				Promise.resolve().then(function () { return navigator.clipboard.writeText(value); }).then(markCopied, fallbackCopy);
 			} else {
 				fallbackCopy();
 			}

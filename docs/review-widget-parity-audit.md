@@ -30,6 +30,44 @@ P3 covers optional convenience/preferences.
 | Keyboard/preferences | 4 | 1 | 2 | 0 |
 | Boundaries/integration | 0 | 1 | 0 | 3 |
 
+## Focused release acceptance (2026-09-26)
+
+This record covers the narrow one-submit release shipped as public tag `v0.1.45`
+from [core PR #10](https://github.com/BintzGavin/shiplet-core/pull/10), merge
+commit `fe19ea838b6699e630c38d43b2c5cf1f03775c5c`. It supersedes the 2026-09-21
+**Mandatory residual block** only as release-blocker policy for this minimal
+release. Historical ledger statuses and the full 56-contract parity assessment
+remain unchanged.
+
+| ID / group | Current disposition | Evidence |
+| --- | --- | --- |
+| Hosted direct one-submit | Production Chrome: PF1 and PF2 submissions saved in place with no confirmation or new tab in observed checks. Held-request pending-disable timing remains local-only. | `e2e/trusted-review-host.spec.ts`; Chrome production acceptance |
+| Direct submission retry | Accepted locally: a committed lost response retries the same nonempty request/client/revision IDs and byte-identical body; one durable row survives reload. Browser retry04 passed. | `e2e/feedback-inbox.spec.ts` |
+| Production page comment | PF1 saved and reappeared after reload. Production Page screenshot/drawing was not tested. | Chrome production acceptance |
+| Production contextual annotation and reply | PF2 contextual annotation saved; its target pin/card was visible and its screenshot action was available. One reply persisted after reload. | Chrome production acceptance |
+| WRITE-07 large capture | Local-only: >2 MiB page-fidelity capture persists and retries saved bytes. This does not establish production Page screenshot/drawing behavior. | `test/trusted-review-host.spec.ts` |
+| Concurrent screenshot retry | Accepted locally: the durable screenshot retains the winning capture. | `test/review-rich-confirmation-api.spec.ts` |
+| Rehearsal smoke | Six scripted checks passed with scheduled-path attestation. | Private deployment evidence retained outside this repository |
+| Production scripted smoke | All seven scripted checks passed against the deployed release. | Private smoke evidence retained outside this repository |
+| Production fixture cleanup | The synthetic fixture was archived and recoverable; the active Shiplets list returned zero matches. | Chrome production acceptance |
+| Focused regressions | 116 focused regressions passed. Browser rich06 acceptance passed. | `test/trusted-review-host.spec.ts`; `test/review-rich-confirmation-api.spec.ts` |
+
+**Gate:** The narrowed one-submit release gate is complete for `v0.1.45` at the
+merge commit above. The final full `npm run verify` passed: typecheck; all 2,036
+Vitest tests and 26 Node tests; four Worker dry-runs; license audit; and security
+audit with 0 vulnerabilities. Rehearsal, production scripted smoke, and the
+bounded Chrome observations above passed. The feedback list was evaluated only
+after Workspace was ready; the earlier “No comments yet” view was an
+intermediate loading state. These results clear release blockers only within
+this user-narrowed scope; they do not close all 56 contracts or establish the
+deferred browser/runtime matrix.
+
+**Deferred:** Backend06/Backend11 and UX-07 external-runtime/custom-action
+coverage; non-Chromium, touch, assistive-technology, and concurrent-reviewer
+browser coverage; BOUND-03/04 authorized integrations; WRITE-15 native-select
+gesture; five Wrangler-dependent external-harness mutants. Sandbox Mentions
+remains an intentional, recoverable unsupported capability.
+
 ## Final canonical reconciliation (2026-09-21)
 
 This is the final canonical ledger reconciliation for the accepted parity boundary. Stable IDs and historical baseline cells remain intact; the tracking cells below record the current evidence-backed disposition. The prior implementation snapshot is retained in the historical row cells and does not override this reconciliation.
