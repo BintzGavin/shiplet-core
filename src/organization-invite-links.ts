@@ -360,86 +360,98 @@ export async function revokeInviteLink(
 }
 
 /**
- * Records that a person redeemed a link. A redemption takes its use first
- * (`consumeInviteLinkUse`) and records this row second, so every row stands
- * for a use that was already taken. The UNIQUE (link_id, user_id) constraint
- * keeps one row per person: a repeated or concurrent submit by the same
- * person gets "already_redeemed", and a submit that took a use of its own
- * then gives it back (`decrementInviteLinkUse`), because the row that got
- * there first holds the person's counted use.
+ * Takes one use of the link for the person and records their redemption in
+ * one D1 batch, which D1 runs as a single transaction: the use and the row
+ * that holds it are written together or not at all. A batch that commits but
+ * reports an error leaves both, so the person's retry finds the row and takes
+ * no other use.
  *
- * A row is never deleted once written, even when the join it belongs to
- * fails part-way: it keeps holding that person's use, so their retry
- * finishes the join without taking another. If they never retry, the use
- * stays taken, which errs on the side of never exceeding max_uses.
+ * The use is taken first and the row recorded second, so every row stands
+ * for a use already taken. Statements in a batch cannot read each other's
+ * results, so the take is guarded by revocation and expiry only; the row is
+ * recorded only while the use it holds is within max_uses (`use_count <=
+ * max_uses` right after the take is `use_count < max_uses` before it) and
+ * the person holds no row yet; and when this submit recorded no row, the use
+ * it took is given back in the same transaction. Concurrent redemptions
+ * therefore cannot exceed max_uses, and a revoke or expiry wins any race with
+ * a redemption.
+ *
+ * One row per person: a person whose row is already recorded, by a repeated
+ * or concurrent submit, gets "already_redeemed" and holds no second use. A
+ * row is never deleted once written, even when the join it belongs to fails
+ * part-way: it keeps holding that person's use, so their retry finishes the
+ * join without taking another. If they never retry, the use stays taken,
+ * which errs on the side of never exceeding max_uses.
  */
-export async function recordInviteLinkRedemption(
+export async function redeemInviteLinkUse(
 	db: D1Database,
 	input: {
-		link: Pick<InviteLinkRecord, "id" | "organization_id">;
+		link: Pick<InviteLinkRecord, "id">;
 		userId: string;
 		email: string;
 		nowIso: string;
 	},
-): Promise<"recorded" | "already_redeemed"> {
-	const result = await db
-		.prepare(
-			`INSERT OR IGNORE INTO organization_invite_link_redemptions
-			 (id, link_id, organization_id, user_id, email, redeemed_on)
-			 VALUES (?, ?, ?, ?, ?, ?)`,
-		)
-		.bind(
-			newId("invlinkuse"),
-			input.link.id,
-			input.link.organization_id,
-			input.userId,
-			input.email.trim().toLowerCase(),
-			input.nowIso,
-		)
-		.run();
-	// `> 0`, not `=== 1`: D1 counts rows written by triggers too, and reading an
-	// inflated count as "already redeemed" would give back the use this row
-	// holds.
-	return result.meta.changes > 0 ? "recorded" : "already_redeemed";
-}
-
-/**
- * Atomically takes one use. Fails when the link is revoked, expired, or used
- * up at the moment of the write, so concurrent redemptions cannot exceed
- * max_uses and a revoke or expiry wins any race with a redemption. A
- * redemption takes its use before it records the redemption row.
- */
-export async function consumeInviteLinkUse(
-	db: D1Database,
-	linkId: string,
-	nowIso: string,
-) {
-	const result = await db
-		.prepare(
-			`UPDATE organization_invite_links SET use_count = use_count + 1 WHERE id = ? AND revoked_on IS NULL AND (max_uses IS NULL OR use_count < max_uses) AND (expires_on IS NULL OR expires_on > ?)`,
-		)
-		.bind(linkId, nowIso)
-		.run();
-	// `> 0`, not `=== 1`: the update matches at most this one link, but D1
-	// counts rows written by triggers too.
-	return result.meta.changes > 0;
-}
-
-/**
- * Gives back one use that a submit took and holds no redemption row for:
- * either a concurrent submit by the same person recorded the row first, and
- * that row holds the counted use, or recording the row failed. Never for a
- * use a row stands for, because rows are never deleted.
- */
-export async function decrementInviteLinkUse(db: D1Database, linkId: string) {
-	await db
-		.prepare(
-			`UPDATE organization_invite_links
-			 SET use_count = use_count - 1
-			 WHERE id = ? AND use_count > 0`,
-		)
-		.bind(linkId)
-		.run();
+): Promise<"recorded" | "already_redeemed" | "unavailable"> {
+	const redemptionId = newId("invlinkuse");
+	const linkId = input.link.id;
+	const [, , , held] = await db.batch<{ id: string }>([
+		// Take a use while the link is open.
+		db
+			.prepare(
+				`UPDATE organization_invite_links
+				 SET use_count = use_count + 1
+				 WHERE id = ? AND revoked_on IS NULL
+				   AND (expires_on IS NULL OR expires_on > ?)`,
+			)
+			.bind(linkId, input.nowIso),
+		// Record the redemption that holds it, within max_uses.
+		db
+			.prepare(
+				`INSERT INTO organization_invite_link_redemptions
+				 (id, link_id, organization_id, user_id, email, redeemed_on)
+				 SELECT ?, id, organization_id, ?, ?, ?
+				 FROM organization_invite_links
+				 WHERE id = ? AND revoked_on IS NULL
+				   AND (expires_on IS NULL OR expires_on > ?)
+				   AND (max_uses IS NULL OR use_count <= max_uses)
+				   AND NOT EXISTS (
+				     SELECT 1 FROM organization_invite_link_redemptions
+				     WHERE link_id = ? AND user_id = ?
+				   )`,
+			)
+			.bind(
+				redemptionId,
+				input.userId,
+				input.email.trim().toLowerCase(),
+				input.nowIso,
+				linkId,
+				input.nowIso,
+				linkId,
+				input.userId,
+			),
+		// Give the use back when this submit recorded no row.
+		db
+			.prepare(
+				`UPDATE organization_invite_links
+				 SET use_count = use_count - 1
+				 WHERE id = ? AND revoked_on IS NULL
+				   AND (expires_on IS NULL OR expires_on > ?)
+				   AND NOT EXISTS (
+				     SELECT 1 FROM organization_invite_link_redemptions WHERE id = ?
+				   )`,
+			)
+			.bind(linkId, input.nowIso, redemptionId),
+		// The redemption the person holds now.
+		db
+			.prepare(
+				`SELECT id FROM organization_invite_link_redemptions
+				 WHERE link_id = ? AND user_id = ?`,
+			)
+			.bind(linkId, input.userId),
+	]);
+	const heldId = held?.results[0]?.id;
+	if (heldId === redemptionId) return "recorded";
+	return heldId ? "already_redeemed" : "unavailable";
 }
 
 /**
@@ -469,8 +481,8 @@ export async function hasInviteLinkRedemption(
  * redemptions are never deleted. A link used up by that use therefore stays
  * open for them, so a retry can finish the join. Everyone else is refused
  * before anything is written. Revoked and expired links stay closed for
- * everyone. This check picks the page to show; the atomic take in
- * `consumeInviteLinkUse` still settles races between concurrent submits.
+ * everyone. This check picks the page to show; the transaction in
+ * `redeemInviteLinkUse` still settles races between concurrent submits.
  */
 export async function inviteLinkStatusForUser(
 	db: D1Database,
@@ -737,4 +749,32 @@ export async function runAuditedInviteLinkRedemption<T>(input: {
 		});
 		throw error;
 	}
+}
+
+/**
+ * Records that WorkOS did not get a person who joined a team through a link.
+ * The join already succeeded and is audited as such; WorkOS only mirrors the
+ * team, so this failure is kept for reconciliation instead of failing the
+ * join. Metadata never holds emails or the token.
+ */
+export async function recordInviteLinkWorkOSTeamSyncFailure(input: {
+	db: D1Database;
+	organizationId: string;
+	actorId: string;
+	inviteLinkId: string;
+	teamId: string;
+	reason: string;
+}) {
+	await appendKernelAdminAuditEvent(input.db, {
+		organizationId: input.organizationId,
+		actor: { kind: "human", id: input.actorId },
+		action: "organization_invite_link.workos_team_sync",
+		outcome: "failed",
+		metadata: {
+			targetKind: "invite_link",
+			inviteLinkId: input.inviteLinkId,
+			teamId: input.teamId,
+			reason: input.reason,
+		},
+	});
 }
