@@ -373,15 +373,15 @@ hr.solid {
 .scene-go .draw-path { animation: draw var(--draw-duration, 1.5s) var(--ease-out) forwards; animation-delay: calc(var(--di, 0) * var(--draw-stagger, 320ms)); }
 html:not(.js) .draw-path { stroke-dashoffset: 0; }
 
-.harbor-scene-svg { display: block; max-width: 100%; overflow: hidden; --harbor-line-step: 42ms; }
+.harbor-scene-svg { display: block; max-width: 100%; overflow: hidden; --harbor-arrival: 2.8s; --harbor-settled: 3.4s; --harbor-tide: 7.6s; }
 .harbor-scene-svg * { vector-effect: non-scaling-stroke; }
-.harbor-scene-svg .draw-path { stroke-dashoffset: 0; }
+.harbor-scene-svg .draw-path { stroke-dasharray: none; stroke-dashoffset: 0; }
 .harbor-scene-svg :is(.scene-boat-arrival, .scene-supporting-details, .scene-boat-float, .scene-foreground-tide, .scene-wake-arrival, .scene-boat-wake, .scene-boat-flag, .scene-gull-flight, .scene-beacon-beam, .scene-beacon-lamp) { transform-box: fill-box; transform-origin: center; }
 .harbor-scene-svg :is(.scene-cloud-near, .scene-cloud-far, .scene-water-far-layer, .scene-water-mid-layer, .scene-water-near-layer) { transform-box: fill-box; transform-origin: center; }
 .harbor-scene-svg .scene-boat-arrival { transform-origin: 50% 78%; }
-.harbor-scene-svg .scene-boat-float { transform-origin: 50% 76%; }
-.harbor-scene-svg .scene-boat-flag { transform-origin: left center; }
-.harbor-scene-svg .scene-beacon-beam { transform-box: view-box; transform-origin: 548px 58px; }
+.harbor-scene-svg .scene-boat-float { transform-box: view-box; transform-origin: 252px 124px; }
+.harbor-scene-svg .scene-boat-flag { transform-box: view-box; transform-origin: 371px 59px; }
+.harbor-scene-svg .scene-beacon-beam { transform-box: view-box; transform-origin: 543px 55px; }
 .harbor-scene-svg .scene-backdrop { color: var(--text-muted); opacity: 0.34; }
 .harbor-scene-svg .scene-midground { color: var(--mark-ink); opacity: 0.88; }
 .harbor-scene-svg .scene-foreground { color: var(--mark-harbor); opacity: 0.92; }
@@ -412,63 +412,66 @@ html:not(.js) .draw-path { stroke-dashoffset: 0; }
 .harbor-scene-svg .scene-beacon-beam { color: var(--mark-harbor); fill: currentColor; stroke: none; opacity: 0.19; transform: rotate(-4.5deg); }
 .harbor-scene-svg .scene-beacon-reflection { color: var(--mark-harbor); opacity: 0.48; }
 .harbor-scene-svg .scene-mooring-line { color: var(--mark-ink); }
-.harbor-scene-svg .scene-mooring-slack { opacity: 0; stroke-dasharray: 1; stroke-dashoffset: 0; }
-.harbor-scene-svg .scene-mooring-taut { opacity: 1; stroke-dasharray: 1; stroke-dashoffset: 0; }
+.harbor-scene-svg .scene-mooring-taut { opacity: 1; stroke-dasharray: 1; stroke-dashoffset: 0; transform-box: view-box; transform-origin: 208px 140px; }
 .harbor-scene-svg .scene-wake-arrival { opacity: 0.5; }
-.harbor-scene-svg .scene-mooring-slack { transform-box: fill-box; transform-origin: right center; }
+.harbor-scene-svg .scene-boat-reflection { transform-box: fill-box; transform-origin: center top; }
+.harbor-scene-svg .scene-water-contact { fill: currentColor; stroke: none; opacity: 0.08; }
+.harbor-scene-svg .scene-wake-ribbon { opacity: 0; transform-box: view-box; transform-origin: 408px 161px; }
 html:not(.js) .harbor-scene-svg .scene-boat-hull { fill-opacity: 1; }
 html:not(.js) .harbor-scene-svg .scene-beacon-beam { transform: none; opacity: 0.19; }
 html:not(.js) .harbor-scene-svg .scene-boat-float { transform: none; }
 html:not(.js) .harbor-scene-svg :is(.scene-cloud-near, .scene-cloud-far, .scene-water-far-layer, .scene-water-mid-layer, .scene-water-near-layer) { animation: none; transform: none; }
 
-@keyframes harbor-line-resolve {
-  from { stroke-dasharray: 0.16 0.045; stroke-dashoffset: 0.14; }
-  to { stroke-dasharray: 1 0; stroke-dashoffset: 0; }
-}
 @keyframes harbor-boat-dock {
-  0% { opacity: 0.76; transform: translate(28px, 4px) rotate(0.32deg); }
-  25% { opacity: 0.82; transform: translate(21px, 3px) rotate(0.24deg); }
-  50% { opacity: 0.89; transform: translate(14px, 2px) rotate(0.16deg); }
-  75% { opacity: 0.96; transform: translate(7px, 1px) rotate(0.08deg); }
-  100% { opacity: 1; transform: translate(0, 0) rotate(0deg); }
-}
-@keyframes harbor-mooring-slack {
-  0%, 16% { stroke-dashoffset: 1; opacity: 0; transform: translate(34px, -9px); }
-  48%, 76% { stroke-dashoffset: 0; opacity: 0.9; transform: none; }
-  100% { stroke-dashoffset: 0; opacity: 0; transform: translateY(-2px); }
+  from { transform: translate(44px, 1.5px) rotate(0.45deg); }
+  to { transform: none; }
 }
 @keyframes harbor-mooring-secure {
-  0%, 58% { stroke-dashoffset: 1; opacity: 0; }
-  100% { stroke-dashoffset: 0; opacity: 1; }
+  from { stroke-dashoffset: 1; opacity: 0; }
+  to { stroke-dashoffset: 0; opacity: 1; }
 }
 @keyframes harbor-wake-dissolve {
-  0% { opacity: 0; transform: translateX(40px) scaleX(1.34); }
-  26% { opacity: 0.96; }
-  100% { opacity: 0.5; transform: none; }
+  from { opacity: 0.8; transform: translateX(10px) scaleX(1.08); }
+  to { opacity: 0.5; transform: none; }
 }
-@keyframes harbor-details-settle {
-  from { opacity: 0.9; transform: translateY(2px); }
-  to { opacity: 1; transform: none; }
-}
+/* The near cleat is the pitch pivot. Rope, hull and reflection share a tide. */
 @keyframes harbor-boat-idle {
   0%, 100% { transform: none; }
-  50% { transform: translateY(-2.4px) rotate(0.2deg); }
+  25% { transform: translateY(-0.45px) rotate(0.18deg); }
+  50% { transform: translateY(-1.6px) rotate(-0.35deg); }
+  75% { transform: translateY(-0.7px) rotate(-0.12deg); }
+}
+@keyframes harbor-mooring-tide {
+  0%, 100% { transform: skewY(0deg); }
+  25% { transform: skewY(-0.586deg); }
+  50% { transform: skewY(-2.083deg); }
+  75% { transform: skewY(-0.911deg); }
 }
 @keyframes harbor-wake-breathe {
-  0%, 100% { transform: translateX(0) scaleX(1); opacity: 0.5; }
-  50% { transform: translateX(1.5px) scaleX(1.015); opacity: 0.6; }
+  0%, 100% { transform: scaleX(1); opacity: 0.65; }
+  50% { transform: translateY(0.6px) scaleX(1.035); opacity: 0.42; }
+}
+@keyframes harbor-reflection-tide {
+  0%, 100% { transform: scale(1, 1); opacity: 0.8; }
+  50% { transform: translateY(0.8px) scale(0.97, 0.82); opacity: 0.55; }
+}
+@keyframes harbor-wake-release {
+  0% { opacity: 0; transform: translate(0, 0) scaleX(0.86); }
+  20% { opacity: 0.45; }
+  100% { opacity: 0; transform: translate(18px, 3px) scaleX(1.14); }
 }
 @keyframes harbor-flag-breathe {
-  0%, 100% { transform: translateY(0) scaleX(1); }
-  50% { transform: translateY(-0.7px) scaleX(0.96); }
+  0%, 100% { transform: skewY(-2deg) scaleX(1); }
+  35% { transform: skewY(5deg) scaleX(0.9); }
+  70% { transform: skewY(-4deg) scaleX(0.97); }
 }
 @keyframes harbor-lamp-breathe {
   0%, 100% { opacity: 0.72; transform: scale(0.92); }
   50% { opacity: 1; transform: scale(1); }
 }
 @keyframes harbor-beam-drift {
-  0%, 100% { opacity: 0.18; transform: rotate(-4.5deg); }
-  50% { opacity: 0.2; transform: rotate(4.5deg); }
+  0%, 100% { opacity: 0.1; transform: rotate(-6deg); }
+  50% { opacity: 0.2; transform: rotate(5deg); }
 }
 @keyframes harbor-cloud-near-drift {
   0%, 100% { transform: translate(-8px, 0); }
@@ -513,20 +516,18 @@ html:not(.js) .harbor-scene-svg :is(.scene-cloud-near, .scene-cloud-far, .scene-
   .shiplet-waterline-avatar-ripple { animation: shiplet-waterline-avatar-ripple 16s ease-in-out -5s infinite; }
   .shiplet-brand-header[data-weather-turning="storm"] .shiplet-sky-lightning { animation: shiplet-sky-strike 0.6s linear 0.45s both; }
   .shiplet-brand-header[data-weather-turning="storm"] .shiplet-sky-flash { animation: shiplet-sky-flash 0.6s linear 0.45s both; }
-  .scene-go .harbor-scene-svg .draw-path {
-    animation: harbor-line-resolve 620ms var(--ease-out) both;
-    animation-delay: calc(var(--di, 0) * var(--harbor-line-step));
-  }
-  .scene-go .harbor-scene-svg .scene-boat-arrival { animation: harbor-boat-dock 2.4s cubic-bezier(0.4, 0, 0.2, 1) 120ms both; }
-  .scene-go .harbor-scene-svg .scene-mooring-slack { animation: harbor-mooring-slack 900ms var(--ease-out) 760ms both; }
-  .scene-go .harbor-scene-svg .scene-mooring-taut { animation: harbor-mooring-secure 900ms var(--ease-out) 1.26s both; }
-  .scene-go .harbor-scene-svg .scene-wake-arrival { animation: harbor-wake-dissolve 1.2s var(--ease-out) 350ms both; }
-  .scene-go .harbor-scene-svg .scene-supporting-details { animation: harbor-details-settle 520ms var(--ease-out) 1.35s both; }
+  .scene-go .harbor-scene-svg .draw-path { animation: none; }
+  .scene-go .harbor-scene-svg .scene-boat-arrival { animation: harbor-boat-dock var(--harbor-arrival) cubic-bezier(0.22, 1, 0.36, 1) both; }
+  .scene-go .harbor-scene-svg .scene-mooring-taut { animation: harbor-mooring-secure 600ms var(--ease-out) var(--harbor-arrival) both, harbor-mooring-tide var(--harbor-tide) ease-in-out var(--harbor-settled) infinite; }
+  .scene-go .harbor-scene-svg .scene-wake-arrival { animation: harbor-wake-dissolve var(--harbor-arrival) var(--ease-out) both; }
   .scene-go .harbor-scene-svg .scene-beacon-beam { animation: harbor-beam-drift 18s cubic-bezier(0.45, 0, 0.55, 1) 0s infinite; }
-  .scene-go .harbor-scene-svg .scene-beacon-lamp { animation: harbor-lamp-breathe 4.8s ease-in-out 2.6s infinite; }
-  .scene-go .harbor-scene-svg .scene-boat-float { animation: harbor-boat-idle 7.2s ease-in-out 2.52s infinite both; }
-  .scene-go .harbor-scene-svg .scene-boat-wake { animation: harbor-wake-breathe 7.2s ease-in-out 2.42s infinite both; }
-  .scene-go .harbor-scene-svg .scene-boat-flag { animation: harbor-flag-breathe 4.6s ease-in-out 2.5s infinite both; }
+  .scene-go .harbor-scene-svg .scene-beacon-lamp { animation: harbor-lamp-breathe 18s ease-in-out infinite; }
+  .scene-go .harbor-scene-svg .scene-boat-float { animation: harbor-boat-idle var(--harbor-tide) ease-in-out var(--harbor-settled) infinite both; }
+  .scene-go .harbor-scene-svg .scene-boat-wake { animation: harbor-wake-breathe var(--harbor-tide) ease-in-out var(--harbor-settled) infinite both; }
+  .scene-go .harbor-scene-svg .scene-boat-reflection { animation: harbor-reflection-tide var(--harbor-tide) ease-in-out var(--harbor-settled) infinite both; }
+  .scene-go .harbor-scene-svg .scene-wake-ribbon { animation: harbor-wake-release 3.8s ease-out var(--harbor-settled) infinite; }
+  .scene-go .harbor-scene-svg .scene-wake-ribbon:nth-child(2) { animation-delay: calc(var(--harbor-settled) + 1.9s); }
+  .scene-go .harbor-scene-svg .scene-boat-flag { animation: harbor-flag-breathe 3.2s ease-in-out infinite; }
   .scene-go .harbor-scene-svg .scene-cloud-near { animation: harbor-cloud-near-drift 32s ease-in-out -8s infinite; }
   .scene-go .harbor-scene-svg .scene-cloud-far { animation: harbor-cloud-far-drift 44s ease-in-out -19s infinite; }
   .scene-go .harbor-scene-svg .scene-water-far-layer { animation: harbor-water-far-drift 12.8s ease-in-out -1.7s infinite; }
@@ -3151,8 +3152,7 @@ const THEME_SWITCH = `<button class="shiplet-theme-switch" type="button" role="s
 /* Pennant glyph for buttons and step flags. */
 const PENNANT_SVG = `<svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg" aria-hidden="true" focusable="false" shape-rendering="geometricPrecision"><path d="M7 22V3" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/><path d="M7 3.5l12 4.5-12 4.5z" fill="currentColor"/></svg>`;
 
-/* Wide line-art harbor for the sign-in scene. Paths carry pathLength="1" so the
-   stylesheet's draw rule animates them; --di staggers the drawing order. */
+/* Complete static harbor, enhanced with a docking sequence and a shared tide. */
 export const HARBOR_SCENE_SVG = `<svg class="harbor-scene-svg" viewBox="0 0 640 190" xmlns="http://www.w3.org/2000/svg" aria-hidden="true" focusable="false" shape-rendering="geometricPrecision" fill="none" stroke="currentColor" stroke-width="2.35" stroke-linecap="round" stroke-linejoin="round">
   <defs>
     <linearGradient id="harbor-beam-fade" gradientUnits="userSpaceOnUse" x1="539" y1="58" x2="410" y2="18">
@@ -3245,12 +3245,21 @@ export const HARBOR_SCENE_SVG = `<svg class="harbor-scene-svg" viewBox="0 0 640 
     </g>
 
     <g class="scene-boat-arrival scene-boat scene-working-vessel">
+      <g class="scene-boat-reflection">
+        <ellipse class="scene-water-contact" cx="331" cy="168" rx="78" ry="6"/>
+        <path class="draw-path scene-water-mid scene-structural-line scene-intentional-contour" style="--di:3" d="M272 170c28 8 92 8 120 0" pathLength="1"/>
+        <path class="draw-path scene-water-fine scene-fine-detail scene-intentional-contour" style="--di:4" d="M289 180c22 5 68 5 88 0" pathLength="1"/>
+      </g>
       <g class="scene-wake-arrival">
         <g class="scene-boat-wake">
           <path class="draw-path scene-boat-wake-line scene-structural-line scene-intentional-contour" style="--di:2" d="M244 158c-20 8-41 8-63 0" pathLength="1"/>
           <path class="draw-path scene-boat-wake-line scene-fine-detail scene-intentional-contour" style="--di:3" d="M232 170c-23 7-47 6-70-1" pathLength="1"/>
           <path class="draw-path scene-boat-wake-line scene-structural-line scene-intentional-contour" style="--di:2" d="M403 159c23-9 47-8 72 2" pathLength="1"/>
           <path class="draw-path scene-boat-wake-line scene-fine-detail scene-intentional-contour" style="--di:3" d="M414 170c24-7 48-6 73 2" pathLength="1"/>
+        </g>
+        <g class="scene-wake-trail scene-mobile-atmosphere">
+          <path class="scene-wake-ribbon scene-fine-detail" d="M408 161q27-8 54 2"/>
+          <path class="scene-wake-ribbon scene-fine-detail" d="M408 161q27-8 54 2"/>
         </g>
       </g>
       <g class="scene-boat-float">
@@ -3278,16 +3287,11 @@ export const HARBOR_SCENE_SVG = `<svg class="harbor-scene-svg" viewBox="0 0 640 
         </g>
         <circle class="draw-path scene-fender scene-fine-detail" style="--di:3" cx="252" cy="131" r="5" pathLength="1"/>
         <circle class="draw-path scene-fender scene-fine-detail" style="--di:3" cx="406" cy="131" r="5" pathLength="1"/>
-        <path class="draw-path scene-bow-cleat scene-fine-detail" style="--di:3" d="M397 123v-6h8v6" pathLength="1"/>
-      </g>
-      <g class="scene-boat-reflection">
-        <path class="draw-path scene-water-mid scene-structural-line scene-intentional-contour" style="--di:3" d="M272 170c28 8 92 8 120 0" pathLength="1"/>
-        <path class="draw-path scene-water-fine scene-fine-detail scene-intentional-contour" style="--di:4" d="M289 180c22 5 68 5 88 0" pathLength="1"/>
+        <path class="draw-path scene-bow-cleat scene-fine-detail" style="--di:3" d="M252 124v-5m-4 0h8" pathLength="1"/>
       </g>
     </g>
 
-    <path class="scene-mooring-line scene-mooring-slack scene-structural-line" d="M401 119c-33-2-40 25-71 27-50 4-85-1-122-2" pathLength="1"/>
-    <path class="scene-mooring-line scene-mooring-taut scene-structural-line" d="M401 119c-72 8-128 16-193 25" pathLength="1"/>
+    <path class="scene-mooring-line scene-mooring-taut scene-fine-detail" d="M208 140Q230 146 252 121" pathLength="1"/>
   </g>
 </svg>`;
 
