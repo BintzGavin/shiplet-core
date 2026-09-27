@@ -40,7 +40,8 @@ test("reduced motion immediately leaves a complete still harbor on desktop and m
 		await page.setViewportSize({ width, height: 850 });
 		const scene = page.locator(".harbor-scene-svg");
 		await expect(scene).toBeVisible();
-		expect(await scene.evaluate((el) => el.getAnimations({ subtree: true }).length)).toBe(0);
+		// Media emulation reaches the rendering pipeline asynchronously.
+		await expect.poll(() => scene.evaluate((el) => el.getAnimations({ subtree: true }).length), { timeout: 1000 }).toBe(0);
 		await expect(scene.locator(".scene-mooring-taut")).toHaveCSS("opacity", "1");
 		await expect(scene.locator(".scene-boat-arrival")).toHaveCSS("transform", "none");
 		await expect(page.getByRole("link", { name: "Prepare a review" })).toBeVisible();
