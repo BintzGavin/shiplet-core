@@ -143,8 +143,8 @@ const mutations = [
   {
     name: "artifact bridge refuses a fresh same-origin channel offer",
     file: "src/trusted-artifact-bridge.ts",
-    from: "\t\t\tif (hostOrigin && event.origin !== hostOrigin) return;",
-    to: "\t\t\tif (hostOrigin) return;",
+    from: "if (origin && event.origin !== origin) return;",
+    to: "if (origin) return;",
   },
   {
     name: "portable package validation accepts unsupported widget graphs",
@@ -257,8 +257,8 @@ const mutations = [
   {
     name: "embed auth restores ambient origin script authority",
     file: "src/index.ts",
-    from: "script-src 'nonce-${nonce}'; script-src-attr 'none';",
-    to: "script-src ${origin}; script-src-attr 'none';",
+    from: "script-src 'nonce-${nonce}'; script-src-attr 'none'; connect-src 'self';",
+    to: "script-src ${origin}; script-src-attr 'none'; connect-src 'self';",
   },
   {
     name: "embed auth script loses its matching nonce",
@@ -467,8 +467,8 @@ const mutations = [
   {
     name: "tenant review mutation JSON media-type guard disabled",
     file: "src/index.ts",
-    from: '  if (mediaType !== "application/json") {',
-    to: '  if (false && mediaType !== "application/json") {',
+    from: '  if (mediaType !== "application/json") {\n    return new Response("Review mutation requires application/json", {',
+    to: '  if (false && mediaType !== "application/json") {\n    return new Response("Review mutation requires application/json", {',
   },
   {
     name: "local rewritten request origin rejected",
@@ -593,8 +593,8 @@ const mutations = [
   {
     name: "trusted top-level workflow confirmation hides exact fields",
     file: "src/index.ts",
-    from: "<p>${escapeEmbedHtml(input.summary)}</p>${fieldDetails}${form}</main>",
-    to: "<p>${escapeEmbedHtml(input.summary)}</p>${form}</main>",
+    from: "${fieldDetails}${form}",
+    to: "${form}",
   },
   {
     name: "CLI authorization exchange ignores PKCE verifier",
