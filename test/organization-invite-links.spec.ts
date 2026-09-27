@@ -7,10 +7,8 @@ import { describe, expect, it } from "vitest";
 
 import app from "../src/index";
 import {
-  consumeInviteLinkUse,
-  decrementInviteLinkUse,
   loadWorkspaceInviteLinksSeed,
-  recordInviteLinkRedemption,
+  redeemInviteLinkUse,
 } from "../src/organization-invite-links";
 import {
   INVITE_LINK_MAX_ALLOWED_EMAILS,
@@ -23,6 +21,11 @@ import {
   type InviteLinkResponse,
   type InviteLinkView,
 } from "../src/platform/invite-links-types";
+import {
+  createWorkOSOrganizationMembership,
+  findWorkOSOrganizationMembership,
+  workosTestDouble,
+} from "../src/workos";
 
 type Actor = {
   "x-shiplet-user-id": string;
@@ -229,6 +232,73 @@ async function withTriggers<T>(
   }
 }
 
+const USE_TAKE_SQL =
+  /\bUPDATE\s+organization_invite_links\s+SET\s+use_count\s*=\s*use_count\s*\+\s*1\b/i;
+
+/**
+ * Runs `callback` with a D1 binding whose writes that take an invite link use
+ * commit and then report an error, as when D1's answer is lost after the
+ * commit. A batch commits as one unit, so a use-taking statement in it makes
+ * the whole batch report the error.
+ */
+async function withLostUseTakeResponses<T>(callback: () => Promise<T>) {
+  const testEnv = env as Env;
+  const real = testEnv.DB;
+  const lost = () => new Error("D1_ERROR: Network connection lost.");
+  const sqlOf = new WeakMap<D1PreparedStatement, string>();
+  const statementOf = new WeakMap<D1PreparedStatement, D1PreparedStatement>();
+  const wrap = (statement: D1PreparedStatement, sql: string) => {
+    const wrapped = new Proxy(statement, {
+      get(target, property) {
+        if (property === "bind") {
+          return (...values: unknown[]) => wrap(target.bind(...values), sql);
+        }
+        if (property === "run") {
+          return async () => {
+            const result = await target.run();
+            if (USE_TAKE_SQL.test(sql)) throw lost();
+            return result;
+          };
+        }
+        const value = Reflect.get(target, property, target);
+        return typeof value === "function" ? value.bind(target) : value;
+      },
+    });
+    sqlOf.set(wrapped, sql);
+    statementOf.set(wrapped, statement);
+    return wrapped;
+  };
+  testEnv.DB = new Proxy(real, {
+    get(target, property) {
+      if (property === "prepare") {
+        return (sql: string) => wrap(target.prepare(sql), sql);
+      }
+      if (property === "batch") {
+        return async (statements: D1PreparedStatement[]) => {
+          const results = await target.batch(
+            statements.map((statement) => statementOf.get(statement) ?? statement),
+          );
+          if (
+            statements.some((statement) =>
+              USE_TAKE_SQL.test(sqlOf.get(statement) ?? ""),
+            )
+          ) {
+            throw lost();
+          }
+          return results;
+        };
+      }
+      const value = Reflect.get(target, property, target);
+      return typeof value === "function" ? value.bind(target) : value;
+    },
+  });
+  try {
+    return await callback();
+  } finally {
+    testEnv.DB = real;
+  }
+}
+
 async function storedUseCount(linkId: string) {
   const row = await db()
     .prepare("SELECT use_count FROM organization_invite_links WHERE id = ?")
@@ -245,6 +315,70 @@ async function storedRedemptions(linkId: string) {
     )
     .bind(linkId)
     .all<{ id: string; user_id: string }>();
+  return rows.results;
+}
+
+async function localMembershipId(organizationId: string, actor: Actor) {
+  const row = await db()
+    .prepare(
+      `SELECT id FROM organization_memberships
+       WHERE organization_id = ? AND user_id = ?`,
+    )
+    .bind(organizationId, userId(actor))
+    .first<{ id: string }>();
+  return row?.id ?? null;
+}
+
+/**
+ * Signs a new person in through AuthKit into the organization, which records
+ * their membership locally under a synthetic om_<organization>_<user> ID.
+ */
+async function signInThroughOrganization(
+  organizationId: string,
+  label: string,
+): Promise<Actor> {
+  const suffix = crypto.randomUUID().replace(/-/g, "").slice(0, 16);
+  const signInEmail = `invite-links-${label}-${suffix}@example.com`;
+  const callback = await request(
+    `/auth/callback?code=${encodeURIComponent(
+      `test-code:${organizationId}:${encodeURIComponent(signInEmail)}`,
+    )}`,
+    { redirect: "manual" },
+  );
+  expect(callback.status).toBe(302);
+  return {
+    "x-shiplet-user-id": `user_${signInEmail
+      .replace(/[^a-z0-9]+/g, "-")
+      .replace(/^-+|-+$/g, "")}`,
+    "x-shiplet-user-email": signInEmail,
+  };
+}
+
+/** Outcomes of the person's redemption audit events, oldest first. */
+async function redeemAuditOutcomes(organizationId: string, actor: Actor) {
+  const rows = await db()
+    .prepare(
+      `SELECT outcome FROM kernel_admin_audit_events
+       WHERE organization_id = ? AND actor_id = ?
+         AND action = 'organization_invite_link.redeem'
+       ORDER BY rowid ASC`,
+    )
+    .bind(organizationId, userId(actor))
+    .all<{ outcome: string }>();
+  return rows.results.map((row) => row.outcome);
+}
+
+/** WorkOS team sync audit events in the organization, oldest first. */
+async function workosTeamSyncEvents(organizationId: string) {
+  const rows = await db()
+    .prepare(
+      `SELECT actor_id, outcome, metadata_json FROM kernel_admin_audit_events
+       WHERE organization_id = ?
+         AND action = 'organization_invite_link.workos_team_sync'
+       ORDER BY rowid ASC`,
+    )
+    .bind(organizationId)
+    .all<{ actor_id: string; outcome: string; metadata_json: string }>();
   return rows.results;
 }
 
@@ -980,6 +1114,46 @@ describe("invite link join page", () => {
     ).toEqual([userId(joiner)]);
   });
 
+  it("finishes a join on retry when WorkOS kept the membership that could not be recorded", async () => {
+    const organization = await createOrganization();
+    const link = await createLink(organization.id, { maxUses: 1 });
+    const token = tokenOf(link);
+    const joiner = person("workos-kept");
+
+    const failed = await withFailingInsert(
+      "organization_memberships",
+      joiner,
+      () => acceptInvitation(token, joiner),
+    );
+    expect(failed.status).toBe(502);
+    expect(await membershipRole(organization.id, joiner)).toBeNull();
+    // WorkOS created the membership before the local write failed, and
+    // refuses to create it a second time.
+    const kept = await findWorkOSOrganizationMembership(env as Env, {
+      organizationId: organization.id,
+      userId: userId(joiner),
+    });
+    expect(kept).not.toBeNull();
+    await expect(
+      createWorkOSOrganizationMembership(env as Env, {
+        organizationId: organization.id,
+        userId: userId(joiner),
+        roleSlug: "member",
+      }),
+    ).rejects.toThrow();
+
+    const retried = await acceptInvitation(token, joiner);
+
+    expect(retried.status).toBe(303);
+    expect(retried.headers.get("location")).toBe(`/join/${token}`);
+    expect(await membershipRole(organization.id, joiner)).toBe("member");
+    expect(await localMembershipId(organization.id, joiner)).toBe(kept?.id);
+    expect(await storedUseCount(link.id)).toBe(1);
+    expect(
+      (await storedRedemptions(link.id)).map((row) => row.user_id),
+    ).toEqual([userId(joiner)]);
+  });
+
   it("keeps the use after a partial team join and finishes the team step on retry", async () => {
     const organization = await createOrganization();
     const team = await createTeam(organization.id);
@@ -1238,19 +1412,15 @@ describe("invite link use limits under repeated and concurrent submits", () => {
     await takeUseAsTwin(link.id);
     await recordAsTwin(link, twin);
     const before = await storedUseCount(link.id);
-    const nowIso = new Date().toISOString();
 
-    expect(await consumeInviteLinkUse(db(), link.id, nowIso)).toBe(true);
-    expect(await storedUseCount(link.id)).toBe((before as number) + 1);
     expect(
-      await recordInviteLinkRedemption(db(), {
-        link: { id: link.id, organization_id: link.organization_id },
+      await redeemInviteLinkUse(db(), {
+        link: { id: link.id },
         userId: userId(twin),
         email: email(twin),
-        nowIso,
+        nowIso: new Date().toISOString(),
       }),
     ).toBe("already_redeemed");
-    await decrementInviteLinkUse(db(), link.id);
 
     expect(await storedUseCount(link.id)).toBe(before);
     expect(await storedRedemptions(link.id)).toEqual([
@@ -1312,6 +1482,36 @@ describe("invite link use limits under repeated and concurrent submits", () => {
 
     expect((await acceptInvitation(token, joiner)).status).toBe(303);
     expect(await membershipRole(organization.id, joiner)).toBe("member");
+    expect(await storedUseCount(link.id)).toBe(1);
+  });
+
+  it("keeps the use for the person's retry when taking it commits but reports an error", async () => {
+    const organization = await createOrganization();
+    const link = await createLink(organization.id, { maxUses: 1 });
+    const token = tokenOf(link);
+    const joiner = person("lost-response");
+    const latecomer = person("lost-response-latecomer");
+
+    const failed = await withLostUseTakeResponses(() =>
+      acceptInvitation(token, joiner),
+    );
+
+    expect(failed.status).toBe(502);
+    expect(await failed.text()).toContain("We couldn't add you just yet");
+    // The use and the redemption that holds it committed together.
+    expect(await storedUseCount(link.id)).toBe(1);
+    expect(
+      (await storedRedemptions(link.id)).map((row) => row.user_id),
+    ).toEqual([userId(joiner)]);
+
+    const retried = await acceptInvitation(token, joiner);
+    expect(retried.status).toBe(303);
+    expect(await membershipRole(organization.id, joiner)).toBe("member");
+    expect(await storedUseCount(link.id)).toBe(1);
+
+    const refused = await acceptInvitation(token, latecomer);
+    expect(refused.status).toBe(410);
+    expect(await membershipRole(organization.id, latecomer)).toBeNull();
     expect(await storedUseCount(link.id)).toBe(1);
   });
 
@@ -1418,6 +1618,98 @@ describe("invite link use limits under repeated and concurrent submits", () => {
       (await storedRedemptions(racedLink.id)).map((row) => row.user_id).sort(),
     ).toEqual([userId(member), userId(twin)].sort());
     expect(await storedUseCount(racedLink.id)).toBe(2);
+  });
+});
+
+describe("invite link WorkOS team sync", () => {
+  it("adds an existing member to the WorkOS team under their WorkOS membership ID", async () => {
+    const organization = await createOrganization();
+    const team = await createTeam(organization.id);
+    const link = await createLink(organization.id, { teamId: team.id });
+    const member = await signInThroughOrganization(
+      organization.id,
+      "signed-in",
+    );
+    const signInMembershipId = await localMembershipId(organization.id, member);
+    expect(signInMembershipId).toBe(`om_${organization.id}_${userId(member)}`);
+    // AuthKit only signs people into organizations they belong to in WorkOS.
+    const workosMembership = await createWorkOSOrganizationMembership(
+      env as Env,
+      {
+        organizationId: organization.id,
+        userId: userId(member),
+        roleSlug: "member",
+      },
+    );
+    expect(workosMembership.id).not.toBe(signInMembershipId);
+
+    const joined = await acceptInvitation(tokenOf(link), member);
+
+    expect(joined.status).toBe(303);
+    expect(await inTeam(team.id, member)).toBe(true);
+    expect(await membershipRole(organization.id, member)).toBe("member");
+    const teamMembers = workosTestDouble.teamMembershipIds(team.id);
+    expect(teamMembers).toContain(workosMembership.id);
+    expect(teamMembers).not.toContain(signInMembershipId);
+    expect(await redeemAuditOutcomes(organization.id, member)).toEqual([
+      "intent",
+      "succeeded",
+    ]);
+    expect(await workosTeamSyncEvents(organization.id)).toEqual([]);
+    expect(await storedUseCount(link.id)).toBe(1);
+  });
+
+  it("records a WorkOS team sync failure without failing a join that succeeded locally", async () => {
+    const organization = await createOrganization();
+    const team = await createTeam(organization.id);
+    const link = await createLink(organization.id, { teamId: team.id });
+    const token = tokenOf(link);
+    // WorkOS has no membership for this person.
+    const member = await signInThroughOrganization(
+      organization.id,
+      "local-only",
+    );
+
+    const joined = await acceptInvitation(token, member);
+
+    expect(joined.status).toBe(303);
+    expect(joined.headers.get("location")).toBe(`/join/${token}`);
+    expect(await inTeam(team.id, member)).toBe(true);
+    expect(await membershipRole(organization.id, member)).toBe("member");
+    const page = await openJoinPage(token, member);
+    expect(page.status).toBe(200);
+    expect(await page.text()).toContain("You're in");
+    expect(await redeemAuditOutcomes(organization.id, member)).toEqual([
+      "intent",
+      "succeeded",
+    ]);
+    const syncEvents = await workosTeamSyncEvents(organization.id);
+    expect(
+      syncEvents.map((event) => ({
+        actor_id: event.actor_id,
+        outcome: event.outcome,
+        metadata: JSON.parse(event.metadata_json),
+      })),
+    ).toEqual([
+      {
+        actor_id: userId(member),
+        outcome: "failed",
+        metadata: {
+          targetKind: "invite_link",
+          inviteLinkId: link.id,
+          teamId: team.id,
+          reason: "workos_membership_not_found",
+        },
+      },
+    ]);
+    for (const event of syncEvents) {
+      expect(event.metadata_json).not.toContain("@");
+      expect(event.metadata_json).not.toContain(token);
+    }
+    expect(workosTestDouble.teamMembershipIds(team.id)).not.toContain(
+      `om_${organization.id}_${userId(member)}`,
+    );
+    expect(await storedUseCount(link.id)).toBe(1);
   });
 });
 

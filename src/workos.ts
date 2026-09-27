@@ -37,6 +37,18 @@ export interface WorkOSUser {
 }
 
 const testInvitations = new Map<string, WorkOSInvitation>();
+// Test mode stands in for WorkOS memberships. Like WorkOS, it refuses a second
+// membership for the same user and organization, and refuses to add a
+// membership it never issued to a team.
+const testOrganizationMemberships = new Map<
+  string,
+  { id: string; organizationId: string; userId: string }
+>();
+const testTeamMembershipIds = new Map<string, Set<string>>();
+
+function testOrganizationMembershipKey(organizationId: string, userId: string) {
+  return JSON.stringify([organizationId, userId]);
+}
 
 function slug(value: string) {
   const normalized = value
@@ -362,7 +374,20 @@ export async function createWorkOSOrganizationMembership(
   options: { organizationId: string; userId: string; roleSlug?: string },
 ): Promise<WorkOSMembership> {
   if (env.SHIPLET_AUTH_MODE === "test") {
-    return { id: `om_${slug(options.organizationId)}_${slug(options.userId)}` };
+    const key = testOrganizationMembershipKey(
+      options.organizationId,
+      options.userId,
+    );
+    if (testOrganizationMemberships.has(key)) {
+      throw new Error("Organization membership already exists");
+    }
+    const id = `om_${slug(options.organizationId)}_${slug(options.userId)}`;
+    testOrganizationMemberships.set(key, {
+      id,
+      organizationId: options.organizationId,
+      userId: options.userId,
+    });
+    return { id };
   }
 
   const membership = await getWorkOS(
@@ -373,6 +398,59 @@ export async function createWorkOSOrganizationMembership(
     roleSlug: options.roleSlug,
   });
   return { id: membership.id };
+}
+
+/**
+ * The person's active or pending WorkOS membership of the organization, or
+ * null when WorkOS has none. WorkOS lists only active memberships unless asked
+ * for other statuses.
+ */
+export async function findWorkOSOrganizationMembership(
+  env: Env,
+  options: { organizationId: string; userId: string },
+): Promise<WorkOSMembership | null> {
+  if (env.SHIPLET_AUTH_MODE === "test") {
+    const membership = testOrganizationMemberships.get(
+      testOrganizationMembershipKey(options.organizationId, options.userId),
+    );
+    return membership ? { id: membership.id } : null;
+  }
+
+  const memberships = await getWorkOS(
+    env,
+  ).userManagement.listOrganizationMemberships({
+    organizationId: options.organizationId,
+    userId: options.userId,
+    statuses: ["active", "pending"],
+  });
+  const membership = memberships.data.find(
+    (candidate) =>
+      candidate.organizationId === options.organizationId &&
+      candidate.userId === options.userId,
+  );
+  return membership ? { id: membership.id } : null;
+}
+
+/**
+ * Creates the person's WorkOS membership of the organization, or continues
+ * with the one WorkOS already has. Without this, a join whose membership
+ * WorkOS created but that failed to record it locally would be refused as a
+ * duplicate on every retry. When creating fails and WorkOS has no membership
+ * either, the create error is thrown.
+ */
+export async function createOrFindWorkOSOrganizationMembership(
+  env: Env,
+  options: { organizationId: string; userId: string; roleSlug?: string },
+): Promise<WorkOSMembership> {
+  try {
+    return await createWorkOSOrganizationMembership(env, options);
+  } catch (error) {
+    const existing = await findWorkOSOrganizationMembership(env, options).catch(
+      () => null,
+    );
+    if (existing) return existing;
+    throw error;
+  }
 }
 
 export async function createWorkOSTeam(
@@ -412,6 +490,16 @@ export async function addWorkOSMembershipToTeam(
   },
 ) {
   if (env.SHIPLET_AUTH_MODE === "test") {
+    const issued = [...testOrganizationMemberships.values()].some(
+      (membership) =>
+        membership.organizationId === options.organizationId &&
+        membership.id === options.organizationMembershipId,
+    );
+    if (!issued) throw new Error("Organization membership not found");
+    const members =
+      testTeamMembershipIds.get(options.teamId) ?? new Set<string>();
+    members.add(options.organizationMembershipId);
+    testTeamMembershipIds.set(options.teamId, members);
     return;
   }
 
@@ -461,3 +549,10 @@ export async function sendWorkOSInvitation(
 
   return serializeInvitation(invitation);
 }
+
+/** Read-only view of test mode's WorkOS stand-in, for tests. */
+export const workosTestDouble = {
+  teamMembershipIds(teamId: string) {
+    return [...(testTeamMembershipIds.get(teamId) ?? [])];
+  },
+};

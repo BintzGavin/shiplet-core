@@ -334,10 +334,12 @@ import {
   addWorkOSMembershipToTeam,
   acceptWorkOSInvitationForUser,
   authenticateWorkOSCode,
+  createOrFindWorkOSOrganizationMembership,
   createWorkOSOrganization,
   createWorkOSOrganizationMembership,
   createWorkOSTeam,
   findWorkOSInvitationByToken,
+  findWorkOSOrganizationMembership,
   getWorkOSInvitation,
   getWorkOSAuthorizationUrl,
   getWorkOSUser,
@@ -416,9 +418,7 @@ import {
   runAuditedKernelAdminAction,
 } from "./kernel-admin-audit";
 import {
-  consumeInviteLinkUse,
   createInviteLink,
-  decrementInviteLinkUse,
   generateInviteLinkToken,
   getInviteLinkById,
   hasInviteLinkRedemption,
@@ -435,7 +435,8 @@ import {
   loadWorkspaceInviteLinksSeed,
   parseCreateInviteLinkRequest,
   publicInviteLink,
-  recordInviteLinkRedemption,
+  recordInviteLinkWorkOSTeamSyncFailure,
+  redeemInviteLinkUse,
   revokeInviteLink,
   runAuditedInviteLinkRedemption,
   type InviteLinkJoinTarget,
@@ -11441,6 +11442,16 @@ app.use("*", withDbAndInit, async (c, next) => {
       );
     }
     const activeRuntime = await managedRuntimeForProject(c.env, project);
+    // Static artifacts are read-only. Refusing other methods before any
+    // artifact bytes are read keeps a cross-site form POST from rendering
+    // artifact HTML outside the trusted review host's sandbox.
+    if (
+      activeRuntime === "static" &&
+      c.req.method !== "GET" &&
+      c.req.method !== "HEAD"
+    ) {
+      return c.text("Method not allowed", 405, { Allow: "GET, HEAD" });
+    }
     if (
       !isArtifactFrameRequest &&
       (c.req.method === "GET" || c.req.method === "HEAD") &&
@@ -11585,7 +11596,10 @@ app.use("*", withDbAndInit, async (c, next) => {
         user,
         { ...artifactOptions, ...responseOptions },
       );
-      if (!isArtifactFrameRequest || prepared.body === null) {
+      // Top-level GET and HEAD requests received the trusted review host
+      // above, so this is an artifact frame or another method, such as a
+      // Worker Shiplet POST. Every artifact body leaves through the sandbox.
+      if (prepared.body === null) {
         return isExternalProject(project) && isArtifactFrameRequest
           ? exposeExternalArtifactToOpaqueSandbox(requestToForward, prepared)
           : prepared;
@@ -21579,6 +21593,71 @@ async function inviteLinkJoinPageForVisitor(
   };
 }
 
+/**
+ * Adds a person who joined a team through an invite link to that team in
+ * WorkOS. It runs after the local join succeeded, and WorkOS only mirrors the
+ * team, so a failure is logged and recorded in the kernel audit ledger
+ * instead of failing the join. An existing member's WorkOS membership is
+ * looked up first, because their local membership ID may be a synthetic
+ * om_<org>_<user> ID that WorkOS does not know.
+ */
+async function syncInviteLinkTeamMembershipToWorkOS(
+  env: Env,
+  input: {
+    organizationId: string;
+    teamId: string;
+    inviteLinkId: string;
+    userId: string;
+    workosMembershipId: string | null;
+  },
+) {
+  let reason: string;
+  try {
+    const workosMembershipId =
+      input.workosMembershipId ??
+      (
+        await findWorkOSOrganizationMembership(env, {
+          organizationId: input.organizationId,
+          userId:
+            (await latestWorkOSUserIdForLocalUser(env.DB, input.userId)) ||
+            input.userId,
+        })
+      )?.id;
+    if (workosMembershipId) {
+      await addWorkOSMembershipToTeam(env, {
+        organizationId: input.organizationId,
+        teamId: input.teamId,
+        organizationMembershipId: workosMembershipId,
+      });
+      return;
+    }
+    reason = "workos_membership_not_found";
+  } catch (error) {
+    // WorkOS SDK errors, like thrown Responses, carry the HTTP status.
+    const status = (error as { status?: unknown } | null | undefined)?.status;
+    reason = typeof status === "number" ? `http_${status}` : "workos_error";
+  }
+  console.error(
+    JSON.stringify({
+      event: "invite_link.workos_team_sync",
+      outcome: "failed",
+      reason,
+    }),
+  );
+  try {
+    await recordInviteLinkWorkOSTeamSyncFailure({
+      db: env.DB,
+      organizationId: input.organizationId,
+      actorId: input.userId,
+      inviteLinkId: input.inviteLinkId,
+      teamId: input.teamId,
+      reason,
+    });
+  } catch {
+    // The log line above still records the failure.
+  }
+}
+
 async function redeemInviteLink(
   c: any,
   target: InviteLinkJoinTarget,
@@ -21603,9 +21682,9 @@ async function redeemInviteLink(
   // Checked before any write, in the same order as the join page, to pick the
   // page to show. A revoked or expired link stops everyone, including a person
   // holding an earlier redemption. A used-up link stops everyone who does not
-  // already hold a use. The atomic take below, which comes before the
-  // redemption is recorded, still settles races with other redemptions,
-  // revokes, and expiry.
+  // already hold a use. The transaction below, which takes the use and
+  // records the redemption together, still settles races with other
+  // redemptions, revokes, and expiry.
   const status = await inviteLinkStatusForUser(db, link, user.id, nowIso);
   if (status !== "active") {
     return inviteLinkJoinPageResponse(
@@ -21628,7 +21707,7 @@ async function redeemInviteLink(
   }
 
   try {
-    await runAuditedInviteLinkRedemption({
+    const joined = await runAuditedInviteLinkRedemption({
       db,
       organizationId: organization.id,
       actorId: user.id,
@@ -21636,78 +21715,44 @@ async function redeemInviteLink(
       teamId: team?.id ?? null,
       operation: async () => {
         // One rule keeps the use count right: a redemption row, once written,
-        // is never deleted. The use is taken first and the row recorded
-        // second, so every row holds a counted use, and it keeps holding it
-        // when the join fails part-way. A person whose row is already
-        // recorded (a retry after a failed join, or a concurrent submit that
-        // got there first) takes no other use and only finishes the
-        // membership steps. So a failed join on a limited link keeps that use
-        // reserved for the person's retry; if they never retry, the use stays
-        // taken, which errs on the side of never exceeding max_uses.
-        const alreadyCounted = await hasInviteLinkRedemption(
-          db,
-          link.id,
-          user.id,
-        );
-        // True while this submit holds a use it took that no row stands for.
-        let consumed = false;
-        if (!alreadyCounted) {
-          consumed = await consumeInviteLinkUse(db, link.id, nowIso);
-          if (!consumed) throw new InviteLinkUnavailableError();
-        }
-        let redemption: "recorded" | "already_redeemed";
-        try {
-          redemption = await recordInviteLinkRedemption(db, {
+        // is never deleted, and a use is only ever taken in the same
+        // transaction that records the row holding it (redeemInviteLinkUse),
+        // so every row holds a counted use, and it keeps holding it when the
+        // join fails part-way. A person whose row is already recorded (a
+        // retry after a failed join, or a concurrent submit that got there
+        // first) takes no other use and only finishes the membership steps.
+        // So a failed join on a limited link keeps that use reserved for the
+        // person's retry; if they never retry, the use stays taken, which
+        // errs on the side of never exceeding max_uses.
+        if (!(await hasInviteLinkRedemption(db, link.id, user.id))) {
+          const redemption = await redeemInviteLinkUse(db, {
             link,
             userId: user.id,
             email: user.email,
             nowIso,
           });
-        } catch (error) {
-          // The insert reported a failure. Usually no row was written and the
-          // use this submit took has nothing standing for it, so give it back
-          // before the failure page offers a retry. D1 can also commit and then
-          // fail to answer, so re-read first: a row that did land keeps its use.
-          // If the re-read fails too, the use stays taken, which errs on the
-          // side of never exceeding max_uses.
-          if (consumed) {
-            consumed = false;
-            const rowLanded = await hasInviteLinkRedemption(
-              db,
-              link.id,
-              user.id,
-            ).catch(() => true);
-            if (!rowLanded) await decrementInviteLinkUse(db, link.id);
+          if (redemption === "unavailable") {
+            throw new InviteLinkUnavailableError();
           }
-          throw error;
         }
-        if (redemption === "already_redeemed" && consumed) {
-          // A concurrent submit by the same person recorded the row first,
-          // and that row holds the counted use, so give this one back.
-          // Cleared first so a failed give-back is never repeated: a use left
-          // taken only closes the link sooner, while a second give-back could
-          // let one more person in.
-          consumed = false;
-          await decrementInviteLinkUse(db, link.id);
-        }
-        // A row seen above cannot vanish, so "recorded" always means this
-        // submit took the use that the new row holds.
 
         let localMembershipId: string;
-        let workosMembershipId: string;
+        // Null for an existing member: their local membership ID may be a
+        // synthetic om_<org>_<user> ID rather than their WorkOS one.
+        let workosMembershipId: string | null;
         if (membershipBefore) {
           localMembershipId = membershipBefore.id;
-          workosMembershipId = membershipBefore.id;
+          workosMembershipId = null;
         } else {
-          const workosMembership = await createWorkOSOrganizationMembership(
-            c.env,
-            {
+          // Continues with the membership WorkOS already has when an earlier
+          // attempt created it but failed to record it here.
+          const workosMembership =
+            await createOrFindWorkOSOrganizationMembership(c.env, {
               organizationId: organization.id,
               userId:
                 (await latestWorkOSUserIdForLocalUser(db, user.id)) || user.id,
               roleSlug: "member",
-            },
-          );
+            });
           await ensureOrganizationMembershipRecord(db, {
             id: workosMembership.id,
             organization_id: organization.id,
@@ -21729,14 +21774,19 @@ async function redeemInviteLink(
 
         if (team) {
           await createTeamMembership(db, team.id, user.id, localMembershipId);
-          await addWorkOSMembershipToTeam(c.env, {
-            organizationId: organization.id,
-            teamId: team.id,
-            organizationMembershipId: workosMembershipId,
-          });
         }
+        return { workosMembershipId };
       },
     });
+    if (team) {
+      await syncInviteLinkTeamMembershipToWorkOS(c.env, {
+        organizationId: organization.id,
+        teamId: team.id,
+        inviteLinkId: link.id,
+        userId: user.id,
+        workosMembershipId: joined.workosMembershipId,
+      });
+    }
     return c.redirect(joinPath(token), 303);
   } catch (error) {
     if (error instanceof InviteLinkUnavailableError) {
@@ -21766,9 +21816,9 @@ async function redeemInviteLink(
     );
     // Nothing is undone here. The person's redemption row, whichever submit
     // recorded it, keeps holding their counted use, so a retry finishes the
-    // join without taking another; a use taken without a row is only ever
-    // given back inside the operation, never here. A concurrent submit by the
-    // same person may have finished the join meanwhile.
+    // join without taking another; a use is never taken without its row, so
+    // there is nothing to give back. A concurrent submit by the same person
+    // may have finished the join meanwhile.
     try {
       if (await hasJoinedInviteLinkTarget(db, target, user.id)) {
         return c.redirect(joinPath(token), 303);

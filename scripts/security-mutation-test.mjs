@@ -1157,6 +1157,18 @@ const mutations = [
     from: "\tbody.set(SHIPLET_AGENT_GUIDE_RESOURCE_NOTE_BYTES, offset);",
     to: "\t// Resource binding note omitted.",
   },
+  {
+    name: "static Shiplets read artifact bytes for non-GET methods",
+    file: "src/index.ts",
+    from: '      activeRuntime === "static" &&\n      c.req.method !== "GET" &&',
+    to: '      false &&\n      c.req.method !== "GET" &&',
+  },
+  {
+    name: "non-GET top-level Worker Shiplet responses skip the artifact sandbox",
+    file: "src/index.ts",
+    from: "      if (prepared.body === null) {\n        return isExternalProject(project) && isArtifactFrameRequest",
+    to: "      if (!isArtifactFrameRequest || prepared.body === null) {\n        return isExternalProject(project) && isArtifactFrameRequest",
+  },
 ];
 
 function copyHarness(destination) {
