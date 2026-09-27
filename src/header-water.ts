@@ -5,13 +5,28 @@ export interface HeaderWaterLayer {
 	wavelength: number;
 	speed: number;
 	phase: number;
+	/** Crest steepness and crossing ripples: 1 is open-water chop, 0 a glassy swell. */
+	chop: number;
+	/** Sample spacing in SVG units; long, low swells stay smooth with fewer points. */
+	step: number;
 }
 
-export const HEADER_WATER_LAYERS: readonly HeaderWaterLayer[] = [
-	{ name: "far", level: 12, amplitude: 3.6, wavelength: 286, speed: 1.15, phase: 0.7 },
-	{ name: "mid", level: 21, amplitude: 5.1, wavelength: 204, speed: 1.55, phase: 2.4 },
-	{ name: "near", level: 29, amplitude: 7.1, wavelength: 164, speed: 2.05, phase: 4.1 },
-];
+export type HeaderSeaState = "storm" | "calm";
+
+/** The night watch keeps the choppy harbor; daylight stretches the same three
+ * layers into long, low, slow swells. The theme decides which sea is drawn. */
+export const HEADER_SEAS: Readonly<Record<HeaderSeaState, readonly HeaderWaterLayer[]>> = {
+	storm: [
+		{ name: "far", level: 12, amplitude: 3.6, wavelength: 286, speed: 1.15, phase: 0.7, chop: 1, step: 7 },
+		{ name: "mid", level: 21, amplitude: 5.1, wavelength: 204, speed: 1.55, phase: 2.4, chop: 1, step: 7 },
+		{ name: "near", level: 29, amplitude: 7.1, wavelength: 164, speed: 2.05, phase: 4.1, chop: 1, step: 7 },
+	],
+	calm: [
+		{ name: "far", level: 13, amplitude: 1.5, wavelength: 700, speed: 0.36, phase: 0.7, chop: 0.3, step: 14 },
+		{ name: "mid", level: 21.5, amplitude: 2.2, wavelength: 560, speed: 0.46, phase: 2.4, chop: 0.3, step: 14 },
+		{ name: "near", level: 29.5, amplitude: 3.1, wavelength: 460, speed: 0.58, phase: 4.1, chop: 0.3, step: 14 },
+	],
+};
 
 /** Self-contained so the same sampler draws the static SVG and browser frames.
  * Long swells, a steeper crest harmonic, and crossing ripples prevent a frozen
@@ -22,12 +37,11 @@ export function headerWaterFrame(width: number, time: number, layer: HeaderWater
 	const water = { heightAt(x: number) {
 		const phase = x * Math.PI * 2 / layer.wavelength + time * layer.speed + layer.phase;
 		return layer.level - layer.amplitude * (
-			Math.cos(phase) + 0.22 * Math.cos(2 * phase + 0.45)
+			Math.cos(phase) + layer.chop * (0.22 * Math.cos(2 * phase + 0.45) + 0.09 * Math.sin(phase * 2.7 - time * 0.8))
 			+ 0.23 * Math.sin(phase * 0.61 + time * 0.47)
-			+ 0.09 * Math.sin(phase * 2.7 - time * 0.8)
 		);
 	} };
-	const steps = Math.min(240, Math.ceil((width + 32) / 7));
+	const steps = Math.min(240, Math.ceil((width + 32) / layer.step));
 	let surface = "";
 	let foam = "";
 	let crestOpen = false;

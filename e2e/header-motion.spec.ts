@@ -9,8 +9,29 @@ async function openHeader(page: Page, variant: "public" | "authenticated") {
 async function runningAnimations(header: Locator) {
 	return header.evaluate(element => element.getAnimations({ subtree: true }).filter(animation => animation.playState === "running").length);
 }
+/** Only the sea that matches the current theme is drawn; the other stays out of layout. */
+function visibleSea(header: Locator) {
+	return header.locator(".shiplet-waterline-sea:visible");
+}
 async function waterShapes(header: Locator) {
-	return header.locator(".shiplet-waterline-primary .shiplet-waterline-drawn").evaluateAll(elements => elements.map(element => element.getAttribute("d")));
+	return visibleSea(header).locator(".shiplet-waterline-drawn").evaluateAll(elements => elements.map(element => element.getAttribute("d")));
+}
+/** Swell count and height of one drawn surface, sampled along its whole length. */
+async function swellProfile(surface: Locator) {
+	return surface.evaluate(element => {
+		const path = element as SVGPathElement;
+		const length = path.getTotalLength();
+		const heights = Array.from({ length: 400 }, (_, index) => path.getPointAtLength(length * index / 399).y);
+		const level = heights.reduce((sum, height) => sum + height, 0) / heights.length;
+		let swells = 0;
+		for (let index = 1; index < heights.length; index++) {
+			if (heights[index - 1] >= level && heights[index] < level) swells++;
+		}
+		return { swells, height: Math.max(...heights) - Math.min(...heights) };
+	});
+}
+function overlaps(a: { x: number; y: number; width: number; height: number }, b: { x: number; y: number; width: number; height: number }) {
+	return a.x < b.x + b.width && b.x < a.x + a.width && a.y < b.y + b.height && b.y < a.y + a.height;
 }
 async function expectStillWater(page: Page, header: Locator) {
 	await expect(header).toHaveAttribute("data-header-motion", "paused");
@@ -70,13 +91,14 @@ for (const variant of ["public", "authenticated"] as const) {
 		expect(wake!.x + wake!.width).toBeLessThanOrEqual(vessel!.x + 4);
 	});
 
-	test(`Given the ${variant} waterline, When swells pass, Then the surface changes shape with clearly visible rise and fall`, async ({ page }) => {
-		await page.emulateMedia({ reducedMotion: "no-preference" });
+	test(`Given the ${variant} night-watch waterline, When swells pass, Then the surface changes shape with clearly visible rise and fall`, async ({ page }) => {
+		await page.emulateMedia({ reducedMotion: "no-preference", colorScheme: "dark" });
 		const header = await openHeader(page, variant);
+		await expect(visibleSea(header)).toHaveAttribute("data-sea", "storm");
 		const initial = await waterShapes(header);
 		expect(initial).toHaveLength(3);
 		await expect.poll(() => waterShapes(header)).not.toEqual(initial);
-		const samples = await header.locator(".shiplet-waterline-near .shiplet-waterline-drawn").evaluate(async element => {
+		const samples = await header.locator('[data-sea="storm"] .shiplet-waterline-near .shiplet-waterline-drawn').evaluate(async element => {
 			const path = element as SVGPathElement;
 			const values: number[] = [];
 			for (let index = 0; index < 24; index++) {
@@ -89,6 +111,53 @@ for (const variant of ["public", "authenticated"] as const) {
 		const vessel = header.locator(".shiplet-mark-vessel");
 		const initialTransform = await vessel.evaluate(element => getComputedStyle(element).transform);
 		await expect.poll(() => vessel.evaluate(element => getComputedStyle(element).transform)).not.toBe(initialTransform);
+	});
+
+	test(`Given the ${variant} header in daylight, When the sea is compared with the night watch, Then its swells run longer and lower but keep moving`, async ({ page }) => {
+		await page.setViewportSize({ width: 1280, height: 800 });
+		await page.emulateMedia({ reducedMotion: "no-preference", colorScheme: "dark" });
+		const header = await openHeader(page, variant);
+		const storm = await swellProfile(header.locator('[data-sea="storm"] .shiplet-waterline-near .shiplet-waterline-drawn'));
+		await page.emulateMedia({ colorScheme: "light" });
+		await expect(visibleSea(header)).toHaveAttribute("data-sea", "calm");
+		const nearCalm = header.locator('[data-sea="calm"] .shiplet-waterline-near .shiplet-waterline-drawn');
+		const calm = await swellProfile(nearCalm);
+		expect(calm.swells).toBeGreaterThanOrEqual(1);
+		expect(calm.swells * 2).toBeLessThanOrEqual(storm.swells);
+		expect(calm.height).toBeLessThan(storm.height * 0.6);
+		const initial = await waterShapes(header);
+		expect(initial).toHaveLength(3);
+		await expect.poll(() => waterShapes(header)).not.toEqual(initial);
+		const vessel = header.locator(".shiplet-mark-vessel");
+		const initialTransform = await vessel.evaluate(element => getComputedStyle(element).transform);
+		await expect.poll(() => vessel.evaluate(element => getComputedStyle(element).transform)).not.toBe(initialTransform);
+	});
+
+	test(`Given the ${variant} header, When daylight or the night watch is showing, Then only the matching sky is drawn and it stays clear of the controls`, async ({ page }) => {
+		await page.emulateMedia({ reducedMotion: "no-preference", colorScheme: "light" });
+		const header = await openHeader(page, variant);
+		for (const colorScheme of ["light", "dark"] as const) {
+			await page.emulateMedia({ colorScheme });
+			const [shown, hidden] = colorScheme === "light" ? ["daylight", "storm"] : ["storm", "daylight"];
+			await expect(header.locator(`[data-sky="${shown}"]`)).toBeVisible();
+			await expect(header.locator(`[data-sky="${hidden}"]`)).toBeHidden();
+			await expect(header.locator(".shiplet-sky-sun")).toBeVisible({ visible: colorScheme === "light" });
+			for (const width of [320, 390, 768, 1280, 1920]) {
+				await page.setViewportSize({ width, height: 800 });
+				const controls = [
+					await header.getByRole("link", { name: "Shiplet home" }).boundingBox(),
+					await header.getByRole("navigation").boundingBox(),
+				];
+				const bright = await header.locator(".shiplet-sky-sun:visible, .shiplet-sky-lightning:visible").evaluateAll(elements => elements.map(element => element.getBoundingClientRect().toJSON()));
+				expect(bright.length).toBeGreaterThan(0);
+				for (const box of bright) {
+					for (const control of controls) expect(overlaps(box, control!)).toBe(false);
+					expect(box.x).toBeGreaterThanOrEqual(0);
+					expect(box.x + box.width).toBeLessThanOrEqual(width);
+				}
+			}
+			await page.setViewportSize({ width: 1280, height: 800 });
+		}
 	});
 
 	test(`Given the ${variant} header, When reduced motion changes or it leaves view, Then all motion stops with complete static artwork`, async ({ page }) => {
@@ -129,7 +198,8 @@ test("Given responsive light and dark viewports, When waves deform, Then the wat
 				}).toBeGreaterThan(80);
 			}
 			for (let frame = 0; frame < 3; frame++) {
-				const spans = await header.locator(".shiplet-waterline-primary .shiplet-waterline-drawn").evaluateAll(elements => elements.map(element => {
+				await expect(visibleSea(header)).toHaveAttribute("data-sea", colorScheme === "light" ? "calm" : "storm");
+				const spans = await visibleSea(header).locator(".shiplet-waterline-drawn").evaluateAll(elements => elements.map(element => {
 					const bounds = element.getBoundingClientRect();
 					return { left: bounds.left, right: bounds.right };
 				}));
@@ -149,6 +219,13 @@ test("Given no JavaScript, When the header renders, Then static water and naviga
 	const header = await openHeader(page, "public");
 	await expect(header.locator(".shiplet-mark-vessel")).toBeVisible();
 	await expect(header.getByRole("button", { name: /header animation/ })).toHaveCount(0);
+	await expect(header.locator(".shiplet-theme-switch")).toBeHidden();
+	await expect(header.locator('[data-sky="daylight"]')).toBeVisible();
+	await expect(visibleSea(header)).toHaveAttribute("data-sea", "calm");
+	await page.emulateMedia({ colorScheme: "dark" });
+	await expect(header.locator('[data-sky="storm"]')).toBeVisible();
+	await expect(visibleSea(header)).toHaveAttribute("data-sea", "storm");
+	await expect(header.locator(".shiplet-sky-lightning").first()).toHaveCSS("opacity", "0");
 	await expectStillWater(page, header);
 	expect((await waterShapes(header)).every(shape => shape && shape.length > 100)).toBe(true);
 	const vessel = await header.locator(".shiplet-mark-vessel").boundingBox();
@@ -203,4 +280,43 @@ test("Given blocked storage, When the header loads, Then its animation runs with
 	await expect(header).toHaveAttribute("data-header-motion", "running");
 	await expect(header.getByRole("button", { name: /header animation/ })).toHaveCount(0);
 	expect(errors).toEqual([]);
+});
+
+test("Given the night watch, When the storm runs, Then clouds drift and lightning never flickers three times in a second", async ({ page }) => {
+	await page.emulateMedia({ reducedMotion: "no-preference", colorScheme: "dark" });
+	const header = await openHeader(page, "public");
+	const storm = header.locator('[data-sky="storm"]');
+	await expect(storm).toBeVisible();
+	await expect(header).toHaveAttribute("data-header-motion", "running");
+	const cloud = storm.locator(".shiplet-sky-storm-cloud").first();
+	const cloudStart = await cloud.evaluate(element => getComputedStyle(element).transform);
+	await expect.poll(() => cloud.evaluate(element => getComputedStyle(element).transform)).not.toBe(cloudStart);
+	const strikes = await storm.evaluate(sky => Array.from(sky.querySelectorAll(".shiplet-sky-lightning, .shiplet-sky-flash")).flatMap(element => element.getAnimations().map(animation => {
+		const effect = animation.effect as KeyframeEffect;
+		const timing = effect.getComputedTiming();
+		return {
+			cycle: `${timing.duration}/${timing.delay}`,
+			duration: Number(timing.duration),
+			keyframes: effect.getKeyframes().map(frame => ({ offset: Number(frame.computedOffset), opacity: Number(frame.opacity) })),
+		};
+	})));
+	expect(strikes.length).toBeGreaterThanOrEqual(2);
+	// One shared cycle means separate bolts can never stack into a faster flicker.
+	expect(new Set(strikes.map(strike => strike.cycle)).size).toBe(1);
+	const duration = strikes[0].duration;
+	const onsets: number[] = [];
+	for (const strike of strikes) {
+		strike.keyframes.forEach((frame, index) => {
+			const previous = strike.keyframes[index - 1];
+			if (!previous || frame.opacity - previous.opacity < 0.25) return;
+			const time = frame.offset * duration;
+			if (!onsets.some(onset => Math.abs(onset - time) < 40)) onsets.push(time);
+		});
+	}
+	expect(onsets.length).toBeGreaterThanOrEqual(2);
+	const looped = [...onsets, ...onsets.map(onset => onset + duration)].sort((a, b) => a - b);
+	for (const onset of looped) expect(looped.filter(other => other >= onset && other < onset + 1000).length).toBeLessThan(3);
+	await page.emulateMedia({ reducedMotion: "reduce" });
+	await expectStillWater(page, header);
+	for (const bolt of await storm.locator(".shiplet-sky-lightning").all()) await expect(bolt).toHaveCSS("opacity", "0");
 });
