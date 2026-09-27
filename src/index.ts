@@ -11369,6 +11369,16 @@ app.use("*", withDbAndInit, async (c, next) => {
       );
     }
     const activeRuntime = await managedRuntimeForProject(c.env, project);
+    // Static artifacts are read-only. Refusing other methods before any
+    // artifact bytes are read keeps a cross-site form POST from rendering
+    // artifact HTML outside the trusted review host's sandbox.
+    if (
+      activeRuntime === "static" &&
+      c.req.method !== "GET" &&
+      c.req.method !== "HEAD"
+    ) {
+      return c.text("Method not allowed", 405, { Allow: "GET, HEAD" });
+    }
     if (
       !isArtifactFrameRequest &&
       (c.req.method === "GET" || c.req.method === "HEAD") &&
@@ -11512,7 +11522,10 @@ app.use("*", withDbAndInit, async (c, next) => {
         user,
         { ...artifactOptions, ...responseOptions },
       );
-      if (!isArtifactFrameRequest || prepared.body === null) {
+      // Top-level GET and HEAD requests received the trusted review host
+      // above, so this is an artifact frame or another method, such as a
+      // Worker Shiplet POST. Every artifact body leaves through the sandbox.
+      if (prepared.body === null) {
         return isExternalProject(project) && isArtifactFrameRequest
           ? exposeExternalArtifactToOpaqueSandbox(requestToForward, prepared)
           : prepared;

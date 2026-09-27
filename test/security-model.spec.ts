@@ -269,6 +269,38 @@ async function publishShiplet(
   };
 }
 
+const HOSTILE_ARTIFACT_MARKER = "hostileArtifactRan";
+const HOSTILE_ARTIFACT_HTML = `<!doctype html><script>window.${HOSTILE_ARTIFACT_MARKER} = true</script><h1>Hostile artifact</h1>`;
+
+function unlistedHostileStaticShiplet() {
+  return {
+    visibility: "unlisted",
+    assets: [
+      {
+        path: "index.html",
+        content: btoa(HOSTILE_ARTIFACT_HTML),
+        size: new TextEncoder().encode(HOSTILE_ARTIFACT_HTML).byteLength,
+      },
+    ],
+  };
+}
+
+// Any site can auto-submit a top-level form to a Shiplet URL. SameSite=Lax
+// cookies stay behind, but unlisted Shiplets need no session to read.
+function crossSiteFormPost(): RequestInit {
+  return {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/x-www-form-urlencoded",
+      Origin: "https://attacker.example",
+      "Sec-Fetch-Site": "cross-site",
+      "Sec-Fetch-Mode": "navigate",
+      "Sec-Fetch-Dest": "document",
+    },
+    body: "submitted=1",
+  };
+}
+
 describe("artifact and app security model", () => {
   it("never reuses WorkOS configuration as review signing authority", () => {
     const isolatedEnv = {
@@ -1052,6 +1084,121 @@ describe("artifact and app security model", () => {
     );
     expect(anonymousFrame.status).toBe(302);
     expect(anonymousFrame.headers.get("location")).toContain("/auth/login");
+  });
+
+  it("Given an unlisted static Shiplet, When a cross-site page auto-submits a form to its project origin, Then the Shiplet refuses the method instead of rendering artifact HTML outside the sandbox", async () => {
+    await withCustomDomain("shiplet.cc", async () => {
+      await withAppUrl("https://app.shiplet.cc", async () => {
+        const organizationResponse = await requestHelper(
+          "https://app.shiplet.cc/api/organizations",
+          {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              ...AUTH_HEADERS,
+              Origin: "https://app.shiplet.cc",
+            },
+            body: JSON.stringify({
+              name: `Static Methods ${crypto.randomUUID()}`,
+            }),
+          },
+        );
+        expect(organizationResponse.status).toBe(201);
+        const organization = (await organizationResponse.json()) as {
+          organization: { id: string };
+        };
+        const { project } = await publishShiplet(organization.organization.id, {
+          authHeaders: AUTH_HEADERS,
+          body: unlistedHostileStaticShiplet(),
+        });
+        const projectOrigin = `https://${project.subdomain}.shiplet.cc`;
+
+        const reviewHost = await requestHelper(`${projectOrigin}/`);
+        expect(reviewHost.status).toBe(200);
+        const reviewHostHtml = await reviewHost.text();
+        expect(reviewHostHtml).toContain(
+          'data-shiplet-trusted-review-host="v1"',
+        );
+        expect(reviewHostHtml).not.toContain(HOSTILE_ARTIFACT_MARKER);
+
+        for (const path of ["/", "/index.html", "/__shiplet/artifact-frame/"]) {
+          const formPost = await requestHelper(
+            `${projectOrigin}${path}`,
+            crossSiteFormPost(),
+          );
+          expect(formPost.status, path).toBe(405);
+          expect(formPost.headers.get("allow"), path).toBe("GET, HEAD");
+          expect(await formPost.text(), path).not.toContain(
+            HOSTILE_ARTIFACT_MARKER,
+          );
+        }
+        for (const method of ["PUT", "PATCH", "DELETE", "OPTIONS"]) {
+          const response = await requestHelper(`${projectOrigin}/`, {
+            method,
+          });
+          expect(response.status, method).toBe(405);
+          expect(response.headers.get("allow"), method).toBe("GET, HEAD");
+          expect(await response.text(), method).not.toContain(
+            HOSTILE_ARTIFACT_MARKER,
+          );
+        }
+
+        const frame = await requestHelper(
+          `${projectOrigin}/__shiplet/artifact-frame/`,
+        );
+        expect(frame.status).toBe(200);
+        expect(frame.headers.get("content-security-policy")).toMatch(
+          /^sandbox allow-scripts allow-forms;/,
+        );
+        expect(await frame.text()).toContain(HOSTILE_ARTIFACT_MARKER);
+      });
+    });
+  });
+
+  it("Given path-tenant routing on a control-plane origin, When a cross-site page auto-submits a form to a static Shiplet path, Then that origin never renders the artifact HTML", async () => {
+    const organizationResponse = await requestHelper(
+      "https://shiplet.cc/api/organizations",
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json", ...AUTH_HEADERS },
+        body: JSON.stringify({ name: `Path Methods ${crypto.randomUUID()}` }),
+      },
+    );
+    expect(organizationResponse.status).toBe(201);
+    const organization = (await organizationResponse.json()) as {
+      organization: { id: string };
+    };
+    const { project } = await publishShiplet(organization.organization.id, {
+      authHeaders: AUTH_HEADERS,
+      body: unlistedHostileStaticShiplet(),
+    });
+
+    // Local and workers.dev hosts serve the control plane and /:shiplet paths
+    // from one origin, so artifact HTML rendered there is same-origin script.
+    for (const controlPlaneOrigin of [
+      "http://localhost",
+      "https://shiplet-self-host.example.workers.dev",
+    ]) {
+      const shipletUrl = `${controlPlaneOrigin}/${project.subdomain}`;
+      const reviewHost = await requestHelper(`${shipletUrl}/`);
+      expect(reviewHost.status, controlPlaneOrigin).toBe(200);
+      expect(await reviewHost.text(), controlPlaneOrigin).toContain(
+        'data-shiplet-trusted-review-host="v1"',
+      );
+      for (const path of ["/", "/index.html", "/__shiplet/artifact-frame/"]) {
+        const formPost = await requestHelper(
+          `${shipletUrl}${path}`,
+          crossSiteFormPost(),
+        );
+        expect(formPost.status, `${shipletUrl}${path}`).toBe(405);
+        expect(formPost.headers.get("allow"), `${shipletUrl}${path}`).toBe(
+          "GET, HEAD",
+        );
+        expect(await formPost.text(), `${shipletUrl}${path}`).not.toContain(
+          HOSTILE_ARTIFACT_MARKER,
+        );
+      }
+    }
   });
 
   it("converts project-origin login returns into signed project-origin preview URLs", async () => {

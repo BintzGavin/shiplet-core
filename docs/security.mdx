@@ -12,6 +12,11 @@ The trusted host places artifact code in a sandboxed frame. A custom review
 widget, when present, runs in its own sandboxed frame. Neither frame receives
 Shiplet cookies, browser storage, OAuth credentials, or organization API keys.
 
+Static Shiplets are read-only: a request with any method other than `GET` or
+`HEAD` receives `405 Method Not Allowed` instead of artifact files. Content from
+an advanced Shiplet's own Worker code is served with the artifact frame's
+sandbox policy, whatever the request method.
+
 The review host accepts bounded messages from the expected frame and page
 session. It rejects malformed requests, replayed request IDs, mismatched
 Shiplets, and messages from another source window before a review action can
