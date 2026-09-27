@@ -26,7 +26,7 @@ unclear labels"):
 | Stamp-styled status badges | Renaming "Publish" to "Set sail" |
 | Mono "deck label" eyebrows above sections | Nautical jargon in form labels |
 | A waterline rule under the header | Decorative gradients, oversized heroes |
-| A header sky that follows the theme | Weather that signals status or blocks controls |
+| A sea that follows the theme | Weather that signals status or blocks controls |
 | Warm copy in empty states & confirmations | Cute icons that obscure meaning |
 
 Control labels are always plain: Publish, Settings, Invite, Revoke, Sign out.
@@ -112,8 +112,8 @@ One token block (`NIGHT_WATCH_TOKENS` in `src/render.ts`) serves both
 `@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) }` and
 `:root[data-theme="dark"]`, so the two paths cannot drift. An explicit choice
 also pins `color-scheme` for native controls; otherwise `light dark` follows
-the system. Display tokens (`--sky-daylight` / `--sky-storm`) pick the header
-harbor the same way, so the scene is right at first paint and without JS.
+the system. Display tokens (`--sea-calm` / `--sea-storm`) pick the header
+sea the same way, so it is right at first paint and without JS.
 
 ## 5. Typography
 
@@ -185,22 +185,19 @@ preview-comment tools while keeping Shiplet's Harbor Office palette:
   wake. No extra ship, logo outline, or play/pause button is introduced. Header
   height and navigation remain fixed while only the artwork moves.
 - **Weather follows the theme.** Daylight rides a calm sea — the same three
-  layers stretched into long, low, slow swells with little chop — under a sun
-  with turning rays and drifting fair-weather clouds. The night watch keeps the
-  original choppy sea under a churning storm deck with two lightning cells.
-  The sky sits behind the water and controls; the sun and bolts stay between
-  the mark and the nav at every width.
+  layers stretched into long, low, slow swells with little chop. The night
+  watch keeps the original choppy sea. The sky stays clear in both: no sun,
+  clouds, or ambient weather competes with the controls.
 - **The weather turns, it never snaps.** A theme change eases the sea between
   its two states over 2.6s: both surfaces keep moving while their share of the
   height shifts, so the chop fades into long swells or builds back up. The
-  skies cross over at the same time — the storm deck rolls down as the sun
-  sinks away, or lifts off as the sun rises. The turn runs on the water's own
-  clock, so it pauses with the header; reduced motion swaps at once.
-- **Lightning is flash-safe.** Every strike shares one 11s cycle: a double
-  flicker 110ms apart, strikes about 5s apart, so the header never passes two
-  flashes a second (WCAG 2.3.1). Bolts are small and the cloud glow is a
-  low-luminance change. Reduced motion, no-JS, and paused headers show the
-  storm clouds with no bolt.
+  turn runs on the water's own clock, so it pauses with the header; reduced
+  motion swaps at once.
+- **One strike opens the night watch.** Turning on dark mode sends a single
+  bolt from the top of the header into the sea, between the mark and the nav:
+  one double flicker 110ms apart, then dark (well under WCAG 2.3.1's three
+  flashes a second). Pages that open in dark mode, turns toward daylight,
+  reduced motion, and no-JS never strike.
 - The static SVG and animated frames share one surface sampler. Both seas ship
   in the static SVG; the theme tokens show one and the script draws only the
   visible sea, blending the two states into it while the weather turns. Its point count

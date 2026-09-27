@@ -20,10 +20,7 @@ async function pageLightness(page: Page) {
 
 async function expectHarbor(page: Page, theme: "light" | "dark") {
 	const header = page.getByRole("banner");
-	const [sky, hiddenSky, sea] = theme === "light" ? ["daylight", "storm", "calm"] : ["storm", "daylight", "storm"];
-	await expect(header.locator(`[data-sky="${sky}"]`)).toBeVisible();
-	await expect(header.locator(`[data-sky="${hiddenSky}"]`)).toBeHidden();
-	await expect(header.locator(".shiplet-waterline-sea:visible")).toHaveAttribute("data-sea", sea);
+	await expect(header.locator(".shiplet-waterline-sea:visible")).toHaveAttribute("data-sea", theme === "light" ? "calm" : "storm");
 	await expect(header.getByRole("switch", { name: "Dark mode" })).toHaveAttribute("aria-checked", String(theme === "dark"));
 	await expect.poll(() => pageLightness(page)).toBeGreaterThan(theme === "light" ? 0.8 : 0);
 	await expect.poll(() => pageLightness(page)).toBeLessThan(theme === "light" ? 1.01 : 0.35);
@@ -80,17 +77,15 @@ async function nearSwellHeight(page: Page) {
 	});
 }
 
-test("Given either harbor, When the reader switches themes, Then the sea eases into the other state and the skies cross over instead of snapping", async ({ page }) => {
+test("Given either harbor, When the reader switches themes, Then the sea eases into the other state instead of snapping", async ({ page }) => {
 	await page.setViewportSize({ width: 1280, height: 800 });
 	await page.emulateMedia({ colorScheme: "dark", reducedMotion: "no-preference" });
 	const { header, themeSwitch } = await openHeader(page);
 	await expect(header).toHaveAttribute("data-header-motion", "running");
-	for (const [leaving, arriving] of [["storm", "daylight"], ["daylight", "storm"]] as const) {
+	for (const next of ["light", "dark"] as const) {
 		const before = await nearSwellHeight(page);
 		await themeSwitch.click();
-		// Both skies show while one leaves and the other arrives.
-		await expect(header.locator(`[data-sky="${arriving}"]`)).toBeVisible();
-		expect(await header.locator(`[data-sky="${leaving}"]`).isVisible()).toBe(true);
+		await expect(page.locator("html")).toHaveAttribute("data-theme", next);
 		const samples: number[] = [];
 		for (let index = 0; index < 34; index++) {
 			samples.push(await nearSwellHeight(page));
@@ -103,8 +98,47 @@ test("Given either harbor, When the reader switches themes, Then the sea eases i
 		const turning = samples.filter(height => low + range * 0.15 < height && height < low + range * 0.85);
 		expect(turning.length).toBeGreaterThanOrEqual(5);
 		for (let index = 1; index < samples.length; index++) expect(Math.abs(samples[index] - samples[index - 1])).toBeLessThan(range * 0.4);
-		await expect(header.locator(`[data-sky="${leaving}"]`)).toBeHidden();
 	}
+});
+
+/** Bolt opacity on every frame for a while, and when each flash began. */
+async function watchBolt(page: Page, milliseconds: number) {
+	return page.getByRole("banner").locator(".shiplet-sky-lightning").evaluate(async (element, duration) => {
+		const flashes: number[] = [];
+		let lit = false;
+		let peak = 0;
+		const start = performance.now();
+		while (performance.now() - start < duration) {
+			const opacity = Number(getComputedStyle(element).opacity);
+			peak = Math.max(peak, opacity);
+			if (!lit && opacity >= 0.5) flashes.push(performance.now() - start);
+			lit = opacity >= 0.5;
+			await new Promise(requestAnimationFrame);
+		}
+		return { flashes, peak, lingering: element.getAnimations().length, final: Number(getComputedStyle(element).opacity) };
+	}, milliseconds);
+}
+
+test("Given daylight, When the reader turns on dark mode, Then a single lightning strike lands and the sky goes quiet", async ({ page }) => {
+	await page.emulateMedia({ colorScheme: "light", reducedMotion: "no-preference" });
+	const { header, themeSwitch } = await openHeader(page);
+	await expect(header).toHaveAttribute("data-header-motion", "running");
+	await themeSwitch.click();
+	const strike = await watchBolt(page, 2600);
+	// One strike: a flicker of at most two flashes inside a second, then dark.
+	expect(strike.flashes.length).toBeGreaterThanOrEqual(1);
+	expect(strike.flashes.length).toBeLessThanOrEqual(2);
+	expect(strike.flashes.at(-1)! - strike.flashes[0]).toBeLessThan(1000);
+	expect(strike.final).toBe(0);
+	expect(strike.lingering).toBe(0);
+	const after = await watchBolt(page, 1500);
+	expect(after.peak).toBe(0);
+	// Turning back to daylight never strikes.
+	await themeSwitch.click();
+	expect((await watchBolt(page, 1800)).peak).toBe(0);
+	// And the next turn into the night watch strikes once again.
+	await themeSwitch.click();
+	expect((await watchBolt(page, 2600)).flashes.length).toBeGreaterThanOrEqual(1);
 });
 
 test("Given keyboard use, When the switch is focused and toggled with Space or Enter, Then the theme flips each time", async ({ page }) => {
@@ -112,9 +146,10 @@ test("Given keyboard use, When the switch is focused and toggled with Space or E
 	const { themeSwitch } = await openHeader(page);
 	await themeSwitch.focus();
 	await page.keyboard.press("Space");
-	// Reduced motion changes the weather at once: no cross-over, no easing.
-	await expect(page.getByRole("banner").locator('[data-sky="daylight"]')).toBeHidden({ timeout: 200 });
 	await expectHarbor(page, "dark");
+	// Reduced motion changes the weather at once: no easing and no strike.
+	await expect(page.getByRole("banner")).not.toHaveAttribute("data-weather-turning", /./);
+	expect((await watchBolt(page, 1200)).peak).toBe(0);
 	await page.keyboard.press("Enter");
 	await expectHarbor(page, "light");
 	await expect(themeSwitch).toBeFocused();

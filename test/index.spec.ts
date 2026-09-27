@@ -4653,24 +4653,17 @@ describe("Shiplet", () => {
         expect(header.match(/class="shiplet-waterline-sea"/g)).toHaveLength(2);
         expect(header).toContain('data-sea="calm"');
         expect(header).toContain('data-sea="storm"');
+        // The sky stays clear: no sun or clouds, only one bolt that waits
+        // for the reader to turn on the night watch.
         expect(header).toContain('<div class="shiplet-sky" aria-hidden="true">');
-        expect(header).toContain('data-sky="daylight"');
-        expect(header).toContain('data-sky="storm"');
-        expect(header.match(/class="shiplet-sky-sun"/g)).toHaveLength(1);
-        expect(
-          header.match(/class="shiplet-sky-storm-cloud[ "]/g)?.length,
-        ).toBeGreaterThanOrEqual(3);
-        expect(
-          header.match(/class="shiplet-sky-lightning[ "]/g)?.length,
-        ).toBeGreaterThanOrEqual(1);
-        const animatedSky =
+        expect(header).not.toMatch(/shiplet-sky-(?:sun|fair-cloud|storm-cloud|deck|scene)/);
+        expect(header).not.toContain("data-sky=");
+        const strike =
           header.match(
-            /<[^>]*class="shiplet-sky-(?:sun-halo|sun-rays|fair-cloud|storm-cloud|lightning|flash)[ "][^>]*>/g,
+            /<[^>]*class="shiplet-sky-(?:lightning|flash)"[^>]*>/g,
           ) || [];
-        expect(animatedSky.length).toBeGreaterThanOrEqual(10);
-        for (const animated of animatedSky) {
-          expect(animated).toContain("data-harbor-motion");
-        }
+        expect(strike).toHaveLength(2);
+        for (const part of strike) expect(part).toContain("data-harbor-motion");
       }
 
       const css = pages[0];
@@ -4684,11 +4677,16 @@ describe("Shiplet", () => {
       );
       expect(css).toContain(':root[data-theme="light"] { color-scheme: light; }');
       expect(css).toContain(
-        '.shiplet-sky-scene[data-sky="daylight"], .shiplet-waterline-sea[data-sea="calm"] { display: var(--sky-daylight); }',
+        '.shiplet-waterline-sea[data-sea="calm"] { display: var(--sea-calm); }',
       );
       expect(css).toContain(
-        '.shiplet-sky-scene[data-sky="storm"], .shiplet-waterline-sea[data-sea="storm"] { display: var(--sky-storm); }',
+        '.shiplet-waterline-sea[data-sea="storm"] { display: var(--sea-storm); }',
       );
+      // The strike only runs while the weather turns toward the storm.
+      expect(css).toMatch(
+        /@media \(prefers-reduced-motion: no-preference\) \{[^@]*\.shiplet-brand-header\[data-weather-turning="storm"\] \.shiplet-sky-lightning \{ animation: shiplet-sky-strike [^;]*\bboth; \}/,
+      );
+      expect(css).not.toMatch(/\.shiplet-sky-lightning[^{]*\{[^}]*infinite/);
       expect(css).toContain(
         "@media (scripting: none) { .shiplet-theme-switch { display: none; } }",
       );

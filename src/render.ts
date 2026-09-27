@@ -145,8 +145,8 @@ const NIGHT_WATCH_TOKENS = `
     --mark-harbor: oklch(70% 0.07 220);
     --glow-warm: oklch(32% 0.05 40 / 0.5);
     --glow-cool: oklch(30% 0.05 230 / 0.55);
-    --sky-daylight: none;
-    --sky-storm: block;
+    --sea-calm: none;
+    --sea-storm: block;
     --theme-switch-shift: 26px;
     --theme-switch-sun: var(--text-muted);
     --theme-switch-moon: oklch(92% 0.04 95);`;
@@ -232,10 +232,10 @@ export const CSS = `
   --ease: cubic-bezier(0.2, 0, 0.2, 1);
   --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
 
-  /* Header sky: daylight shows the sun over a calm sea; night watch swaps in
-     the storm. Display values are tokens so one override flips every scene. */
-  --sky-daylight: block;
-  --sky-storm: none;
+  /* Header sea: daylight shows the calm sea, the night watch the storm.
+     Display values are tokens so one override flips both. */
+  --sea-calm: block;
+  --sea-storm: none;
   --theme-switch-shift: 0px;
   --theme-switch-sun: var(--buoy-600);
   --theme-switch-moon: var(--text-muted);
@@ -352,39 +352,20 @@ hr.solid {
 @keyframes helm-glint { 0%, 34%, 100% { opacity: 0.18; transform: translateX(-7px); } 50% { opacity: 0.72; transform: translateX(7px); } }
 @keyframes ticket-in { from { opacity: 0; transform: translateY(14px); } to { opacity: 1; transform: none; } }
 @keyframes gull-drift { 0%, 100% { transform: translate(0, 0); } 50% { transform: translate(7px, -4px); } }
-@keyframes shiplet-sky-sun-turn { to { transform: rotate(360deg); } }
-@keyframes shiplet-sky-sun-glow { 0%, 100% { transform: scale(0.9); opacity: 0.34; } 50% { transform: scale(1.08); opacity: 0.5; } }
-@keyframes shiplet-sky-fair-drift { 0%, 100% { transform: translateX(-10px); } 50% { transform: translateX(16px); } }
-@keyframes shiplet-sky-storm-drift { 0%, 100% { transform: translateX(-22px); } 50% { transform: translateX(24px); } }
-@keyframes shiplet-sky-cell-drift { 0%, 100% { transform: translateX(-5px); } 50% { transform: translateX(6px); } }
-@keyframes shiplet-sky-leave { to { opacity: 0; transform: translateY(-8px); } }
-@keyframes shiplet-sky-storm-arrive { from { opacity: 0; transform: translateY(-16px); } }
-@keyframes shiplet-sky-daylight-arrive { from { opacity: 0; transform: translateY(12px); } }
-/* One 11s cycle for every strike: a double flicker 110ms apart, then 5s of
-   dark. Separate bolts can never stack past two flashes a second. */
-@keyframes shiplet-sky-strike-a {
-  0%, 9%, 11.2%, 100% { opacity: 0; }
-  9.3% { opacity: 1; }
-  9.9% { opacity: 0.12; }
-  10.3% { opacity: 0.9; }
+/* One strike when the night watch begins: a double flicker 110ms apart. */
+@keyframes shiplet-sky-strike {
+  0%, 100% { opacity: 0; }
+  8% { opacity: 1; }
+  18% { opacity: 0.12; }
+  26% { opacity: 0.9; }
+  62% { opacity: 0; }
 }
-@keyframes shiplet-sky-strike-b {
-  0%, 58%, 60.2%, 100% { opacity: 0; }
-  58.3% { opacity: 0.95; }
-  58.9% { opacity: 0.1; }
-  59.3% { opacity: 1; }
-}
-@keyframes shiplet-sky-flash-a {
-  0%, 9%, 12.4%, 100% { opacity: 0; }
-  9.3% { opacity: 0.9; }
-  9.9% { opacity: 0.3; }
-  10.3% { opacity: 0.8; }
-}
-@keyframes shiplet-sky-flash-b {
-  0%, 58%, 61.4%, 100% { opacity: 0; }
-  58.3% { opacity: 0.85; }
-  58.9% { opacity: 0.3; }
-  59.3% { opacity: 0.9; }
+@keyframes shiplet-sky-flash {
+  0%, 100% { opacity: 0; }
+  8% { opacity: 0.9; }
+  18% { opacity: 0.3; }
+  26% { opacity: 0.8; }
+  80% { opacity: 0; }
 }
 
 /* Line-drawing: paths carry pathLength="1" so one rule animates them all. */
@@ -530,22 +511,8 @@ html:not(.js) .harbor-scene-svg :is(.scene-cloud-near, .scene-cloud-far, .scene-
   .shiplet-brand-header .shiplet-wake-ring:nth-child(2) { animation-delay: -3.83s; }
   .shiplet-brand-header .shiplet-wake-ring:nth-child(3) { animation-delay: -5.96s; }
   .shiplet-waterline-avatar-ripple { animation: shiplet-waterline-avatar-ripple 16s ease-in-out -5s infinite; }
-  .shiplet-sky-sun-rays { animation: shiplet-sky-sun-turn 96s linear infinite; }
-  .shiplet-sky-sun-halo { animation: shiplet-sky-sun-glow 7s ease-in-out infinite; }
-  .shiplet-sky-fair-cloud-a { animation: shiplet-sky-fair-drift 38s ease-in-out -9s infinite; }
-  .shiplet-sky-fair-cloud-b { animation: shiplet-sky-fair-drift 52s ease-in-out -31s infinite reverse; }
-  .shiplet-sky-deck { animation: shiplet-sky-storm-drift 34s ease-in-out -7s infinite; }
-  .shiplet-sky-deck:nth-of-type(2n) { animation-duration: 42s; animation-direction: reverse; }
-  .shiplet-sky-deck:nth-of-type(3n) { animation-duration: 27s; animation-delay: -19s; }
-  .shiplet-sky-storm-cloud-cell { animation: shiplet-sky-cell-drift 17s ease-in-out -4s infinite; }
-  .shiplet-sky-lightning-a { animation: shiplet-sky-strike-a 11s linear infinite; }
-  .shiplet-sky-lightning-b { animation: shiplet-sky-strike-b 11s linear infinite; }
-  .shiplet-sky-flash-a { animation: shiplet-sky-flash-a 11s linear infinite; }
-  .shiplet-sky-flash-b { animation: shiplet-sky-flash-b 11s linear infinite; }
-  .shiplet-brand-header[data-weather-turning="daylight"] .shiplet-sky-scene[data-sky="storm"],
-  .shiplet-brand-header[data-weather-turning="storm"] .shiplet-sky-scene[data-sky="daylight"] { animation: shiplet-sky-leave 0.9s var(--ease-out) both; }
-  .shiplet-brand-header[data-weather-turning="daylight"] .shiplet-sky-scene[data-sky="daylight"] { animation: shiplet-sky-daylight-arrive 1.8s var(--ease-out) both; }
-  .shiplet-brand-header[data-weather-turning="storm"] .shiplet-sky-scene[data-sky="storm"] { animation: shiplet-sky-storm-arrive 1.8s var(--ease-out) both; }
+  .shiplet-brand-header[data-weather-turning="storm"] .shiplet-sky-lightning { animation: shiplet-sky-strike 0.6s linear 0.45s both; }
+  .shiplet-brand-header[data-weather-turning="storm"] .shiplet-sky-flash { animation: shiplet-sky-flash 0.6s linear 0.45s both; }
   .scene-go .harbor-scene-svg .draw-path {
     animation: harbor-line-resolve 620ms var(--ease-out) both;
     animation-delay: calc(var(--di, 0) * var(--harbor-line-step));
@@ -578,8 +545,6 @@ html:not(.js) .harbor-scene-svg :is(.scene-cloud-near, .scene-cloud-far, .scene-
   .shiplet-waterline-svg .shiplet-waterline-marker-buoy { transform: none; }
   .shiplet-waterline-svg .shiplet-waterline-drawn { stroke-dashoffset: 0; }
   .shiplet-brand-mark :is(.shiplet-mark-vessel, .shiplet-mark-water-motion) { transform: none; }
-  .shiplet-sky [data-harbor-motion] { transform: none; }
-  .shiplet-sky :is(.shiplet-sky-lightning, .shiplet-sky-flash) { opacity: 0; }
   .harbor-scene-svg .scene-boat-hull { fill-opacity: 1; }
   .harbor-scene-svg .scene-boat-float { transform: none; }
   .harbor-scene-svg :is(.scene-boat-wake, .scene-boat-flag, .scene-beacon-beam, .scene-beacon-lamp) { transform: none; }
@@ -992,9 +957,8 @@ html:not(.js) .shiplet-waterline-svg :is(.shiplet-waterline-wave, .shiplet-water
 html:not(.js) .shiplet-waterline-marker-buoy { animation: none; transform: none; }
 html:not(.js) .shiplet-brand-mark :is(.shiplet-mark-vessel, .shiplet-mark-water-motion) { animation: none; transform: none; }
 
-/* The sky sits behind the water and the controls. Daylight: a sun and fair
-   clouds over the calm sea. Night watch: a storm deck with lightning cells
-   over the choppy sea. The theme tokens decide which harbor is drawn. */
+/* The sky stays clear. One bolt waits behind the water and strikes once when
+   the reader turns on the night watch; the theme tokens pick the sea. */
 .shiplet-sky {
   position: absolute;
   inset: 0;
@@ -1002,13 +966,9 @@ html:not(.js) .shiplet-brand-mark :is(.shiplet-mark-vessel, .shiplet-mark-water-
   overflow: hidden;
   pointer-events: none;
 }
-.shiplet-sky-scene { position: absolute; inset: 0; }
-.shiplet-sky-scene[data-sky="daylight"], .shiplet-waterline-sea[data-sea="calm"] { display: var(--sky-daylight); }
-.shiplet-sky-scene[data-sky="storm"], .shiplet-waterline-sea[data-sea="storm"] { display: var(--sky-storm); }
-/* While the weather turns, both skies show: the old one leaves as the new one
-   arrives. Reduced motion never turns; it swaps at once. */
-.shiplet-brand-header[data-weather-turning] .shiplet-sky-scene { display: block; }
-/* Matches the header's content box so bright details stay between the mark and the nav. */
+.shiplet-waterline-sea[data-sea="calm"] { display: var(--sea-calm); }
+.shiplet-waterline-sea[data-sea="storm"] { display: var(--sea-storm); }
+/* Matches the header's content box so the bolt lands between the mark and the nav. */
 .shiplet-sky-frame {
   position: absolute;
   top: 0;
@@ -1016,56 +976,27 @@ html:not(.js) .shiplet-brand-mark :is(.shiplet-mark-vessel, .shiplet-mark-water-
   left: max(24px, calc(50% - 516px));
   right: max(24px, calc(50% - 516px));
 }
-.shiplet-sky svg { position: absolute; display: block; overflow: visible; }
-.shiplet-sky-cloud-rim { fill: none; stroke-width: 2.4; }
-.shiplet-sky-sun { left: 30%; top: 1px; width: 40px; height: 40px; }
-.shiplet-sky-sun :is(.shiplet-sky-sun-halo, .shiplet-sky-sun-rays) { transform-box: fill-box; transform-origin: center; }
-.shiplet-sky-sun-halo { fill: oklch(91% 0.1 88); opacity: 0.42; }
-.shiplet-sky-sun-rays { fill: none; stroke: oklch(76% 0.15 68); stroke-width: 1.7; stroke-linecap: round; }
-.shiplet-sky-sun-disc { fill: oklch(86% 0.14 84); stroke: oklch(70% 0.16 62); stroke-width: 1.3; }
-.shiplet-sky-fair-cloud { width: 52px; height: 22px; }
-.shiplet-sky-fair-cloud .shiplet-sky-cloud-rim { stroke: color-mix(in oklch, var(--mark-harbor), var(--surface) 42%); }
-.shiplet-sky-fair-cloud .shiplet-sky-cloud-body { fill: var(--surface); }
-.shiplet-sky-fair-cloud-a { left: calc(30% - 34px); top: 17px; }
-.shiplet-sky-fair-cloud-b { left: 58%; top: 7px; width: 40px; height: 17px; }
-/* Deck clouds keep one height and stretch to overlap at any width. */
-.shiplet-sky-deck { top: -18px; width: max(170px, 21%); height: 44px; }
-.shiplet-sky-deck * { vector-effect: non-scaling-stroke; }
-.shiplet-sky-deck .shiplet-sky-cloud-rim { stroke: oklch(37% 0.028 255); }
-.shiplet-sky-deck .shiplet-sky-cloud-body { fill: oklch(29% 0.022 258); }
-.shiplet-sky-deck:nth-of-type(2n) .shiplet-sky-cloud-body { fill: oklch(31.5% 0.024 258); }
-.shiplet-sky-deck:nth-of-type(1) { left: -6%; }
-.shiplet-sky-deck:nth-of-type(2) { left: 10%; top: -21px; }
-.shiplet-sky-deck:nth-of-type(3) { left: 26%; top: -16px; }
-.shiplet-sky-deck:nth-of-type(4) { left: 42%; top: -20px; }
-.shiplet-sky-deck:nth-of-type(5) { left: 58%; }
-.shiplet-sky-deck:nth-of-type(6) { left: 74%; top: -21px; }
-.shiplet-sky-deck:nth-of-type(7) { left: 90%; top: -17px; }
-/* A storm cell hangs over each bolt; the bolt and its glow share the cell's anchor. */
-.shiplet-sky-cell { position: absolute; top: 0; bottom: 0; width: 0; }
-.shiplet-sky-cell-a { left: 31%; }
-.shiplet-sky-cell-b { left: 60%; }
-.shiplet-sky-storm-cloud-cell { left: -72px; top: -12px; width: 144px; height: 46px; }
-.shiplet-sky-storm-cloud-cell .shiplet-sky-cloud-rim { stroke: oklch(43% 0.03 255); }
-.shiplet-sky-storm-cloud-cell .shiplet-sky-cloud-body { fill: oklch(33.5% 0.025 258); }
 .shiplet-sky-lightning {
-  left: -9px;
-  top: 25px;
-  width: 18px;
-  height: 36px;
+  position: absolute;
+  left: calc(31% - 11px);
+  top: 0;
+  display: block;
+  width: 22px;
+  height: 56px;
+  overflow: visible;
   opacity: 0;
   filter: drop-shadow(0 0 3px oklch(84% 0.09 250 / 0.95));
 }
-.shiplet-sky-lightning path { fill: none; stroke: oklch(97% 0.05 95); stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }
+.shiplet-sky-lightning path { fill: none; stroke: oklch(97% 0.05 95); stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
 .shiplet-sky-lightning .shiplet-sky-lightning-fork { stroke-width: 1.1; opacity: 0.8; }
 .shiplet-sky-flash {
   position: absolute;
-  left: -80px;
-  top: -10px;
-  width: 160px;
-  height: 48px;
+  left: calc(31% - 100px);
+  top: -46px;
+  width: 200px;
+  height: 92px;
   border-radius: 50%;
-  background: radial-gradient(closest-side, oklch(80% 0.06 250 / 0.55), transparent);
+  background: radial-gradient(closest-side, oklch(80% 0.06 250 / 0.5), transparent);
   opacity: 0;
 }
 
@@ -3046,9 +2977,6 @@ details textarea { margin-top: 8px; }
   .shiplet-waterline-tertiary { display: none; }
   .shiplet-waterline-mobile-hide { display: none; }
   .shiplet-sky-frame { left: 16px; right: 16px; }
-  .shiplet-sky .shiplet-sky-wide { display: none; }
-  .shiplet-sky-sun { left: 24%; top: 3px; width: 32px; height: 32px; }
-  .shiplet-sky-fair-cloud-a { left: calc(24% - 30px); top: 16px; }
   .harbor-scene-svg .scene-mobile-atmosphere { display: none; }
   .harbor-scene-svg .scene-mobile-secondary { display: none; }
   .harbor-scene-svg .scene-tertiary-detail { display: none; }
@@ -3201,48 +3129,12 @@ function HeaderWaterlineSvg(variant: HeaderVariant) {
 </div>`;
 }
 
-/* Cloud outlines: the rim copy strokes every lobe, then the body copy covers
-   the inner half, leaving one outline around the union of the lobes. */
-function SkyCloud(className: string, viewBox: string, lobes: string, stretch = false) {
-  const aspect = stretch ? ` preserveAspectRatio="none"` : "";
-  return `<svg class="${className}" data-harbor-motion viewBox="${viewBox}"${aspect} xmlns="http://www.w3.org/2000/svg" aria-hidden="true" focusable="false"><g class="shiplet-sky-cloud-rim">${lobes}</g><g class="shiplet-sky-cloud-body">${lobes}</g></svg>`;
-}
-
-const FAIR_CLOUD_LOBES = `<circle cx="12" cy="16" r="5.5"/><circle cx="22" cy="11" r="7.5"/><circle cx="34" cy="10" r="8.5"/><circle cx="45" cy="15" r="6"/><rect x="12" y="14" width="33" height="7.5" rx="3.75"/>`;
-/* Storm clouds hang from the top edge; only their heavy, scalloped bellies show. */
-const STORM_DECK_LOBES = [
-  `<rect x="20" y="0" width="160" height="24"/><circle cx="20" cy="18" r="14"/><circle cx="46" cy="14" r="18"/><circle cx="78" cy="16" r="20"/><circle cx="110" cy="12" r="18"/><circle cx="140" cy="18" r="19"/><circle cx="170" cy="14" r="16"/><circle cx="188" cy="19" r="11"/>`,
-  `<rect x="20" y="0" width="160" height="22"/><circle cx="18" cy="15" r="12"/><circle cx="42" cy="18" r="17"/><circle cx="70" cy="13" r="16"/><circle cx="98" cy="18" r="21"/><circle cx="130" cy="14" r="17"/><circle cx="158" cy="19" r="18"/><circle cx="186" cy="14" r="12"/>`,
-];
-const STORM_CELL_LOBES = `<rect x="22" y="0" width="100" height="22"/><circle cx="22" cy="17" r="13"/><circle cx="46" cy="22" r="17"/><circle cx="74" cy="25" r="19"/><circle cx="100" cy="21" r="17"/><circle cx="122" cy="16" r="13"/>`;
-
-function StormCell(strike: "a" | "b", wideOnly: boolean) {
-  const wide = wideOnly ? " shiplet-sky-wide" : "";
-  return `<div class="shiplet-sky-cell shiplet-sky-cell-${strike}${wide}">
-        <span class="shiplet-sky-flash shiplet-sky-flash-${strike}" data-harbor-motion></span>
-        <svg class="shiplet-sky-lightning shiplet-sky-lightning-${strike}" data-harbor-motion viewBox="0 0 18 36" xmlns="http://www.w3.org/2000/svg" aria-hidden="true" focusable="false"><path d="M11.5 0L7.5 9L11 10L6 19L9.5 20L5.5 28.5L7.8 29L4.5 36"/><path class="shiplet-sky-lightning-fork" d="M9.3 14.2L13.8 18.2L12.6 23"/></svg>
-        ${SkyCloud("shiplet-sky-storm-cloud shiplet-sky-storm-cloud-cell", "0 0 144 46", STORM_CELL_LOBES)}
-      </div>`;
-}
-
+/* The sky stays clear; one bolt waits for the reader to turn on the night watch. */
 function HeaderSky() {
-  const deck = Array.from({ length: 7 }, (_, index) =>
-    SkyCloud("shiplet-sky-storm-cloud shiplet-sky-deck", "0 0 200 44", STORM_DECK_LOBES[index % 2], true),
-  ).join("");
   return `<div class="shiplet-sky" aria-hidden="true">
-    <div class="shiplet-sky-scene" data-sky="daylight" data-harbor-motion>
-      <div class="shiplet-sky-frame">
-        <svg class="shiplet-sky-sun" viewBox="-24 -24 48 48" xmlns="http://www.w3.org/2000/svg" aria-hidden="true" focusable="false"><circle class="shiplet-sky-sun-halo" data-harbor-motion r="16"/><path class="shiplet-sky-sun-rays" data-harbor-motion d="M0-13.5v-5.5M0 13.5v5.5M13.5 0h5.5M-13.5 0h-5.5M9.5-9.5l3.9-3.9M-9.5 9.5l-3.9 3.9M9.5 9.5l3.9 3.9M-9.5-9.5l-3.9-3.9"/><circle class="shiplet-sky-sun-disc" r="8.5"/></svg>
-        ${SkyCloud("shiplet-sky-fair-cloud shiplet-sky-fair-cloud-a", "0 0 56 24", FAIR_CLOUD_LOBES)}
-        ${SkyCloud("shiplet-sky-fair-cloud shiplet-sky-fair-cloud-b shiplet-sky-wide", "0 0 56 24", FAIR_CLOUD_LOBES)}
-      </div>
-    </div>
-    <div class="shiplet-sky-scene" data-sky="storm" data-harbor-motion>
-      ${deck}
-      <div class="shiplet-sky-frame">
-        ${StormCell("a", false)}
-        ${StormCell("b", true)}
-      </div>
+    <div class="shiplet-sky-frame">
+      <span class="shiplet-sky-flash" data-harbor-motion></span>
+      <svg class="shiplet-sky-lightning" data-harbor-motion viewBox="0 0 22 56" xmlns="http://www.w3.org/2000/svg" aria-hidden="true" focusable="false"><path d="M14 0L10.5 10L14 11.5L8.5 23L12 24.5L6.5 36L9.5 37L5 48L7 48.5L4.5 56"/><path class="shiplet-sky-lightning-fork" d="M8.5 23L3.5 29L4.5 34"/></svg>
     </div>
   </div>`;
 }
@@ -3690,7 +3582,7 @@ const EnhanceScript = (nonce: KernelDocumentNonce) => `
 					turnTo = target;
 					turnProgress = 0;
 					if (header.getAttribute("data-header-motion") === "running") {
-						// Both skies show while the old one leaves and the new one arrives.
+						// A turn toward the storm lets the one bolt strike.
 						clearTimeout(weatherTimer);
 						header.setAttribute("data-weather-turning", visibleSea === "storm" ? "storm" : "daylight");
 						weatherTimer = setTimeout(function () { header.removeAttribute("data-weather-turning"); }, 2000);

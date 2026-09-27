@@ -134,28 +134,25 @@ for (const variant of ["public", "authenticated"] as const) {
 		await expect.poll(() => vessel.evaluate(element => getComputedStyle(element).transform)).not.toBe(initialTransform);
 	});
 
-	test(`Given the ${variant} header, When daylight or the night watch is showing, Then only the matching sky is drawn and it stays clear of the controls`, async ({ page }) => {
+	test(`Given the ${variant} header in either theme, When it renders, Then the sky stays clear and the waiting bolt never sits over the controls`, async ({ page }) => {
 		await page.emulateMedia({ reducedMotion: "no-preference", colorScheme: "light" });
 		const header = await openHeader(page, variant);
 		for (const colorScheme of ["light", "dark"] as const) {
 			await page.emulateMedia({ colorScheme });
-			const [shown, hidden] = colorScheme === "light" ? ["daylight", "storm"] : ["storm", "daylight"];
-			await expect(header.locator(`[data-sky="${shown}"]`)).toBeVisible();
-			await expect(header.locator(`[data-sky="${hidden}"]`)).toBeHidden();
-			await expect(header.locator(".shiplet-sky-sun")).toBeVisible({ visible: colorScheme === "light" });
+			await expect(visibleSea(header)).toHaveAttribute("data-sea", colorScheme === "light" ? "calm" : "storm");
+			await expect(header.locator('[class*="shiplet-sky-sun"], [class*="cloud"], [class*="shiplet-sky-deck"]')).toHaveCount(0);
+			const bolt = header.locator(".shiplet-sky-lightning");
+			await expect(bolt).toHaveCount(1);
+			await expect(bolt).toHaveCSS("opacity", "0");
 			for (const width of [320, 390, 768, 1280, 1920]) {
 				await page.setViewportSize({ width, height: 800 });
-				const controls = [
+				const box = (await bolt.boundingBox())!;
+				for (const control of [
 					await header.getByRole("link", { name: "Shiplet home" }).boundingBox(),
 					await header.getByRole("navigation").boundingBox(),
-				];
-				const bright = await header.locator(".shiplet-sky-sun:visible, .shiplet-sky-lightning:visible").evaluateAll(elements => elements.map(element => element.getBoundingClientRect().toJSON()));
-				expect(bright.length).toBeGreaterThan(0);
-				for (const box of bright) {
-					for (const control of controls) expect(overlaps(box, control!)).toBe(false);
-					expect(box.x).toBeGreaterThanOrEqual(0);
-					expect(box.x + box.width).toBeLessThanOrEqual(width);
-				}
+				]) expect(overlaps(box, control!)).toBe(false);
+				expect(box.x).toBeGreaterThanOrEqual(0);
+				expect(box.x + box.width).toBeLessThanOrEqual(width);
 			}
 			await page.setViewportSize({ width: 1280, height: 800 });
 		}
@@ -221,12 +218,10 @@ test("Given no JavaScript, When the header renders, Then static water and naviga
 	await expect(header.locator(".shiplet-mark-vessel")).toBeVisible();
 	await expect(header.getByRole("button", { name: /header animation/ })).toHaveCount(0);
 	await expect(header.locator(".shiplet-theme-switch")).toBeHidden();
-	await expect(header.locator('[data-sky="daylight"]')).toBeVisible();
 	await expect(visibleSea(header)).toHaveAttribute("data-sea", "calm");
 	await page.emulateMedia({ colorScheme: "dark" });
-	await expect(header.locator('[data-sky="storm"]')).toBeVisible();
 	await expect(visibleSea(header)).toHaveAttribute("data-sea", "storm");
-	await expect(header.locator(".shiplet-sky-lightning").first()).toHaveCSS("opacity", "0");
+	await expect(header.locator(".shiplet-sky-lightning")).toHaveCSS("opacity", "0");
 	await expectStillWater(page, header);
 	expect((await waterShapes(header)).every(shape => shape && shape.length > 100)).toBe(true);
 	const vessel = await header.locator(".shiplet-mark-vessel").boundingBox();
@@ -283,41 +278,20 @@ test("Given blocked storage, When the header loads, Then its animation runs with
 	expect(errors).toEqual([]);
 });
 
-test("Given the night watch, When the storm runs, Then clouds drift and lightning never flickers three times in a second", async ({ page }) => {
+test("Given a page that opens in the night watch, When time passes, Then no bolt strikes until the reader turns the weather", async ({ page }) => {
 	await page.emulateMedia({ reducedMotion: "no-preference", colorScheme: "dark" });
 	const header = await openHeader(page, "public");
-	const storm = header.locator('[data-sky="storm"]');
-	await expect(storm).toBeVisible();
 	await expect(header).toHaveAttribute("data-header-motion", "running");
-	const cloud = storm.locator(".shiplet-sky-storm-cloud").first();
-	const cloudStart = await cloud.evaluate(element => getComputedStyle(element).transform);
-	await expect.poll(() => cloud.evaluate(element => getComputedStyle(element).transform)).not.toBe(cloudStart);
-	const strikes = await storm.evaluate(sky => Array.from(sky.querySelectorAll(".shiplet-sky-lightning, .shiplet-sky-flash")).flatMap(element => element.getAnimations().map(animation => {
-		const effect = animation.effect as KeyframeEffect;
-		const timing = effect.getComputedTiming();
-		return {
-			cycle: `${timing.duration}/${timing.delay}`,
-			duration: Number(timing.duration),
-			keyframes: effect.getKeyframes().map(frame => ({ offset: Number(frame.computedOffset), opacity: Number(frame.opacity) })),
-		};
-	})));
-	expect(strikes.length).toBeGreaterThanOrEqual(2);
-	// One shared cycle means separate bolts can never stack into a faster flicker.
-	expect(new Set(strikes.map(strike => strike.cycle)).size).toBe(1);
-	const duration = strikes[0].duration;
-	const onsets: number[] = [];
-	for (const strike of strikes) {
-		strike.keyframes.forEach((frame, index) => {
-			const previous = strike.keyframes[index - 1];
-			if (!previous || frame.opacity - previous.opacity < 0.25) return;
-			const time = frame.offset * duration;
-			if (!onsets.some(onset => Math.abs(onset - time) < 40)) onsets.push(time);
-		});
-	}
-	expect(onsets.length).toBeGreaterThanOrEqual(2);
-	const looped = [...onsets, ...onsets.map(onset => onset + duration)].sort((a, b) => a - b);
-	for (const onset of looped) expect(looped.filter(other => other >= onset && other < onset + 1000).length).toBeLessThan(3);
-	await page.emulateMedia({ reducedMotion: "reduce" });
-	await expectStillWater(page, header);
-	for (const bolt of await storm.locator(".shiplet-sky-lightning").all()) await expect(bolt).toHaveCSS("opacity", "0");
+	await expect(visibleSea(header)).toHaveAttribute("data-sea", "storm");
+	const bolt = header.locator(".shiplet-sky-lightning");
+	const brightest = await bolt.evaluate(async element => {
+		let peak = 0;
+		const start = performance.now();
+		while (performance.now() - start < 2000) {
+			peak = Math.max(peak, Number(getComputedStyle(element).opacity), element.getAnimations().length);
+			await new Promise(requestAnimationFrame);
+		}
+		return peak;
+	});
+	expect(brightest).toBe(0);
 });
