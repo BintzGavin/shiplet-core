@@ -25,6 +25,10 @@ import {
   EXTERNAL_REWRITE_SPOOL_MAX_AGE_MS,
   EXTERNAL_REWRITE_SPOOL_PREFIX,
 } from "../src/cloudflare-external-rewrite-spool";
+import {
+  createWorkOSOrganizationMembership,
+  workosTestDouble,
+} from "../src/workos";
 
 // Type for our test environment
 interface TestEnv {
@@ -8655,6 +8659,81 @@ describe("Shiplet", () => {
   });
 
   describe("Organizations and Teams", () => {
+    /**
+     * Invites a new administrator and signs them in through AuthKit, which
+     * accepts the invitation and records their membership under a synthetic
+     * om_<organization>_<user> ID that WorkOS does not know.
+     */
+    async function signInInvitedAdministrator(organizationId: string) {
+      const email = `sign-in-admin-${crypto.randomUUID().slice(0, 8)}@example.com`;
+      const invitation = await makeRequest(
+        `/api/organizations/${organizationId}/invitations`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ email, role: "admin" }),
+        },
+      );
+      expect(invitation.status).toBe(201);
+      const admin = await createTestOrganizationMember(organizationId, email);
+      const membership = await (env as unknown as TestEnv).DB.prepare(
+        `SELECT id, role
+				 FROM organization_memberships
+				 WHERE organization_id = ? AND user_id = ?`,
+      )
+        .bind(organizationId, admin.id)
+        .first<{ id: string; role: string }>();
+      expect(membership).toEqual({
+        id: `om_${organizationId}_${admin.id}`,
+        role: "admin",
+      });
+      return { ...admin, membershipId: membership!.id };
+    }
+
+    async function createTeamAs(
+      organizationId: string,
+      headers: Record<string, string>,
+    ) {
+      return requestHelper(`/api/organizations/${organizationId}/teams`, {
+        method: "POST",
+        headers: { ...headers, "Content-Type": "application/json" },
+        body: JSON.stringify({
+          name: `Sign-in admin team ${crypto.randomUUID().slice(0, 8)}`,
+        }),
+      });
+    }
+
+    /** The actor's kernel audit events for one action, oldest first. */
+    async function auditEvents(
+      organizationId: string,
+      actorId: string,
+      action: string,
+    ) {
+      const rows = await (env as unknown as TestEnv).DB.prepare(
+        `SELECT outcome, metadata_json
+				 FROM kernel_admin_audit_events
+				 WHERE organization_id = ? AND actor_id = ? AND action = ?
+				 ORDER BY rowid ASC`,
+      )
+        .bind(organizationId, actorId, action)
+        .all<{ outcome: string; metadata_json: string }>();
+      return rows.results.map((row) => ({
+        outcome: row.outcome,
+        metadata: JSON.parse(row.metadata_json) as Record<string, unknown>,
+      }));
+    }
+
+    async function localTeamMembershipId(teamId: string, userId: string) {
+      const row = await (env as unknown as TestEnv).DB.prepare(
+        `SELECT organization_membership_id
+				 FROM team_memberships
+				 WHERE team_id = ? AND user_id = ?`,
+      )
+        .bind(teamId, userId)
+        .first<{ organization_membership_id: string | null }>();
+      return row?.organization_membership_id ?? null;
+    }
+
     it("should create an organization for the current user", async () => {
       const organization = await createTestOrganization(makeRequest);
 
@@ -8678,6 +8757,102 @@ describe("Shiplet", () => {
       expect(response.status).toBe(201);
       const body = (await response.json()) as { team: { id: string } };
       expect(body.team.id).toMatch(/^team_/);
+      // The organization's creator holds a membership WorkOS issued, so they
+      // join the WorkOS team under the ID recorded here.
+      const creatorMembership = await (env as unknown as TestEnv).DB.prepare(
+        `SELECT id
+				 FROM organization_memberships
+				 WHERE organization_id = ? AND user_id = ?`,
+      )
+        .bind(organization.id, AUTH_HEADERS["x-shiplet-user-id"])
+        .first<{ id: string }>();
+      expect(creatorMembership).not.toBeNull();
+      expect(workosTestDouble.teamMembershipIds(body.team.id)).toEqual([
+        creatorMembership!.id,
+      ]);
+      expect(
+        await auditEvents(
+          organization.id,
+          AUTH_HEADERS["x-shiplet-user-id"],
+          "team.workos_team_sync",
+        ),
+      ).toEqual([]);
+    });
+
+    it("should add an administrator recorded at sign-in to the WorkOS team under their WorkOS membership ID", async () => {
+      const organization = await createTestOrganization(makeRequest);
+      const admin = await signInInvitedAdministrator(organization.id);
+      // AuthKit only signs people into organizations they belong to in WorkOS.
+      const workosMembership = await createWorkOSOrganizationMembership(
+        env as Env,
+        {
+          organizationId: organization.id,
+          userId: admin.id,
+          roleSlug: "admin",
+        },
+      );
+      expect(workosMembership.id).not.toBe(admin.membershipId);
+
+      const response = await createTeamAs(organization.id, admin.headers);
+
+      expect(response.status).toBe(201);
+      const { team } = (await response.json()) as { team: { id: string } };
+      expect(workosTestDouble.teamMembershipIds(team.id)).toEqual([
+        workosMembership.id,
+      ]);
+      expect(await localTeamMembershipId(team.id, admin.id)).toBe(
+        admin.membershipId,
+      );
+      expect(
+        (await auditEvents(organization.id, admin.id, "team.create")).map(
+          (event) => event.outcome,
+        ),
+      ).toEqual(["intent", "succeeded"]);
+      expect(
+        await auditEvents(organization.id, admin.id, "team.workos_team_sync"),
+      ).toEqual([]);
+    });
+
+    it("should create the team and record a WorkOS team sync failure when WorkOS has no membership for the administrator", async () => {
+      const organization = await createTestOrganization(makeRequest);
+      // WorkOS has no membership for this administrator.
+      const admin = await signInInvitedAdministrator(organization.id);
+
+      const response = await createTeamAs(organization.id, admin.headers);
+
+      expect(response.status).toBe(201);
+      const { team } = (await response.json()) as { team: { id: string } };
+      const storedTeam = await (env as unknown as TestEnv).DB.prepare(
+        "SELECT organization_id FROM teams WHERE id = ?",
+      )
+        .bind(team.id)
+        .first<{ organization_id: string }>();
+      expect(storedTeam?.organization_id).toBe(organization.id);
+      expect(await localTeamMembershipId(team.id, admin.id)).toBe(
+        admin.membershipId,
+      );
+      expect(workosTestDouble.teamMembershipIds(team.id)).toEqual([]);
+      expect(
+        (await auditEvents(organization.id, admin.id, "team.create")).map(
+          (event) => event.outcome,
+        ),
+      ).toEqual(["intent", "succeeded"]);
+      const syncEvents = await auditEvents(
+        organization.id,
+        admin.id,
+        "team.workos_team_sync",
+      );
+      expect(syncEvents).toEqual([
+        {
+          outcome: "failed",
+          metadata: {
+            targetKind: "team",
+            teamId: team.id,
+            reason: "workos_membership_not_found",
+          },
+        },
+      ]);
+      expect(JSON.stringify(syncEvents)).not.toContain("@");
     });
 
     it("should send a WorkOS-backed organization invitation", async () => {
