@@ -20969,6 +20969,41 @@ app.post("/api/organizations", async (c) => {
   }
 });
 
+/**
+ * Adds the administrator who created a team to it in WorkOS. It runs after
+ * the team and their place in it were recorded, and WorkOS only mirrors the
+ * team, so a failure is logged and recorded in the kernel audit ledger
+ * instead of failing the creation.
+ */
+async function syncTeamCreatorToWorkOS(
+  env: Env,
+  input: { organizationId: string; teamId: string; userId: string },
+) {
+  const reason = await addPersonToWorkOSTeam(env, {
+    ...input,
+    workosMembershipId: null,
+  });
+  if (!reason) return;
+  console.error(
+    JSON.stringify({
+      event: "team.workos_team_sync",
+      outcome: "failed",
+      reason,
+    }),
+  );
+  try {
+    await appendKernelAdminAuditEvent(env.DB, {
+      organizationId: input.organizationId,
+      actor: { kind: "human", id: input.userId },
+      action: "team.workos_team_sync",
+      outcome: "failed",
+      metadata: { targetKind: "team", teamId: input.teamId, reason },
+    });
+  } catch {
+    // The log line above still records the failure.
+  }
+}
+
 app.post("/api/organizations/:organizationId/teams", async (c) => {
   try {
     const user = await requireCurrentUser(c);
@@ -21017,13 +21052,13 @@ app.post("/api/organizations/:organizationId/teams", async (c) => {
           user.id,
           membership.id,
         );
-        await addWorkOSMembershipToTeam(c.env, {
-          organizationId,
-          teamId: created.id,
-          organizationMembershipId: membership.id,
-        });
         return created;
       },
+    });
+    await syncTeamCreatorToWorkOS(c.env, {
+      organizationId,
+      teamId: team.id,
+      userId: user.id,
     });
 
     return json({ team }, 201);
@@ -21581,24 +21616,20 @@ async function inviteLinkJoinPageForVisitor(
 }
 
 /**
- * Adds a person who joined a team through an invite link to that team in
- * WorkOS. It runs after the local join succeeded, and WorkOS only mirrors the
- * team, so a failure is logged and recorded in the kernel audit ledger
- * instead of failing the join. An existing member's WorkOS membership is
- * looked up first, because their local membership ID may be a synthetic
- * om_<org>_<user> ID that WorkOS does not know.
+ * Adds a person to a team in WorkOS, which only mirrors Shiplet's teams, and
+ * returns why it could not, or null once they are in it. Without their WorkOS
+ * membership ID it looks theirs up, because their local membership ID may be
+ * a synthetic om_<org>_<user> ID that WorkOS does not know.
  */
-async function syncInviteLinkTeamMembershipToWorkOS(
+async function addPersonToWorkOSTeam(
   env: Env,
   input: {
     organizationId: string;
     teamId: string;
-    inviteLinkId: string;
     userId: string;
     workosMembershipId: string | null;
   },
-) {
-  let reason: string;
+): Promise<string | null> {
   try {
     const workosMembershipId =
       input.workosMembershipId ??
@@ -21610,20 +21641,38 @@ async function syncInviteLinkTeamMembershipToWorkOS(
             input.userId,
         })
       )?.id;
-    if (workosMembershipId) {
-      await addWorkOSMembershipToTeam(env, {
-        organizationId: input.organizationId,
-        teamId: input.teamId,
-        organizationMembershipId: workosMembershipId,
-      });
-      return;
-    }
-    reason = "workos_membership_not_found";
+    if (!workosMembershipId) return "workos_membership_not_found";
+    await addWorkOSMembershipToTeam(env, {
+      organizationId: input.organizationId,
+      teamId: input.teamId,
+      organizationMembershipId: workosMembershipId,
+    });
+    return null;
   } catch (error) {
     // WorkOS SDK errors, like thrown Responses, carry the HTTP status.
     const status = (error as { status?: unknown } | null | undefined)?.status;
-    reason = typeof status === "number" ? `http_${status}` : "workos_error";
+    return typeof status === "number" ? `http_${status}` : "workos_error";
   }
+}
+
+/**
+ * Adds a person who joined a team through an invite link to that team in
+ * WorkOS. It runs after the local join succeeded, and WorkOS only mirrors the
+ * team, so a failure is logged and recorded in the kernel audit ledger
+ * instead of failing the join.
+ */
+async function syncInviteLinkTeamMembershipToWorkOS(
+  env: Env,
+  input: {
+    organizationId: string;
+    teamId: string;
+    inviteLinkId: string;
+    userId: string;
+    workosMembershipId: string | null;
+  },
+) {
+  const reason = await addPersonToWorkOSTeam(env, input);
+  if (!reason) return;
   console.error(
     JSON.stringify({
       event: "invite_link.workos_team_sync",
