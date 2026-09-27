@@ -187,6 +187,7 @@ function managedRuntimeEnv(input?: {
   readinessUnavailable?: boolean;
   readiness?: "disabled" | "operator_smoke" | "enabled";
   smokeUserId?: string;
+  invokeResponse?: (request: Request) => Response;
   calls?: Array<{
     method: string;
     input?: unknown;
@@ -332,6 +333,7 @@ function managedRuntimeEnv(input?: {
           input: value.expected,
           headers: Object.fromEntries(value.request.headers),
         });
+        if (input?.invokeResponse) return input.invokeResponse(value.request);
         return new Response("managed:0", {
           headers: { "content-type": "text/plain" },
         });
@@ -1272,6 +1274,75 @@ describe("revision API kernel contracts", () => {
     expect(retry.status, await retry.clone().text()).toBe(200);
     expect(calls.filter((call) => call.method === "acknowledge")).toHaveLength(
       2,
+    );
+  });
+
+  it("Given an active managed Worker Shiplet, when a cross-site page auto-submits a form to its public path, then the Worker response is served inside the same sandbox as its artifact frame", async () => {
+    const { project, active, draft } = await createValidatedDynamicDraft();
+    const runtime = managedRuntimeEnv({
+      invokeResponse: (workerRequest) =>
+        new Response(
+          `<!doctype html><script>window.hostileWorkerRan = true</script><p>worker:${workerRequest.method}</p>`,
+          { headers: { "content-type": "text/html; charset=utf-8" } },
+        ),
+    });
+    const promote = await requestWithEnv(
+      `/api/drafts/${draft.id}/promote`,
+      {
+        method: "POST",
+        headers: { "content-type": "application/json", ...OWNER_HEADERS },
+        body: JSON.stringify({
+          expectedActiveRevisionId: active.revision.id,
+          approval: true,
+        }),
+      },
+      runtime,
+    );
+    expect(promote.status, await promote.clone().text()).toBe(200);
+
+    const reviewHost = await requestWithEnv(
+      `/${project.subdomain}/`,
+      { headers: OWNER_HEADERS },
+      runtime,
+    );
+    expect(reviewHost.status).toBe(200);
+    const reviewHostHtml = await reviewHost.text();
+    expect(reviewHostHtml).toContain('data-shiplet-trusted-review-host="v1"');
+    expect(reviewHostHtml).not.toContain("hostileWorkerRan");
+
+    const frame = await requestWithEnv(
+      `/${project.subdomain}/__shiplet/artifact-frame/`,
+      { headers: OWNER_HEADERS },
+      runtime,
+    );
+    expect(frame.status, await frame.clone().text()).toBe(200);
+    const frameCsp = frame.headers.get("content-security-policy");
+    expect(frameCsp).toMatch(/^sandbox allow-scripts allow-forms;/);
+    expect(frameCsp).not.toContain("allow-same-origin");
+
+    // Test identity headers stand in for the reviewer's SameSite=None
+    // artifact access cookie, which a cross-site form POST still carries.
+    const formPost = await requestWithEnv(
+      `/${project.subdomain}/`,
+      {
+        method: "POST",
+        headers: {
+          ...OWNER_HEADERS,
+          "content-type": "application/x-www-form-urlencoded",
+          origin: "https://attacker.example",
+          "sec-fetch-site": "cross-site",
+          "sec-fetch-mode": "navigate",
+          "sec-fetch-dest": "document",
+        },
+        body: "submitted=1",
+      },
+      runtime,
+    );
+    expect(formPost.status).toBe(200);
+    expect(await formPost.text()).toContain("worker:POST");
+    expect(formPost.headers.get("content-security-policy")).toBe(frameCsp);
+    expect(formPost.headers.get("cache-control")).toBe(
+      "private, no-store, no-transform",
     );
   });
 
