@@ -326,11 +326,11 @@ export const EMBED_WIDGET_CSS = String.raw`
 :host{all:initial;position:fixed;right:0;bottom:0;z-index:2147483647;font:14px/1.4 system-ui,sans-serif;color:#20293a}*{box-sizing:border-box}
 :host([data-dock=top-left]){left:0;right:auto;top:0;bottom:auto}:host([data-dock=top-right]){left:auto;right:0;top:0;bottom:auto}:host([data-dock=bottom-left]){left:0;right:auto;top:auto;bottom:0}:host([data-dock=bottom-right]){left:auto;right:0;top:auto;bottom:0}
 :host([data-dock=top-left]) .surface,:host([data-dock=top-right]) .surface{top:max(4px,env(safe-area-inset-top));bottom:auto}:host([data-dock=top-left]) .surface,:host([data-dock=bottom-left]) .surface{left:max(4px,env(safe-area-inset-left));right:auto}:host([data-dock=top-right]) .surface,:host([data-dock=bottom-right]) .surface{right:max(4px,env(safe-area-inset-right));left:auto}
-.surface{position:fixed;right:4px;bottom:4px;width:188px;height:72px;border:0;background:transparent}.surface[hidden]{display:none}iframe{display:block;width:100%;height:100%;border:0;background:transparent;color-scheme:normal}
+.surface{position:fixed;right:4px;bottom:4px;width:272px;height:80px;border:0;background:transparent}.surface[hidden]{display:none}iframe{display:block;width:100%;height:100%;border:0;background:transparent;color-scheme:normal}
 .surface[data-view=comments]{width:min(420px,100vw);height:min(680px,100dvh)}
 .surface[data-view=thread]{width:min(440px,calc(100vw - 16px));height:min(560px,calc(100dvh - 16px))}
 .surface[data-view=selecting]{top:4px;left:50%;bottom:auto;right:auto;transform:translateX(-50%);width:min(560px,100vw);height:76px}
-.surface[data-view=composer]{width:min(384px,100vw);height:112px}
+.surface[data-view=composer]{width:min(408px,100vw);height:min(400px,100dvh)}
 .surface[data-view=expanded]{width:min(408px,100vw);height:min(460px,100dvh)}
 .surface[data-view=drawing]{inset:0;width:100vw;height:100dvh}
 .surface[data-view=access]{width:min(368px,100vw);height:188px}

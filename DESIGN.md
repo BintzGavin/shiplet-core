@@ -163,18 +163,25 @@ old grid wallpaper was failing to do.
 
 ### Review overlay
 
-The injected review overlay borrows the compact, contextual structure of modern
-preview-comment tools while keeping Shiplet's Harbor Office palette:
+The trusted review widget uses a compact review desk shared by hosted previews
+and embeds, with the Harbor Office palette and system UI typography:
 
-- One segmented toolbar groups Review, the page comment count, and settings.
-- The desktop comment rail is a continuous thread list, not a stack of cards.
-  Each thread co-locates author, time, ticket, status, replies, and reply input.
-- A selected element opens one anchored editor with target context, reviewer
-  identity, annotation access, cancel, and a labeled Add comment action.
-- Numbered buoy-orange pins connect page locations to tickets; completed pins
-  become neutral rather than disappearing.
-- On small screens, the comment rail becomes a full-screen surface and all
-  primary controls use touch-sized targets.
+- One bordered launcher groups the orange Annotate action with a labeled
+  Comments control and count. Desktop controls are 36px tall; mobile targets
+  are at least 44px.
+- The 380px desktop panel uses a continuous thread list, 13px two-line
+  previews, 14px conversation text, and small orange ticket badges. Teal-tinted
+  selection ties a thread to its contextual page location.
+- The header separates the title and page context from navigation, new
+  comment, options, and close. Filters and pagination have their own rows.
+- The anchored composer gives writing the full width. Attachments expand on
+  demand; Details and Send sit in a distinct footer. Reply fields precede
+  secondary status and provenance actions in both visual and keyboard order.
+- Panels use 12px corners, fine neutral borders, and a defined 8px shadow.
+  Secondary controls stay quiet; orange identifies the primary action.
+- Narrow screens retain viewport-bounded panels, readable input text, and
+  touch-sized controls. The embed surface reserves room for the composer and
+  scrolls expanded content within the available height.
 
 ## 8. Motion
 

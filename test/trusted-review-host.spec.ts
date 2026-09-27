@@ -1385,7 +1385,8 @@ describe("trusted review host boundary", () => {
     expect.soft(pins[0]?.getAttribute("data-active")).toBe("true");
     expect.soft(pins[0]?.getAttribute("aria-current")).toBe("true");
     expect.soft(firstDetails?.children[0]).toBe(firstBody);
-    expect.soft(firstDetails?.children[1]).toBe(firstActions);
+    expect.soft(firstDetails?.children[2]).toBe(firstReplyForm);
+    expect.soft(firstDetails?.children[3]).toBe(firstActions);
     expect.soft(firstReplyForm?.hidden).toBe(false);
     expect.soft(firstReplyInput?.placeholder).toBe("Reply to this thread…");
     expect.soft(firstReplyButton?.textContent).toBe("Send");
@@ -4277,8 +4278,8 @@ describe("trusted review host boundary", () => {
     expect(styles).toContain(":focus-visible");
     expect(styles).toContain("@media (max-width:480px)");
     expect(styles).not.toContain("@media (max-width:640px)");
-    expect(styles).toContain("width:min(312px,calc(100vw - 24px))");
-    expect(styles).toContain("max-height:min(520px,calc(100dvh - 24px))");
+    expect(styles).toContain("width:min(380px,calc(100vw - 24px))");
+    expect(styles).toContain("max-height:min(600px,calc(100dvh - 24px))");
     expect(styles).toContain('data-panel-open="true"');
     expect(styles).toContain("visibility:hidden");
     expect(styles).toContain("overflow-x:hidden");
@@ -4288,7 +4289,7 @@ describe("trusted review host boundary", () => {
     );
     expect(styles).toContain(".shiplet-review-thread-author{grid-column:1/3");
     expect(styles).toContain(
-      ".shiplet-review-thread-summary-comment{grid-column:2/4",
+      ".shiplet-review-thread-summary-comment{grid-column:1/4",
     );
     expect(styles).toContain(".shiplet-review-head{flex-wrap:wrap}");
     expect(styles).toContain(".shiplet-review-heading{flex-basis:100%}");
@@ -4299,13 +4300,13 @@ describe("trusted review host boundary", () => {
       ".shiplet-review-context-disclosure summary{display:flex;align-items:center;min-height:44px}",
     );
     expect(styles).toContain(
-      ".shiplet-review-reply-form textarea{min-width:0;min-height:54px",
+      ".shiplet-review-reply-form textarea{min-width:0;min-height:72px",
     );
     expect(styles).toContain(".shiplet-review-status[data-state=\"error\"]");
     expect(styles).toContain(".shiplet-review-status[hidden]{display:none}");
     expect(styles).toContain('.shiplet-review-list>li[data-active="true"]');
     expect(styles).toContain(
-      '.shiplet-review-list>li[data-active="true"]{border-color:#a7b9c3;box-shadow:inset 2px 0 0 var(--shiplet-accent);background:#f8fbfc}',
+      '.shiplet-review-list>li[data-active="true"]{background:var(--shiplet-tint)}',
     );
     expect(styles).not.toContain(
       "border-color:var(--shiplet-action);box-shadow:inset 3px 0 0 var(--shiplet-action)",
@@ -4319,7 +4320,7 @@ describe("trusted review host boundary", () => {
       'iframe[data-shiplet-artifact-frame][data-shiplet-selecting="true"]{outline:3px solid #1677ff',
     );
     expect(styles).toContain(
-      '.shiplet-review-form[data-annotation-state="compact"]{grid-template-columns:minmax(0,1fr) auto',
+      '.shiplet-review-form[data-annotation-state="compact"]{grid-template-columns:minmax(0,1fr)',
     );
     expect(styles).toContain(
       '.shiplet-review-form[data-annotation-state="expanded"]{gap:10px;max-height:min(520px,calc(100dvh - 16px))',
