@@ -783,7 +783,7 @@ describe("WordPress embed installations", () => {
     expect(retiredBody).not.toContain("presenceToken");
   });
 
-  it("requires exact trusted-host origin and a one-time operation receipt before any embedded mutation", async () => {
+  it("requires exact trusted-host origin and a bound direct submission or one-time operation receipt before embedded mutation", async () => {
     const { organization } = await createOrganization();
     const { project } = await createExternalProject(organization.id);
     const connected = await connectInstallation(project.id);
@@ -845,7 +845,7 @@ describe("WordPress embed installations", () => {
           "Content-Type": "application/json",
         },
         body: JSON.stringify({
-          comment: "Missing operation receipt",
+          comment: "Incomplete direct submission",
           pageUrl: session.pageUrl,
           clientFeedbackId: `client-${crypto.randomUUID()}`,
         }),
@@ -870,9 +870,17 @@ describe("WordPress embed installations", () => {
     for (const options of attemptOptions) {
       attempts.push(await request(feedbackPath, options));
     }
-    for (const attempt of attempts) {
-      expect.soft(attempt.status).toBe(403);
-    }
+    expect.soft(attempts.map((attempt) => attempt.status)).toEqual([
+      403,
+      403,
+      403,
+      400,
+      403,
+    ]);
+    const incompleteSubmission = (await attempts[3].json()) as {
+      error?: string;
+    };
+    expect(incompleteSubmission.error).toBe("review_revision_invalid");
     const after = await (env as Env).DB.prepare(
       `SELECT COUNT(*) AS count FROM review_feedback WHERE project_id = ?`,
     )

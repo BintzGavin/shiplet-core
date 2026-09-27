@@ -23,7 +23,7 @@ export interface TrustedReviewHostInput {
   reviewApiUrl: string;
   confirmationUrl?: string;
   reviewPageUrl?: string;
-  submissionMode?: "confirmation" | "sandbox";
+  submissionMode?: "confirmation" | "sandbox" | "direct";
   allowArtifactDownloads?: boolean;
   frameAncestorOrigins?: string[];
   embeddedSiteOrigin?: string;
@@ -623,7 +623,7 @@ export function createTrustedReviewHostResponse(
     throw new TypeError("Invalid review API URL for draft context");
   })();
   const submissionMode = input.submissionMode ?? "confirmation";
-  if (submissionMode !== "confirmation" && submissionMode !== "sandbox") {
+  if (!["confirmation", "sandbox", "direct"].includes(submissionMode)) {
     throw new TypeError("Invalid review submission mode");
   }
   const frameOrigins = Array.from(
@@ -702,7 +702,8 @@ ${attachmentDrafts}
 	const apiUrl = page.getAttribute("data-review-api-url") || "";
 	const reviewConfirmationUrl = page.getAttribute("data-review-confirm-url") || "";
 	let reviewPageUrl = page.getAttribute("data-review-page-url") || location.href;
-	const reviewSubmissionMode = page.getAttribute("data-review-submission-mode") === "sandbox" ? "sandbox" : "confirmation";
+	const requestedSubmissionMode = page.getAttribute("data-review-submission-mode");
+	const reviewSubmissionMode = ["sandbox", "direct"].includes(requestedSubmissionMode) ? requestedSubmissionMode : "confirmation";
 	const shipletId = page.getAttribute("data-shiplet-id") || "";
 	const revisionId = page.getAttribute("data-revision-id") || "";
 	const avatarPresets = ${avatarPresets};
@@ -1098,8 +1099,8 @@ ${attachmentDrafts}
 	const retryOperationButton = document.createElement("button");
 	retryOperationButton.type = "button";
 	retryOperationButton.className = "shiplet-review-secondary shiplet-review-operation-retry";
-	retryOperationButton.textContent = "Start a new attempt";
-	retryOperationButton.setAttribute("aria-label", "Start a new attempt");
+	retryOperationButton.textContent = "Retry submission";
+	retryOperationButton.setAttribute("aria-label", "Retry submission");
 	retryOperationButton.hidden = true;
 	const mentionDetails = document.createElement("details");
 	mentionDetails.className = "shiplet-review-mentions";
@@ -1147,6 +1148,7 @@ ${attachmentDrafts}
 		onApply: result => {
 			if (!artifactCapture || !result) return;
 			artifactCapture = { ...artifactCapture, screenshotDataUrl: result.screenshotDataUrl, screenshotAnnotations: result.screenshotAnnotations };
+			markTopDraftChanged();
 			fidelityDisclosure.textContent = fidelityText(artifactCapture.fidelity, artifactCapture.screenshotFailureNote);
 			void scheduleDraftSave(true);
 		},
@@ -1403,6 +1405,8 @@ ${attachmentDrafts}
 	let filterPreferences = { ...defaultFilters };
 	let memoryFilterPreferences = null;
 	let composerOperation = null;
+	let composerBusyControlStates = null;
+	let annotationCanvasPointerEvents = null;
 	let topDraftVersion = 1;
 	let topOperationSnapshot = null;
 	let composerMessageKind = "";
@@ -2337,9 +2341,38 @@ ${attachmentDrafts}
 
 	function setComposerBusy(pending) {
 		const busy = Boolean(pending) || Boolean(topOperationSnapshot && ["pending", "unknown"].includes(topOperationSnapshot.state));
-		comment.disabled = busy;
-		mentionSelect.disabled = busy;
-		submit.disabled = busy;
+		if (busy && !composerBusyControlStates) {
+			const controls = [];
+			const seen = new Set();
+			const visit = (node) => {
+				if (!node || seen.has(node)) return;
+				seen.add(node);
+				const tagName = String(node.tagName || "").toUpperCase();
+				if (["INPUT", "TEXTAREA", "SELECT", "BUTTON"].includes(tagName) && node !== cancelComposer) controls.push(node);
+				for (const child of Array.from(node.children || [])) visit(child);
+			};
+			visit(form);
+			visit(drawOnPage);
+			visit(annotationToolbar);
+			composerBusyControlStates = controls.map((control) => [control, Boolean(control.disabled)]);
+			if (annotationCanvas && annotationCanvas.style) {
+				annotationCanvasPointerEvents = annotationCanvas.style.pointerEvents || "";
+				annotationCanvas.style.pointerEvents = "none";
+			}
+		}
+		if (busy && composerBusyControlStates) {
+			for (const [control] of composerBusyControlStates) control.disabled = true;
+			if (drawOnPage) drawOnPage.disabled = true;
+		} else if (!busy && composerBusyControlStates) {
+			for (const [control, wasDisabled] of composerBusyControlStates) control.disabled = wasDisabled;
+			composerBusyControlStates = null;
+			if (annotationCanvas && annotationCanvas.style) annotationCanvas.style.pointerEvents = annotationCanvasPointerEvents || "";
+			annotationCanvasPointerEvents = null;
+		} else if (!busy) {
+			comment.disabled = false;
+			mentionSelect.disabled = false;
+			submit.disabled = false;
+		}
 		cancelComposer.disabled = false;
 	}
 
@@ -2641,7 +2674,7 @@ ${attachmentDrafts}
 	}
 
 	function hasAnnotationDraft() {
-		return Boolean(comment.value.trim() || selectedMentions(mentionSelect).length || artifactCapture || annotationStrokes.length || composerMessageKind === "pending");
+		return Boolean(comment.value.trim() || copyRequestChange.value.trim() || selectedMentions(mentionSelect).length || artifactCapture || annotationStrokes.length || attachmentDrafts.current().length || composerMessageKind === "pending");
 	}
 
 	function closeAnnotationFlow() {
@@ -3266,7 +3299,7 @@ ${attachmentDrafts}
 		retryPage.hidden = !nextPageFailed;
 	}
 
-	async function requestAt(url, method, body) {
+	async function requestAt(url, method, body, serializedBody) {
 		if (!url) throw new Error("Review endpoint unavailable.");
 		if (embeddedSiteOrigin && new URL(url).pathname === "/embed/review/thread") {
 			const actionUrl = new URL(url);
@@ -3278,7 +3311,7 @@ ${attachmentDrafts}
 			return { pendingConfirmation: true };
 		}
 		const options = { method, credentials: "include", headers: { "content-type": "application/json" } };
-		if (body !== undefined) options.body = JSON.stringify(body);
+		if (body !== undefined) options.body = typeof serializedBody === "string" ? serializedBody : JSON.stringify(body);
 		const response = await fetch(url, options);
 		if (!response.ok) {
 			let errorPayload = null;
@@ -3295,8 +3328,8 @@ ${attachmentDrafts}
 		return response.json();
 	}
 
-	async function request(method, body) {
-		return requestAt(method === "GET" ? buildListUrl(null) : apiUrl, method, body);
+	async function request(method, body, serializedBody) {
+		return requestAt(method === "GET" ? buildListUrl(null) : apiUrl, method, body, serializedBody);
 	}
 
 	function operationEndpoint(requestId, cancel = false) {
@@ -3326,18 +3359,125 @@ ${attachmentDrafts}
 		} catch { return ""; }
 	}
 
-	function operationSnapshotFor(effect, feedbackId, draftVersion, immutablePayload) {
-		const requestId = "request_" + crypto.randomUUID().replace(/-/g, "");
+	function selectedCapturePayload(value) {
+		if (!isRecord(value)) return null;
+		return {
+			screenshotDataUrl: value.screenshotDataUrl ?? null,
+			screenshotFailureNote: value.screenshotFailureNote ?? null,
+			screenshotMode: value.screenshotMode,
+			viewport: value.viewport ?? null,
+			coordinates: value.coordinates ?? null,
+			selectedElement: value.selectedElement ?? null,
+			captureContext: value.captureContext ?? null,
+		};
+	}
+
+	function storedCapturePayload(value) {
+		const selected = selectedCapturePayload(value);
+		if (!selected) return null;
+		selected.screenshotDataUrl = null;
+		if (isRecord(value.fidelity)) selected.fidelity = value.fidelity;
+		if (isRecord(value.screenshotAnnotations)) selected.screenshotAnnotations = value.screenshotAnnotations;
+		return selected;
+	}
+
+	function freezeDirectSubmission() {
+		if (!contextReady || !reviewContext || !reviewContextKey) return null;
+		const binding = {
+			actor: JSON.parse(JSON.stringify(reviewContext.actor)),
+			projectId: reviewContext.projectId,
+			revisionId: reviewContext.revisionId,
+			pageUrl: reviewContext.pageUrl,
+			installationId: reviewContext.installationId || "",
+		};
+		if (contextKeyFor(binding) !== reviewContextKey || binding.projectId !== shipletId || binding.revisionId !== revisionId) return null;
+		let capture = null;
+		try { capture = isRecord(artifactCapture) ? JSON.parse(JSON.stringify(artifactCapture)) : null; } catch { return null; }
+		let attachmentSerialization;
+		try { attachmentSerialization = attachmentDrafts.serialize(); } catch { return null; }
+		return {
+			comment: String(comment.value || "").trim(),
+			mentions: selectedMentions(mentionSelect).map((mention) => ({ userId: mention.userId })),
+			capture,
+			copyText: reviewPreferences.copyRequestsEnabled ? String(copyRequestChange.value || "").trim() : "",
+			attachmentSerialization,
+			requestId: "request_" + crypto.randomUUID().replace(/-/g, ""),
+			clientFeedbackId: "client-" + crypto.randomUUID().replace(/-/g, ""),
+			draftVersion: topDraftVersion,
+			contextKey: reviewContextKey,
+			binding,
+		};
+	}
+
+	function directFeedbackPayload(frozen, attachments) {
+		const payload = {
+			comment: frozen.comment,
+			pageUrl: frozen.binding.pageUrl,
+			mentions: frozen.mentions,
+			requestId: frozen.requestId,
+			clientFeedbackId: frozen.clientFeedbackId,
+			reviewRevisionId: frozen.binding.revisionId,
+		};
+		const selectedCapture = selectedCapturePayload(frozen.capture);
+		if (selectedCapture) Object.assign(payload, selectedCapture);
+		const richPayload = {
+			version: 1,
+			screenshotAnnotations: isRecord(frozen.capture) && frozen.capture.screenshotAnnotations ? frozen.capture.screenshotAnnotations : null,
+			captureFidelity: isRecord(frozen.capture) && frozen.capture.fidelity ? frozen.capture.fidelity : null,
+			attachments,
+			copyRequest: frozen.copyText ? {
+				version: 1,
+				changes: [{ id: "copy_request_1", kind: "text", selector: null, previousText: null, proposedText: frozen.copyText }],
+			} : null,
+		};
+		if (richPayload.screenshotAnnotations || richPayload.captureFidelity || richPayload.attachments.length || richPayload.copyRequest) payload.richPayload = richPayload;
+		return payload;
+	}
+
+	function operationSnapshotFor(effect, feedbackId, draftVersion, immutablePayload, bindingOverride) {
 		const payload = JSON.parse(JSON.stringify(immutablePayload));
-		if (effect === "feedback.create" && isRecord(payload)) payload.clientFeedbackId = "client-" + crypto.randomUUID().replace(/-/g, "");
-		return { requestId, effect, feedbackId: feedbackId || null, draftVersion, immutablePayload: payload, state: "pending", submittedOn: new Date().toISOString(), lastCheckedOn: new Date().toISOString(), binding: { actor: reviewContext?.actor || null, projectId: shipletId, revisionId, pageUrl: reviewPageUrl, installationId: reviewContext?.installationId || (embeddedSiteOrigin ? new URL(apiUrl).searchParams.get("installation_id") || "" : "") } };
+		const requestId = isIdentifier(payload?.requestId) ? payload.requestId : "request_" + crypto.randomUUID().replace(/-/g, "");
+		if (effect === "feedback.create" && isRecord(payload)) {
+			payload.requestId = requestId;
+			if (!isIdentifier(payload.clientFeedbackId)) payload.clientFeedbackId = "client-" + crypto.randomUUID().replace(/-/g, "");
+		}
+		const binding = bindingOverride || { actor: reviewContext?.actor || null, projectId: shipletId, revisionId, pageUrl: reviewPageUrl, installationId: reviewContext?.installationId || (embeddedSiteOrigin ? new URL(apiUrl).searchParams.get("installation_id") || "" : "") };
+		const direct = effect === "feedback.create" && isRecord(payload) && Object.prototype.hasOwnProperty.call(payload, "reviewRevisionId");
+		const serializedBody = direct ? JSON.stringify(payload) : "";
+		return { requestId, effect, feedbackId: feedbackId || null, draftVersion, immutablePayload: payload, ...(direct ? { serializedBody } : {}), state: "pending", submittedOn: new Date().toISOString(), lastCheckedOn: new Date().toISOString(), binding };
+	}
+
+	function compactTerminalReceipt(operation) {
+		if (!isRecord(operation) || !["completed", "cancelled"].includes(operation.state)) return operation;
+		const immutablePayload = { requestId: operation.requestId };
+		if (isRecord(operation.immutablePayload) && isIdentifier(operation.immutablePayload.clientFeedbackId)) immutablePayload.clientFeedbackId = operation.immutablePayload.clientFeedbackId;
+		return {
+			requestId: operation.requestId,
+			effect: operation.effect,
+			feedbackId: operation.feedbackId,
+			draftVersion: operation.draftVersion,
+			immutablePayload,
+			state: operation.state,
+			submittedOn: operation.submittedOn,
+			lastCheckedOn: operation.lastCheckedOn,
+		};
 	}
 
 	function saveOperationReceipt(snapshot) {
+		for (let index = 0; index < operationReceipts.length; index += 1) operationReceipts[index] = compactTerminalReceipt(operationReceipts[index]);
 		const persisted = { requestId: snapshot.requestId, effect: snapshot.effect, feedbackId: snapshot.feedbackId, draftVersion: snapshot.draftVersion, immutablePayload: snapshot.immutablePayload, state: snapshot.state, submittedOn: snapshot.submittedOn, lastCheckedOn: snapshot.lastCheckedOn };
+		if (typeof snapshot.serializedBody === "string" && isRecord(snapshot.binding)) {
+			persisted.serializedBody = snapshot.serializedBody;
+			persisted.binding = snapshot.binding;
+		}
+		const selectedPersisted = compactTerminalReceipt(persisted);
 		const index = operationReceipts.findIndex((operation) => operation.requestId === persisted.requestId);
-		if (index >= 0) operationReceipts[index] = persisted; else operationReceipts.push(persisted);
-		while (operationReceipts.length > 64) operationReceipts.shift();
+		if (index >= 0) operationReceipts[index] = selectedPersisted; else operationReceipts.push(selectedPersisted);
+		while (operationReceipts.length > 64) {
+			const terminalIndex = operationReceipts.findIndex((operation) => operation && ["completed", "cancelled"].includes(operation.state));
+			if (terminalIndex < 0) break;
+			operationReceipts.splice(terminalIndex, 1);
+		}
 		return scheduleDraftSave(true);
 	}
 
@@ -3581,6 +3721,33 @@ ${attachmentDrafts}
 		return typeof value === "string" && value.length <= maximum;
 	}
 
+	function validStoredFidelity(value) {
+		if (!isRecord(value) || !hasExactKeys(value, ["version", "kind", "limitations"]) || value.version !== 1 || !["raster-source", "sanitized-dom", "fallback", "none"].includes(value.kind) || !Array.isArray(value.limitations) || value.limitations.length > 5) return false;
+		const allowed = ["images", "canvas", "media", "form-values", "external-styles"];
+		return new Set(value.limitations).size === value.limitations.length && value.limitations.every((item) => allowed.includes(item)) && (value.kind !== "none" || value.limitations.length === 0);
+	}
+
+	function validStoredAnnotations(value) {
+		if (!isRecord(value) || !hasExactKeys(value, ["version", "coordinateSpace", "imageWidth", "imageHeight", "shapes"]) || value.version !== 1 || value.coordinateSpace !== "normalized" || !Number.isInteger(value.imageWidth) || !Number.isInteger(value.imageHeight) || !finiteNumber(value.imageWidth, 1, 8192) || !finiteNumber(value.imageHeight, 1, 8192) || value.imageWidth * value.imageHeight > 16000000 || !Array.isArray(value.shapes) || value.shapes.length > 64) return false;
+		const ids = new Set();
+		let penPoints = 0;
+		const validPoint = (point) => isRecord(point) && hasExactKeys(point, ["x", "y"]) && finiteNumber(point.x, 0, 1) && finiteNumber(point.y, 0, 1);
+		for (const shape of value.shapes) {
+			if (!isRecord(shape) || !isIdentifier(shape.id) || ids.has(shape.id) || typeof shape.color !== "string" || !/^#[0-9A-Fa-f]{6}$/.test(shape.color)) return false;
+			ids.add(shape.id);
+			if (shape.type === "pen") {
+				if (!hasExactKeys(shape, ["id", "type", "color", "strokeWidth", "points"]) || !finiteNumber(shape.strokeWidth, 1, 16) || !Array.isArray(shape.points) || shape.points.length < 2) return false;
+				penPoints += shape.points.length;
+				if (penPoints > 4000 || shape.points.some((point) => !validPoint(point))) return false;
+			} else if (shape.type === "arrow") {
+				if (!hasExactKeys(shape, ["id", "type", "color", "strokeWidth", "start", "end"]) || !finiteNumber(shape.strokeWidth, 1, 16) || !validPoint(shape.start) || !validPoint(shape.end)) return false;
+			} else if (shape.type === "text") {
+				if (!hasExactKeys(shape, ["id", "type", "color", "x", "y", "width", "height", "fontSize", "text"]) || !finiteNumber(shape.x, 0, 1) || !finiteNumber(shape.y, 0, 1) || !finiteNumber(shape.width, Number.MIN_VALUE, 1) || !finiteNumber(shape.height, Number.MIN_VALUE, 1) || shape.x + shape.width > 1 + Number.EPSILON || shape.y + shape.height > 1 + Number.EPSILON || !finiteNumber(shape.fontSize, 12, 64) || !boundedString(shape.text, 1000)) return false;
+			} else return false;
+		}
+		return true;
+	}
+
 	function canonicalOperationPageUrl(value) {
 		try {
 			const url = new URL(String(value || ""));
@@ -3617,12 +3784,16 @@ ${attachmentDrafts}
 
 	function validStoredCapture(value) {
 		if (value === null) return true;
-		if (!isRecord(value) || !hasExactKeys(value, ["screenshotDataUrl", "screenshotFailureNote", "screenshotMode", "viewport", "coordinates", "selectedElement", "captureContext"]) || value.screenshotMode !== "element" || !isRecord(value.viewport) || !isRecord(value.coordinates) || !isRecord(value.selectedElement) || !isRecord(value.captureContext)) return false;
+		const baseKeys = ["screenshotDataUrl", "screenshotFailureNote", "screenshotMode", "viewport", "coordinates", "selectedElement", "captureContext"];
+		if (!isRecord(value) || Object.keys(value).some((key) => !baseKeys.includes(key) && key !== "fidelity" && key !== "screenshotAnnotations") || !baseKeys.every((key) => Object.prototype.hasOwnProperty.call(value, key)) || !["element", "page"].includes(value.screenshotMode) || !isRecord(value.viewport) || !isRecord(value.coordinates) || !isRecord(value.captureContext)) return false;
 		if (value.screenshotDataUrl !== null && (!boundedString(value.screenshotDataUrl, 13400000) || !/^data:image\/(?:png|jpeg|webp);base64,[A-Za-z0-9+/=]+$/.test(value.screenshotDataUrl))) return false;
 		if (value.screenshotFailureNote !== null && !boundedString(value.screenshotFailureNote, 500)) return false;
 		if (!hasExactKeys(value.viewport, ["width", "height", "devicePixelRatio"]) || !finiteNumber(value.viewport.width, 1, 100000) || !finiteNumber(value.viewport.height, 1, 100000) || !finiteNumber(value.viewport.devicePixelRatio, .1, 10)) return false;
 		if (!hasExactKeys(value.coordinates, ["pageX", "pageY", "viewportX", "viewportY"]) || !finiteNumber(value.coordinates.pageX, -10000000, 10000000) || !finiteNumber(value.coordinates.pageY, -10000000, 10000000) || !finiteNumber(value.coordinates.viewportX, -100000, 100000) || !finiteNumber(value.coordinates.viewportY, -100000, 100000)) return false;
-		if (!hasExactKeys(value.selectedElement, ["selector", "tagName", "text"]) || !boundedString(value.selectedElement.selector, 1200) || !value.selectedElement.selector || !boundedString(value.selectedElement.tagName, 64) || !/^[A-Z][A-Z0-9-]{0,63}$/.test(value.selectedElement.tagName) || !boundedString(value.selectedElement.text, 500)) return false;
+		if (value.screenshotMode === "element" && (!isRecord(value.selectedElement) || !hasExactKeys(value.selectedElement, ["selector", "tagName", "text"]) || !boundedString(value.selectedElement.selector, 1200) || !value.selectedElement.selector || !boundedString(value.selectedElement.tagName, 64) || !/^[A-Z][A-Z0-9-]{0,63}$/.test(value.selectedElement.tagName) || !boundedString(value.selectedElement.text, 500))) return false;
+		if (value.screenshotMode === "page" && (value.selectedElement !== null || !validStoredFidelity(value.fidelity))) return false;
+		if (value.fidelity !== undefined && !validStoredFidelity(value.fidelity)) return false;
+		if (value.screenshotAnnotations !== undefined && !validStoredAnnotations(value.screenshotAnnotations)) return false;
 		return hasExactKeys(value.captureContext, ["documentWidth", "documentHeight", "scrollX", "scrollY"]) && finiteNumber(value.captureContext.documentWidth, 1, 100000) && finiteNumber(value.captureContext.documentHeight, 1, 100000) && finiteNumber(value.captureContext.scrollX, -10000000, 10000000) && finiteNumber(value.captureContext.scrollY, -10000000, 10000000);
 	}
 
@@ -3633,13 +3804,24 @@ ${attachmentDrafts}
 			if (!isIdentifier(id) || !isRecord(draft) || !hasExactKeys(draft, ["version", "text", "mentionIds", "desiredStatus"]) || draft.version !== 1 || !boundedString(draft.text, 5000) || !Array.isArray(draft.mentionIds) || draft.mentionIds.length > 20 || !["New", "In Progress", "Blocked", "Staging", "Done", "Dropped"].includes(draft.desiredStatus)) return null;
 			if (draft.mentionIds.some((mention) => !isIdentifier(mention))) return null;
 		}
-		if (!hasExactKeys(value.topDraft, ["version", "text", "mentionIds", "target", "capture", "screenshotDataUrl", "annotationStrokes", "mode"]) || value.topDraft.version !== 1 || !boundedString(value.topDraft.text, 5000) || !Array.isArray(value.topDraft.mentionIds) || value.topDraft.mentionIds.length > 20 || value.topDraft.mentionIds.some((mention) => !isIdentifier(mention)) || (value.topDraft.target !== null && (!isRecord(value.topDraft.target) || !hasExactKeys(value.topDraft.target, ["selector", "tagName", "text"]))) || !validStoredCapture(value.topDraft.capture) || (value.topDraft.screenshotDataUrl !== null && (!boundedString(value.topDraft.screenshotDataUrl, 13400000) || !/^data:image\/(?:png|jpeg|webp);base64,[A-Za-z0-9+/=]+$/.test(value.topDraft.screenshotDataUrl))) || !Array.isArray(value.topDraft.annotationStrokes) || value.topDraft.annotationStrokes.length > 256 || value.topDraft.annotationStrokes.some((stroke) => !Array.isArray(stroke) || stroke.length > 512 || stroke.some((point) => !isRecord(point) || !hasExactKeys(point, ["pageX", "pageY"]) || !finiteNumber(point.pageX, -10000000, 10000000) || !finiteNumber(point.pageY, -10000000, 10000000))) || !["closed", "composer", "expanded"].includes(value.topDraft.mode)) return null;
+		const oldTopDraftKeys = ["version", "text", "mentionIds", "target", "capture", "screenshotDataUrl", "annotationStrokes", "mode"];
+		const newTopDraftKeys = [...oldTopDraftKeys, "draftVersion", "copyRequestText"];
+		if (!hasExactKeys(value.topDraft, oldTopDraftKeys) && !hasExactKeys(value.topDraft, newTopDraftKeys)) return null;
+		if (value.topDraft.version !== 1 || !boundedString(value.topDraft.text, 5000) || !Array.isArray(value.topDraft.mentionIds) || value.topDraft.mentionIds.length > 20 || value.topDraft.mentionIds.some((mention) => !isIdentifier(mention)) || (value.topDraft.target !== null && (!isRecord(value.topDraft.target) || !hasExactKeys(value.topDraft.target, ["selector", "tagName", "text"]))) || !validStoredCapture(value.topDraft.capture) || (value.topDraft.screenshotDataUrl !== null && (!boundedString(value.topDraft.screenshotDataUrl, 13400000) || !/^data:image\/(?:png|jpeg|webp);base64,[A-Za-z0-9+/=]+$/.test(value.topDraft.screenshotDataUrl))) || !Array.isArray(value.topDraft.annotationStrokes) || value.topDraft.annotationStrokes.length > 256 || value.topDraft.annotationStrokes.some((stroke) => !Array.isArray(stroke) || stroke.length > 512 || stroke.some((point) => !isRecord(point) || !hasExactKeys(point, ["pageX", "pageY"]) || !finiteNumber(point.pageX, -10000000, 10000000) || !finiteNumber(point.pageY, -10000000, 10000000))) || !["closed", "composer", "expanded"].includes(value.topDraft.mode)) return null;
+		if (value.topDraft.draftVersion !== undefined && (!Number.isInteger(value.topDraft.draftVersion) || value.topDraft.draftVersion < 1)) return null;
+		if (value.topDraft.copyRequestText !== undefined && !boundedString(value.topDraft.copyRequestText, 4000)) return null;
 		for (const operation of value.operations) {
-			if (!isRecord(operation) || !hasExactKeys(operation, ["requestId", "effect", "feedbackId", "draftVersion", "immutablePayload", "state", "submittedOn", "lastCheckedOn"]) || !isIdentifier(operation.requestId) || !boundedString(operation.effect, 64) || (operation.feedbackId !== null && !isIdentifier(operation.feedbackId)) || !Number.isInteger(operation.draftVersion) || operation.draftVersion < 1 || !isRecord(operation.immutablePayload) || !["pending", "completed", "expired", "failed", "unknown", "cancelled"].includes(operation.state) || !boundedString(operation.submittedOn, 64) || !boundedString(operation.lastCheckedOn, 64)) return null;
+			const legacyKeys = ["requestId", "effect", "feedbackId", "draftVersion", "immutablePayload", "state", "submittedOn", "lastCheckedOn"];
+			const directKeys = [...legacyKeys, "serializedBody", "binding"];
+			if (!isRecord(operation) || (!hasExactKeys(operation, legacyKeys) && !hasExactKeys(operation, directKeys)) || !isIdentifier(operation.requestId) || !boundedString(operation.effect, 64) || (operation.feedbackId !== null && !isIdentifier(operation.feedbackId)) || !Number.isInteger(operation.draftVersion) || operation.draftVersion < 1 || !isRecord(operation.immutablePayload) || !["pending", "completed", "expired", "failed", "unknown", "cancelled"].includes(operation.state) || !boundedString(operation.submittedOn, 64) || !boundedString(operation.lastCheckedOn, 64)) return null;
+			if (hasExactKeys(operation, directKeys)) {
+				if (!boundedString(operation.serializedBody, 80000000) || !isRecord(operation.binding) || !hasExactKeys(operation.binding, ["actor", "projectId", "revisionId", "pageUrl", "installationId"]) || !isRecord(operation.binding.actor) || !isIdentifier(operation.binding.actor.id) || !boundedString(operation.binding.actor.kind, 32) || !isIdentifier(operation.binding.projectId) || !isIdentifier(operation.binding.revisionId) || !boundedString(operation.binding.pageUrl, 4096) || !boundedString(operation.binding.installationId, 256) || contextKeyFor(operation.binding) !== value.key) return null;
+				if (operation.immutablePayload.requestId !== operation.requestId || !isIdentifier(operation.immutablePayload.clientFeedbackId) || operation.immutablePayload.clientFeedbackId === operation.requestId || operation.immutablePayload.reviewRevisionId !== operation.binding.revisionId || JSON.stringify(operation.immutablePayload) !== operation.serializedBody) return null;
+			}
 		}
 		let serialized = "";
 		try { serialized = JSON.stringify(value); } catch { return null; }
-		if (new TextEncoder().encode(serialized).byteLength > 20971520) return null;
+		if (new TextEncoder().encode(serialized).byteLength > 83886080) return null;
 		return value;
 	}
 
@@ -3663,6 +3845,8 @@ ${attachmentDrafts}
 		for (const option of Array.from(mentionSelect.options || [])) option.selected = false;
 		setComposerMessage("", "");
 		clearArtifactCapture();
+		try { attachmentDrafts.clear(); } catch {}
+		copyRequestChange.value = "";
 		annotationStrokes = [];
 		for (const state of threadStates.values()) { state.text = ""; state.mentions = []; }
 	}
@@ -3675,7 +3859,7 @@ ${attachmentDrafts}
 			if (!id || !isIdentifier(id) || (!state.text && !state.mentions.length)) continue;
 			threadDrafts[id] = { version: 1, text: String(state.text || "").slice(0, 5000), mentionIds: state.mentions.slice(0, 20).map((mention) => mention.userId), desiredStatus: String(state.confirmedStatus || "New").slice(0, 40) };
 		}
-		const topDraft = { version: 1, text: String(comment.value || "").slice(0, 5000), mentionIds: selectedMentions(mentionSelect).slice(0, 20).map((mention) => mention.userId), target: artifactCapture && artifactCapture.selectedElement ? artifactCapture.selectedElement : null, capture: artifactCapture ? { ...artifactCapture, screenshotDataUrl: null } : null, screenshotDataUrl: artifactCapture?.screenshotDataUrl || null, annotationStrokes: annotationStrokes.slice(0, 256), mode: annotationExpanded ? "expanded" : annotationActive ? "composer" : "closed" };
+		const topDraft = { version: 1, draftVersion: topDraftVersion, text: String(comment.value || "").slice(0, 5000), copyRequestText: String(copyRequestChange.value || "").slice(0, 4000), mentionIds: selectedMentions(mentionSelect).slice(0, 20).map((mention) => mention.userId), target: artifactCapture && artifactCapture.selectedElement ? artifactCapture.selectedElement : null, capture: artifactCapture ? storedCapturePayload(artifactCapture) : null, screenshotDataUrl: artifactCapture?.screenshotDataUrl || null, annotationStrokes: annotationStrokes.slice(0, 256), mode: annotationExpanded ? "expanded" : annotationActive ? "composer" : "closed" };
 		const operations = [];
 		for (const operation of operationReceipts.slice(-64)) operations.push(operation);
 		return { version: 1, key: reviewContextKey, context: { actorKind: reviewContext.actor.kind, actorId: reviewContext.actor.id, projectId: reviewContext.projectId, revisionId: reviewContext.revisionId, pageUrl: reviewContext.pageUrl, installationId: reviewContext.installationId || "" }, updatedOn: new Date().toISOString(), overlayVisible, topDraft, threadDrafts, operations };
@@ -3683,9 +3867,9 @@ ${attachmentDrafts}
 
 	function draftRecordNeedsRetention(record) {
 		if (!record || !isRecord(record.topDraft) || !isRecord(record.threadDrafts) || !Array.isArray(record.operations)) return true;
-		if (record.topDraft.text || record.topDraft.mentionIds?.length || record.topDraft.capture || record.topDraft.screenshotDataUrl || record.topDraft.annotationStrokes?.length) return true;
+		if (record.topDraft.text || record.topDraft.copyRequestText || record.topDraft.mentionIds?.length || record.topDraft.capture || record.topDraft.screenshotDataUrl || record.topDraft.annotationStrokes?.length) return true;
 		if (Object.keys(record.threadDrafts).length > 0) return true;
-		return record.operations.some((operation) => operation && ["pending", "unknown"].includes(operation.state));
+		return record.operations.some((operation) => operation && ["pending", "unknown", "failed"].includes(operation.state));
 	}
 
 	function scheduleDraftSave(immediate) {
@@ -3742,13 +3926,24 @@ ${attachmentDrafts}
 					overlayVisible = record.overlayVisible;
 					const top = record.topDraft;
 					comment.value = top.text;
+					copyRequestChange.value = top.copyRequestText || "";
+					const latest = record.operations[record.operations.length - 1];
+					topDraftVersion = Number.isInteger(top.draftVersion) ? top.draftVersion : Math.max(1, latest?.draftVersion || 1);
 					for (const option of Array.from(mentionSelect.options || [])) option.selected = top.mentionIds.includes(option.value);
 					if (top.capture) { artifactCapture = { ...top.capture, screenshotDataUrl: top.screenshotDataUrl }; artifactCaptureRequestId = ""; artifactScreenshotBase = top.screenshotDataUrl || null; selectedTarget.textContent = top.capture.selectedElement?.tagName + (top.capture.selectedElement?.text ? " · " + top.capture.selectedElement.text : ""); clearTarget.hidden = false; drawOnScreenshot.hidden = !top.screenshotDataUrl; quickDraw.hidden = !top.screenshotDataUrl; }
 					annotationStrokes = Array.isArray(top.annotationStrokes) ? top.annotationStrokes : [];
 					for (const [id, value] of Object.entries(record.threadDrafts)) { const state = threadState(id, { status: value.desiredStatus }); state.text = value.text; state.mentions = value.mentionIds.map((userId) => ({ userId })); }
 					for (const operation of record.operations) operationReceipts.push(operation);
-					const latest = record.operations[record.operations.length - 1];
-					if (latest && ["pending", "unknown", "expired", "failed"].includes(latest.state)) topOperationSnapshot = { ...latest, binding: { actor: reviewContext.actor, projectId: reviewContext.projectId, revisionId: reviewContext.revisionId, pageUrl: reviewContext.pageUrl, installationId: reviewContext.installationId || "" } };
+					if (latest && ["pending", "unknown", "expired", "failed"].includes(latest.state)) {
+						const directReceipt = typeof latest.serializedBody === "string" && isRecord(latest.binding);
+						const restoredState = directReceipt && ["pending", "unknown"].includes(latest.state) ? "failed" : latest.state;
+						topOperationSnapshot = { ...latest, state: restoredState, binding: latest.binding || { actor: reviewContext.actor, projectId: reviewContext.projectId, revisionId: reviewContext.revisionId, pageUrl: reviewContext.pageUrl, installationId: reviewContext.installationId || "" } };
+						if (directReceipt && restoredState !== latest.state) {
+							operationReceipts[operationReceipts.length - 1] = topOperationSnapshot;
+							void saveOperationReceipt(topOperationSnapshot);
+						}
+						if (directReceipt) setComposerMessage("This submission may have reached the server. Retry to safely resend the same saved request.", "error");
+					}
 					updateOverlayUi();
 					resolve(true);
 				};
@@ -3856,6 +4051,7 @@ ${attachmentDrafts}
 	}
 
 	function clearArtifactCapture() {
+		const hadCapture = Boolean(artifactCapture);
 		if (artifactPort && artifactCaptureRequestId) {
 			try { artifactPort.postMessage({ protocol: "shiplet.artifact.capture.command.v1", type: "release", channelNonce: artifactChannelNonce, shipletId, revisionId, requestId: artifactCaptureRequestId }); } catch {}
 		}
@@ -3878,6 +4074,7 @@ ${attachmentDrafts}
 		quickDraw.hidden = true;
 		selectTarget.textContent = "Select element";
 		annotationTargetPin.hidden = true;
+		if (hadCapture) markTopDraftChanged();
 	}
 
 	function configureAnnotationContext(context, scale) {
@@ -4016,6 +4213,7 @@ ${attachmentDrafts}
 				if (!event || event.isTrusted !== true || !annotationEditing) return;
 				done.disabled = true;
 				const applied = await applyAnnotations();
+				if (applied) markTopDraftChanged();
 				annotationDrawing = false;
 				annotationEditing = false;
 				annotationLayer.setAttribute("data-drawing", "false");
@@ -4409,6 +4607,7 @@ ${attachmentDrafts}
 				pendingPageCaptureRequestId = "";
 				pendingPageCapturePageUrl = "";
 				artifactCapture = { ...pageCaptureValue, coordinates: { pageX: pageCaptureValue.captureContext.scrollX, pageY: pageCaptureValue.captureContext.scrollY, viewportX: 0, viewportY: 0 }, selectedElement: null };
+				markTopDraftChanged();
 				artifactCaptureRequestId = "";
 				artifactScreenshotBase = pageCaptureValue.screenshotDataUrl;
 				selectedTarget.textContent = "Page · " + reviewPath;
@@ -4520,6 +4719,7 @@ ${attachmentDrafts}
 			if (!captureValue) return;
 			clearAnnotationMarkup();
 			artifactCapture = captureValue;
+			markTopDraftChanged();
 			artifactCaptureRequestId = pendingArtifactRequestId;
 			artifactAnchor = null;
 			artifactScreenshotBase = captureValue.screenshotDataUrl;
@@ -4593,83 +4793,189 @@ ${attachmentDrafts}
 		reloadWidget();
 	});
 
-	async function submitReviewFeedback() {
-		const value = comment.value.trim();
-		if (!value || composerOperation || !contextReady || (topOperationSnapshot && ["pending", "unknown", "failed"].includes(topOperationSnapshot.state))) return;
-		if (draftContextUrl) {
-			const previousContextKey = reviewContextKey;
-			await fetchFreshReviewContext("submit");
-			if (!contextReady || reviewContextKey !== previousContextKey) { setComposerMessage("Review identity is unavailable. Use Refresh after access is restored.", "error"); return; }
-		}
-		const token = crypto.randomUUID();
-		const submittedMentions = selectedMentions(mentionSelect).map((mention) => ({ userId: mention.userId }));
-		const submittedCapture = artifactCapture;
-		composerOperation = { token, value };
-		setComposerBusy(true);
-		if (reviewSubmissionMode === "sandbox") {
-			setStatus("Adding feedback to this sandbox…", "loading");
-			setComposerMessage("Adding this feedback…", "pending");
-			try {
-				const payload = {
-					comment: value,
-					pageUrl: reviewPageUrl,
-					clientFeedbackId: "client-" + Date.now().toString(36) + "-" + crypto.randomUUID().replace(/-/g, "").slice(0, 12),
-					mentions: submittedMentions,
-					...(submittedCapture || {}),
-				};
-				const response = await request("POST", payload);
-				if (!composerOperation || composerOperation.token !== token) return;
-				composerOperation = null;
-				discardAnnotationDraft();
-				if (isRecord(response) && isRecord(response.feedback)) {
-					render([response.feedback, ...renderedItems.filter((entry) => !isRecord(entry) || entry.id !== response.feedback.id)]);
-				} else {
-					await refresh();
+	async function submitReviewFeedback(retry = false) {
+		if (reviewSubmissionMode !== "direct") {
+			const value = comment.value.trim();
+			if (!value || composerOperation || !contextReady || (topOperationSnapshot && ["pending", "unknown", "failed"].includes(topOperationSnapshot.state))) return;
+			if (draftContextUrl) {
+				const previousContextKey = reviewContextKey;
+				await fetchFreshReviewContext("submit");
+				if (!contextReady || reviewContextKey !== previousContextKey) { setComposerMessage("Review identity is unavailable. Use Refresh after access is restored.", "error"); return; }
+			}
+			const token = crypto.randomUUID();
+			const submittedMentions = selectedMentions(mentionSelect).map((mention) => ({ userId: mention.userId }));
+			const submittedCapture = artifactCapture;
+			composerOperation = { token, value };
+			setComposerBusy(true);
+			if (reviewSubmissionMode === "sandbox") {
+				setStatus("Adding feedback to this sandbox…", "loading");
+				setComposerMessage("Adding this feedback…", "pending");
+				try {
+					const payload = {
+						comment: value,
+						pageUrl: reviewPageUrl,
+						clientFeedbackId: "client-" + Date.now().toString(36) + "-" + crypto.randomUUID().replace(/-/g, "").slice(0, 12),
+						mentions: submittedMentions,
+						...(submittedCapture || {}),
+					};
+					const response = await request("POST", payload);
+					if (!composerOperation || composerOperation.token !== token) return;
+					composerOperation = null;
+					discardAnnotationDraft();
+					if (isRecord(response) && isRecord(response.feedback)) {
+						render([response.feedback, ...renderedItems.filter((entry) => !isRecord(entry) || entry.id !== response.feedback.id)]);
+					} else {
+						await refresh();
+					}
+					setStatus("Feedback added to this sandbox.", "ready");
+					showComposer(false);
+					if (typeof window.matchMedia === "function" && window.matchMedia("(max-width: 640px)").matches) setPanelOpen(false);
+				} catch {
+					if (!composerOperation || composerOperation.token !== token) return;
+					composerOperation = null;
+					setStatus("Sandbox feedback could not be added. Try again.", "error");
+					setComposerMessage("Sandbox feedback could not be added. Try again.", "error");
+				} finally {
+					if (!composerOperation || composerOperation.token === token) setComposerBusy(false);
 				}
-				setStatus("Feedback added to this sandbox.", "ready");
+				return;
+			}
+			setStatus("Opening secure confirmation…", "loading");
+			setComposerMessage("Opening secure confirmation…", "pending");
+			const snapshot = topOperationSnapshot && ["expired"].includes(topOperationSnapshot.state) ? topOperationSnapshot : operationSnapshotFor("feedback.create", null, topDraftVersion, { comment: value, mentions: submittedMentions, capture: submittedCapture });
+			snapshot.immutablePayload = snapshot.immutablePayload || { comment: value, mentions: submittedMentions, capture: submittedCapture };
+			if (!topOperationSnapshot || topOperationSnapshot.requestId !== snapshot.requestId) { topOperationSnapshot = snapshot; await saveOperationReceipt(snapshot); }
+			const submitted = submitTopLevelConfirmation({
+				requestId: snapshot.requestId,
+				operation: "feedback.create",
+				payload: { comment: String(snapshot.immutablePayload.comment || value) },
+			}, submittedCapture, submittedMentions, snapshot.immutablePayload.clientFeedbackId);
+			if (!composerOperation || composerOperation.token !== token) return;
+			composerOperation = null;
+			setComposerBusy(false);
+			if (!submitted) {
+				snapshot.state = "failed";
+				await saveOperationReceipt(snapshot);
+				topOperationSnapshot = snapshot;
+				setStatus("Secure confirmation could not be opened. Try again.", "error");
+				setComposerMessage("Secure confirmation could not be opened. Try again.", "error");
+				return;
+			}
+			setStatus("Awaiting secure confirmation. This draft has been retained.", "ready");
+			showOperationState("pending");
+			void pollOperation(snapshot);
+			return;
+		}
+
+		const retrySnapshot = retry && topOperationSnapshot && topOperationSnapshot.state === "failed" ? topOperationSnapshot : null;
+		let frozen = null;
+		if (retrySnapshot) {
+			if (typeof retrySnapshot.serializedBody !== "string" || !retrySnapshot.binding) {
+				setComposerMessage("This saved submission needs review. Your draft is retained.", "error");
+				return;
+			}
+		} else {
+			frozen = freezeDirectSubmission();
+			if (!frozen) {
+				setComposerMessage("Review identity is unavailable. Use Refresh after access is restored.", "error");
+				return;
+			}
+			if (!frozen.comment) return;
+		}
+		if (composerOperation || (topOperationSnapshot && ["pending", "unknown"].includes(topOperationSnapshot.state)) || (!retrySnapshot && topOperationSnapshot && topOperationSnapshot.state === "failed")) return;
+		const token = crypto.randomUUID();
+		const submittedDraftVersion = topDraftVersion;
+		const submittedContextKey = retrySnapshot
+			? contextKeyFor(retrySnapshot.binding)
+			: frozen.contextKey;
+		const submittedRequestId = retrySnapshot?.requestId || frozen?.requestId || "";
+		let snapshot = retrySnapshot;
+		composerOperation = { token, draftVersion: submittedDraftVersion, contextKey: submittedContextKey, requestId: submittedRequestId };
+		setComposerBusy(true);
+		setStatus("Saving feedback…", "loading");
+		setComposerMessage("Saving feedback…", "pending");
+		const sameOperation = () =>
+			Boolean(composerOperation && composerOperation.token === token) &&
+			Boolean(submittedContextKey && reviewContextKey === submittedContextKey) &&
+			Boolean(contextReady && reviewContext && contextKeyFor(reviewContext) === submittedContextKey) &&
+			(!snapshot || Boolean(topOperationSnapshot && topOperationSnapshot.requestId === snapshot.requestId));
+		try {
+			if (draftContextUrl) {
+				await fetchFreshReviewContext("submit");
+				if (!sameOperation()) throw new Error("Review identity is unavailable. Use Refresh after access is restored.");
+			}
+			if (!sameOperation()) throw new Error("Review identity is unavailable. Use Refresh after access is restored.");
+			if (!snapshot) {
+				const attachments = await frozen.attachmentSerialization;
+				if (!sameOperation()) return;
+				const payload = directFeedbackPayload(frozen, attachments);
+				snapshot = operationSnapshotFor("feedback.create", null, frozen.draftVersion, payload, frozen.binding);
+				topOperationSnapshot = snapshot;
+				const persisted = await saveOperationReceipt(snapshot);
+				if (!sameOperation()) return;
+				if (!persisted) throw new Error("The submission could not be stored for safe retry.");
+			} else {
+				snapshot.state = "pending";
+				topOperationSnapshot = snapshot;
+				const persisted = await saveOperationReceipt(snapshot);
+				if (!sameOperation()) return;
+				if (!persisted) throw new Error("The submission could not be stored for safe retry.");
+			}
+			const response = await request("POST", snapshot.immutablePayload, snapshot.serializedBody);
+			if (!sameOperation()) return;
+			if (!isRecord(response) || !isRecord(response.feedback) || !isIdentifier(response.feedback.id)) {
+				throw new Error("The server response did not include a saved feedback record.");
+			}
+			snapshot.state = "completed";
+			const persisted = await saveOperationReceipt(snapshot);
+			if (!sameOperation()) return;
+			if (!persisted) throw new Error("Feedback was saved, but its recovery receipt could not be updated.");
+			topOperationSnapshot = snapshot;
+			composerOperation = null;
+			setComposerBusy(false);
+			if (topDraftVersion === snapshot.draftVersion) {
+				clearEditableDraftOnly();
+				topDraftVersion += 1;
+				setStatus("Feedback sent", "ready");
+				setComposerMessage("Feedback sent", "ready");
 				showComposer(false);
 				if (typeof window.matchMedia === "function" && window.matchMedia("(max-width: 640px)").matches) setPanelOpen(false);
-			} catch {
-				if (!composerOperation || composerOperation.token !== token) return;
-				composerOperation = null;
-				setStatus("Sandbox feedback could not be added. Try again.", "error");
-				setComposerMessage("Sandbox feedback could not be added. Try again.", "error");
-			} finally {
-				if (!composerOperation || composerOperation.token === token) setComposerBusy(false);
+			} else {
+				setStatus("Feedback sent. A newer draft remains open.", "ready");
+				setComposerMessage("Feedback sent. Your newer draft is still here.", "ready");
 			}
-			return;
+			render([response.feedback, ...renderedItems.filter((entry) => !isRecord(entry) || entry.id !== response.feedback.id)]);
+		} catch (error) {
+			if (sameOperation()) {
+				if (snapshot) {
+					snapshot.state = "failed";
+					topOperationSnapshot = snapshot;
+					await saveOperationReceipt(snapshot);
+					if (!sameOperation()) return;
+				}
+				composerOperation = null;
+				setComposerBusy(false);
+				const status = Number(error && error.status);
+				const message = status === 401 || status === 403 ? "Review access changed. Your draft is retained." : status === 409 ? "This review changed. Your draft is retained; refresh before retrying." : "Feedback could not be saved. Retry the same submission.";
+				setStatus(message, "error");
+				setComposerMessage(message, "error");
+			}
+		} finally {
+			if (composerOperation && composerOperation.token === token) {
+				composerOperation = null;
+				setComposerBusy(false);
+			}
 		}
-		setStatus("Opening secure confirmation…", "loading");
-		setComposerMessage("Opening secure confirmation…", "pending");
-		const snapshot = topOperationSnapshot && ["expired"].includes(topOperationSnapshot.state) ? topOperationSnapshot : operationSnapshotFor("feedback.create", null, topDraftVersion, { comment: value, mentions: submittedMentions, capture: submittedCapture });
-		snapshot.immutablePayload = snapshot.immutablePayload || { comment: value, mentions: submittedMentions, capture: submittedCapture };
-		if (!topOperationSnapshot || topOperationSnapshot.requestId !== snapshot.requestId) { topOperationSnapshot = snapshot; await saveOperationReceipt(snapshot); }
-		const submitted = submitTopLevelConfirmation({
-			requestId: snapshot.requestId,
-			operation: "feedback.create",
-			payload: { comment: String(snapshot.immutablePayload.comment || value) },
-		}, submittedCapture, submittedMentions, snapshot.immutablePayload.clientFeedbackId);
-		if (!composerOperation || composerOperation.token !== token) return;
-		composerOperation = null;
-		setComposerBusy(false);
-		if (!submitted) {
-			snapshot.state = "failed";
-			await saveOperationReceipt(snapshot);
-			topOperationSnapshot = snapshot;
-			setStatus("Secure confirmation could not be opened. Try again.", "error");
-			setComposerMessage("Secure confirmation could not be opened. Try again.", "error");
-			return;
-		}
-		setStatus("Awaiting secure confirmation. This draft has been retained.", "ready");
-		showOperationState("pending");
-		void pollOperation(snapshot);
 	}
-
 	form.addEventListener("submit", async (event) => {
 		event.preventDefault();
 		if (!event || event.isTrusted !== true) return;
 		await submitReviewFeedback();
 	});
+	function markTopDraftChanged() {
+		topDraftVersion += 1;
+		void scheduleDraftSave(false);
+	}
 	comment.addEventListener("compositionstart", () => { mentionComposing = true; mentionSearchGeneration += 1; });
 	comment.addEventListener("compositionend", () => { mentionComposing = false; void searchMentions(); });
 	comment.addEventListener("input", () => { topDraftVersion += 1; void scheduleDraftSave(false); if (!mentionComposing) void searchMentions(); });
@@ -4681,8 +4987,19 @@ ${attachmentDrafts}
 	});
 	mentionListbox.addEventListener("click", event => { if (!event || event.isTrusted !== true || !(event.target instanceof Element)) return; const option = event.target.closest("button[role=option]"); if (!option) return; chooseMention(mentionSearchResults.find(user => user.id === option.dataset.userId)); });
 	mentionSelect.addEventListener("change", () => { topDraftVersion += 1; void scheduleDraftSave(false); });
-	window.addEventListener("focus", () => { void (async () => { await fetchFreshReviewContext("focus"); if (topOperationSnapshot && ["pending", "unknown"].includes(topOperationSnapshot.state)) void pollOperation(topOperationSnapshot); })(); });
-	window.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible" || document.visibilityState === undefined) { void (async () => { await fetchFreshReviewContext("visibility"); if (topOperationSnapshot && ["pending", "unknown"].includes(topOperationSnapshot.state)) void pollOperation(topOperationSnapshot); })(); if (artifactChannelConnected) startArtifactLifecycle(); } else void scheduleDraftSave(true); });
+	copyRequestChange.addEventListener("input", markTopDraftChanged);
+	richTools.addEventListener("change", event => {
+		if (event && event.target && event.target.matches && event.target.matches(".shiplet-attachment-input")) markTopDraftChanged();
+	});
+	richTools.addEventListener("click", event => {
+		if (!event || !(event.target instanceof Element)) return;
+		if (event.target.closest(".shiplet-attachment-clear, [data-remove-attachment]")) markTopDraftChanged();
+	});
+	richTools.addEventListener("drop", event => {
+		if (event && event.target instanceof Element && event.target.closest(".shiplet-attachment-drop")) markTopDraftChanged();
+	});
+	window.addEventListener("focus", () => { void fetchFreshReviewContext("focus"); });
+	window.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible" || document.visibilityState === undefined) { void fetchFreshReviewContext("visibility"); if (artifactChannelConnected) startArtifactLifecycle(); } else void scheduleDraftSave(true); });
 	window.addEventListener("pagehide", () => { void scheduleDraftSave(true); });
 
 	function returnToEmbedSignIn() {
@@ -4901,12 +5218,13 @@ ${attachmentDrafts}
 	dockSelect.addEventListener("change", event => { if (event && event.isTrusted === true && ["top-left", "top-right", "bottom-left", "bottom-right"].includes(dockSelect.value)) { reviewPreferences.dock = dockSelect.value; persistReviewPreferences(); } });
 	launchSelect.addEventListener("change", event => { if (event && event.isTrusted === true && ["manual", "open-comments"].includes(launchSelect.value)) { reviewPreferences.launch = launchSelect.value; persistReviewPreferences(); } });
 	motionSelect.addEventListener("change", event => { if (event && event.isTrusted === true && ["system", "reduced"].includes(motionSelect.value)) { reviewPreferences.motion = motionSelect.value; persistReviewPreferences(); } });
-	copyRequestsToggle.addEventListener("change", event => { if (event && event.isTrusted === true) { reviewPreferences.copyRequestsEnabled = Boolean(copyRequestsToggle.checked); persistReviewPreferences(); } });
+	copyRequestsToggle.addEventListener("change", event => { if (event && event.isTrusted === true) { reviewPreferences.copyRequestsEnabled = Boolean(copyRequestsToggle.checked); persistReviewPreferences(); markTopDraftChanged(); } });
 	copyHiddenReview.addEventListener("click", event => { if (event && event.isTrusted === true) void copyCleanReviewLink("review"); });
 	copyHiddenComments.addEventListener("click", event => { if (event && event.isTrusted === true) void copyCleanReviewLink("comments"); });
 	restoreVisibility.addEventListener("click", event => { if (!event || event.isTrusted !== true) return; launcherDock.hidden = false; restoreVisibility.hidden = true; setOverlayVisible(reviewPreferences.overlaysVisible); });
 	cancelComposer.addEventListener("click", async (event) => {
 		if (!event || event.isTrusted !== true) return;
+		if (composerOperation) { await scheduleDraftSave(true); return; }
 		if (topOperationSnapshot && ["pending", "unknown"].includes(topOperationSnapshot.state)) {
 			const cancelled = await cancelPendingOperation(topOperationSnapshot);
 			if (!cancelled) return;
@@ -4916,12 +5234,7 @@ ${attachmentDrafts}
 	cancelAnnotationMode.addEventListener("click", (event) => { if (event && event.isTrusted === true) cancelAnnotationFlow(); });
 	retryOperationButton.addEventListener("click", async (event) => {
 		if (!event || event.isTrusted !== true || !topOperationSnapshot || topOperationSnapshot.state !== "failed") return;
-		await fetchFreshReviewContext("retry");
-		if (!contextReady) { setComposerMessage("Review identity is unavailable. Use Refresh after access is restored.", "error"); return; }
-		topOperationSnapshot = null;
-		setComposerBusy(false);
-		setComposerMessage("", "");
-		void scheduleDraftSave(true);
+		await submitReviewFeedback(true);
 	});
 	overlayToggle.addEventListener("click", (event) => { if (event && event.isTrusted === true) setOverlayVisible(!overlayVisible); });
 	pageCommentsButton.addEventListener("click", (event) => {

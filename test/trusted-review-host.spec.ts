@@ -66,6 +66,128 @@ type OperatedElement = Record<string, unknown> & {
   setAttribute: (name: string, value: string) => void;
 };
 
+function memoryIndexedDb() {
+  const records = new Map<string, unknown>();
+  const database = {
+    objectStoreNames: { contains: () => true },
+    createObjectStore: vi.fn(),
+    close: vi.fn(),
+    transaction: () => {
+      const transaction: { oncomplete?: () => void; onerror?: () => void; onabort?: () => void; objectStore?: () => unknown } = {};
+      const store = {
+        put(value: { key: string }) { records.set(value.key, structuredClone(value)); },
+        get(key: string) {
+          const request: { result?: unknown; onsuccess?: () => void; onerror?: () => void } = {};
+          queueMicrotask(() => { request.result = records.get(key); request.onsuccess?.(); });
+          return request;
+        },
+        getAll() {
+          const request: { result?: unknown[]; onsuccess?: () => void; onerror?: () => void } = {};
+          queueMicrotask(() => {
+            request.result = Array.from(records.values()).map((value) => structuredClone(value));
+            request.onsuccess?.();
+            transaction.oncomplete?.();
+          });
+          return request;
+        },
+        delete(key: string) { records.delete(key); },
+      };
+      transaction.objectStore = () => store;
+      return transaction;
+    },
+  };
+  return {
+    records,
+    open: () => {
+      const request: { result?: typeof database; onupgradeneeded?: () => void; onsuccess?: () => void; onerror?: () => void } = {};
+      queueMicrotask(() => {
+        request.result = database;
+        request.onupgradeneeded?.();
+        request.onsuccess?.();
+      });
+      return request;
+    },
+  };
+}
+
+function pngDataUrlOfSize(size: number) {
+  const bytes = new Uint8Array(size);
+  bytes.set([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+  let binary = "";
+  for (let offset = 0; offset < bytes.length; offset += 0x8000) {
+    binary += String.fromCharCode(...bytes.subarray(offset, offset + 0x8000));
+  }
+  return `data:image/png;base64,${btoa(binary)}`;
+}
+
+function trustedDraftBinding() {
+  return {
+    actor: { kind: "human", id: "actor_test" },
+    projectId: "shiplet_a",
+    revisionId: "revision_a1",
+    pageUrl: "https://client.example/pricing/",
+    installationId: "installation_test",
+  };
+}
+
+function trustedDraftKey() {
+  const binding = trustedDraftBinding();
+  return ["v1", binding.actor.kind, binding.actor.id, binding.projectId, binding.revisionId, binding.pageUrl, binding.installationId].join("|");
+}
+
+function storedDirectReceipt(
+  immutablePayload: Record<string, unknown>,
+  state: "pending" | "completed" | "failed" | "unknown" | "cancelled" = "failed",
+  draftVersion = 1,
+) {
+  const requestId = String(immutablePayload.requestId);
+  const now = "2026-09-26T00:00:00.000Z";
+  return {
+    requestId,
+    effect: "feedback.create",
+    feedbackId: null,
+    draftVersion,
+    immutablePayload,
+    state,
+    submittedOn: now,
+    lastCheckedOn: now,
+    serializedBody: JSON.stringify(immutablePayload),
+    binding: trustedDraftBinding(),
+  };
+}
+
+function trustedDraftRecord(operations: unknown[], topDraft?: Record<string, unknown>) {
+  const binding = trustedDraftBinding();
+  return {
+    version: 1,
+    key: trustedDraftKey(),
+    context: {
+      actorKind: binding.actor.kind,
+      actorId: binding.actor.id,
+      projectId: binding.projectId,
+      revisionId: binding.revisionId,
+      pageUrl: binding.pageUrl,
+      installationId: binding.installationId,
+    },
+    updatedOn: "2026-09-26T00:00:00.000Z",
+    overlayVisible: true,
+    topDraft: topDraft || {
+      version: 1,
+      draftVersion: 1,
+      text: "",
+      copyRequestText: "",
+      mentionIds: [],
+      target: null,
+      capture: null,
+      screenshotDataUrl: null,
+      annotationStrokes: [],
+      mode: "closed",
+    },
+    threadDrafts: {},
+    operations,
+  };
+}
+
 function operatedElement(tagName: string): OperatedElement {
   const attributes = new Map<string, string>();
   const listeners = new Map<string, Array<(event: unknown) => unknown>>();
@@ -146,6 +268,10 @@ async function operateTrustedHostScript(options?: {
   embedded?: boolean;
   pendingEmbedAction?: string;
   feedbackStatus?: number;
+  submissionMode?: "confirmation" | "sandbox" | "direct";
+  holdSubmission?: boolean;
+  submissionStatus?: number;
+  submissionPayload?: unknown;
   connectArtifact?: boolean;
   connectWidget?: boolean;
   confirmationUrl?: string;
@@ -158,6 +284,7 @@ async function operateTrustedHostScript(options?: {
   presenceViewers?: unknown[];
   presenceSelf?: unknown;
   viewport?: { width: number; height: number };
+  draftDatabase?: ReturnType<typeof memoryIndexedDb>;
 }) {
   const pageAttributes = new Map([
     ["data-shiplet-embed-origin", options?.embedded ? "https://client.example" : ""],
@@ -165,7 +292,7 @@ async function operateTrustedHostScript(options?: {
       "data-review-api-url",
       options?.presenceViewers
         ? "https://app.shiplet.cc/api/projects/shiplet_a/review-feedback"
-        : "https://app.shiplet.cc/embed/review/feedback",
+        : `https://app.shiplet.cc/embed/review/feedback${options?.draftContext ? "?installation_id=installation_test" : ""}`,
     ],
     ...(options?.draftContext
       ? [[
@@ -176,6 +303,7 @@ async function operateTrustedHostScript(options?: {
         ] as [string, string]]
       : []),
     ["data-review-page-url", "https://client.example/pricing/"],
+    ["data-review-artifact-url", "https://client.example/pricing/"],
     ["data-review-avatar-url", "https://app.shiplet.cc/brand/avatars/shiplet-avatar-presets-v9.png"],
     [
       "data-review-confirm-url",
@@ -183,8 +311,10 @@ async function operateTrustedHostScript(options?: {
     ],
     ["data-shiplet-id", "shiplet_a"],
     ["data-revision-id", "revision_a1"],
+    ["data-review-submission-mode", options?.submissionMode || "confirmation"],
   ]);
   const page = {
+    style: { setProperty: vi.fn() },
     getAttribute(name: string) {
       return pageAttributes.get(name) || null;
     },
@@ -226,6 +356,8 @@ async function operateTrustedHostScript(options?: {
   const body = operatedElement("body");
   const createdElements: OperatedElement[] = [];
   const submittedForms: OperatedElement[] = [];
+  const submissionRequests: Array<{ url: string; init: unknown; body: unknown }> = [];
+  let releaseSubmission: ((status?: number, payload?: unknown) => void) | null = null;
   let failTopLevelSubmission = options?.failTopLevelSubmission ?? false;
   const document = {
     body,
@@ -358,8 +490,29 @@ async function operateTrustedHostScript(options?: {
       return `00000000-0000-4000-8000-${String(uuidCounter).padStart(12, "0")}`;
     },
   };
-  const fetch = vi.fn(async (input?: unknown) => {
+  const fetch = vi.fn(async (input?: unknown, init?: unknown) => {
     const requestUrl = new URL(String(input || "https://app.shiplet.cc/"));
+    const requestInit = (init && typeof init === "object" ? init : {}) as { method?: unknown; body?: unknown };
+    if (String(requestInit.method || "GET").toUpperCase() === "POST" && (requestUrl.pathname === "/embed/review/feedback" || requestUrl.pathname.endsWith("/__shiplet/review/feedback") || requestUrl.pathname.endsWith("/review-feedback"))) {
+      let body: unknown = null;
+      try { body = typeof requestInit.body === "string" ? JSON.parse(requestInit.body) : requestInit.body; } catch {}
+      submissionRequests.push({ url: requestUrl.toString(), init, body });
+      if (options?.holdSubmission) {
+        await new Promise<void>((resolve) => {
+          releaseSubmission = (status = options.submissionStatus || 201, payload = options.submissionPayload ?? { feedback: { id: "feedback_direct", comment: String((body as { comment?: unknown } | null)?.comment || "") } }) => {
+            options.submissionStatus = status;
+            options.submissionPayload = payload;
+            resolve();
+          };
+        });
+      }
+      const status = options?.submissionStatus || 201;
+      return {
+        ok: status >= 200 && status < 300,
+        status,
+        json: async () => options?.submissionPayload ?? { feedback: { id: "feedback_direct", comment: String((body as { comment?: unknown } | null)?.comment || "") } },
+      };
+    }
     if (options?.draftContext && requestUrl.pathname.endsWith("draft-context")) {
       const pageUrl = requestUrl.searchParams.get("page_url") || "https://client.example/pricing/";
       return {
@@ -373,7 +526,7 @@ async function operateTrustedHostScript(options?: {
             pageUrl,
             installationId: options?.embedded ? "installation_test" : null,
             expiresOn: null,
-            durableOperations: false,
+            durableOperations: ["confirmation", "direct"].includes(options?.submissionMode || ""),
           },
         }),
       };
@@ -392,6 +545,7 @@ async function operateTrustedHostScript(options?: {
     };
   });
   const navigator = { onLine: options?.online ?? true };
+  const draftDatabase = options?.draftDatabase || memoryIndexedDb();
   const replaceLocation = vi.fn();
   const execute = new Function(
     "window",
@@ -418,7 +572,7 @@ async function operateTrustedHostScript(options?: {
     navigator,
     parentWindow,
     { getItem: (key: string) => storedIntent.get(key), removeItem: (key: string) => storedIntent.delete(key) },
-    undefined,
+    draftDatabase,
   );
   await Promise.resolve();
   if (options?.dispatchInitialFrameLoads !== false) {
@@ -517,6 +671,11 @@ async function operateTrustedHostScript(options?: {
     panel,
     refresh,
     close,
+    releaseSubmission(status?: number, payload?: unknown) {
+      releaseSubmission?.(status, payload);
+    },
+    submissionRequests,
+    storedDrafts: draftDatabase.records,
     setTopLevelSubmissionFailure(value: boolean) {
       failTopLevelSubmission = value;
     },
@@ -3489,25 +3648,336 @@ describe("trusted review host boundary", () => {
     expect(harness.submit?.disabled).toBe(false);
   });
 
-  it("submits trusted built-in feedback through a credential-free top-level POST ceremony", async () => {
-    const harness = await operateTrustedHostScript();
+  it("submits trusted built-in feedback in place with one disabled immutable request", async () => {
+    const harness = await operateTrustedHostScript({
+      embedded: true,
+      submissionMode: "direct",
+      draftContext: true,
+      holdSubmission: true,
+    });
     expect.soft(harness.form).toBeDefined();
     expect.soft(harness.comment).toBeDefined();
     if (!harness.form || !harness.comment) return;
+    await settleTrustedHost(12);
     harness.comment.value = "Review the pricing comparison";
-    await harness.form.dispatch("submit", {
+    const pending = harness.form.dispatch("submit", {
       preventDefault: vi.fn(),
       isTrusted: true,
     });
-    expect.soft(harness.fetch).not.toHaveBeenCalled();
-    expect.soft(harness.open).not.toHaveBeenCalled();
-    expect.soft(harness.submittedForms).toHaveLength(1);
-    const topLevelForm = harness.submittedForms[0];
-    if (!topLevelForm) return;
-    expectSecureTopLevelConfirmationForm(topLevelForm, {
+    await settleTrustedHost(2);
+    expect(harness.submit?.disabled).toBe(true);
+    expect(harness.open).not.toHaveBeenCalled();
+    expect(harness.submittedForms).toHaveLength(0);
+    await settleTrustedHost(40);
+    expect(harness.submissionRequests).toHaveLength(1);
+    expect(harness.submissionRequests[0]?.url).toContain("/embed/review/feedback");
+    expect(harness.submissionRequests[0]?.body).toMatchObject({
       comment: "Review the pricing comparison",
       pageUrl: "https://client.example/pricing/",
     });
+    harness.releaseSubmission(201, {
+      feedback: { id: "feedback_direct", comment: "Review the pricing comparison" },
+    });
+    await pending;
+    await settleTrustedHost();
+    const composerMessage = harness.createdElements.find((element) =>
+      element.className === "shiplet-review-status shiplet-review-composer-message",
+    );
+    expect(composerMessage?.textContent).toMatch(/feedback|saved|added/i);
+    expect(harness.comment.value).toBe("");
+  });
+
+  it("keeps a newer draft when the submitted direct snapshot completes", async () => {
+    const harness = await operateTrustedHostScript({
+      embedded: true,
+      submissionMode: "direct",
+      draftContext: true,
+      holdSubmission: true,
+    });
+    if (!harness.form || !harness.comment) return;
+    await settleTrustedHost(12);
+    harness.comment.value = "Submitted immutable text";
+    const pending = harness.form.dispatch("submit", {
+      preventDefault: vi.fn(),
+      isTrusted: true,
+    });
+    await settleTrustedHost(40);
+    expect(harness.submissionRequests).toHaveLength(1);
+    expect(harness.submissionRequests[0]?.body).toMatchObject({
+      comment: "Submitted immutable text",
+    });
+
+    harness.comment.value = "A newer private draft";
+    await harness.comment.dispatch("input");
+    harness.releaseSubmission(201, {
+      feedback: { id: "feedback_immutable", comment: "Submitted immutable text" },
+    });
+    await pending;
+    await settleTrustedHost();
+
+    expect(harness.submissionRequests).toHaveLength(1);
+    expect(harness.comment.value).toBe("A newer private draft");
+    const composerMessage = harness.createdElements.find((element) =>
+      element.className === "shiplet-review-status shiplet-review-composer-message",
+    );
+    expect(composerMessage?.textContent).toMatch(/newer draft/i);
+  });
+
+  it("retains a malformed direct success receipt and retries the identical request", async () => {
+    const harness = await operateTrustedHostScript({
+      embedded: true,
+      submissionMode: "direct",
+      draftContext: true,
+      holdSubmission: true,
+    });
+    if (!harness.form || !harness.comment) return;
+    await settleTrustedHost(12);
+    harness.comment.value = "Retry the same feedback";
+    const pending = harness.form.dispatch("submit", {
+      preventDefault: vi.fn(),
+      isTrusted: true,
+    });
+    await settleTrustedHost(40);
+    expect(harness.submissionRequests).toHaveLength(1);
+    const original = harness.submissionRequests[0];
+    expect(typeof (original?.init as { body?: unknown } | undefined)?.body).toBe("string");
+
+    harness.releaseSubmission(201, { feedback: { comment: "missing persisted id" } });
+    await pending;
+    await settleTrustedHost();
+    expect(harness.comment.value).toBe("Retry the same feedback");
+    const retryButton = harness.createdElements.find((element) =>
+      element.className === "shiplet-review-secondary shiplet-review-operation-retry",
+    );
+    expect(retryButton?.hidden).toBe(false);
+
+    const retry = retryButton!.dispatch("click", { isTrusted: true });
+    await settleTrustedHost(40);
+    expect(harness.submissionRequests).toHaveLength(2);
+    expect(harness.submissionRequests[1]?.url).toBe(original?.url);
+    expect((harness.submissionRequests[1]?.init as { body?: unknown }).body).toBe(
+      (original?.init as { body?: unknown }).body,
+    );
+    expect(harness.submissionRequests[1]?.body).toEqual(original?.body);
+
+    harness.releaseSubmission(201, {
+      feedback: { id: "feedback_retry", comment: "Retry the same feedback" },
+    });
+    await retry;
+    expect(harness.comment.value).toBe("");
+  });
+
+  it("persists a large page capture, compacts completed rich receipts, and retries the saved bytes after reload", async () => {
+    const draftDatabase = memoryIndexedDb();
+    const historyScreenshot = pngDataUrlOfSize(10_000_000);
+    const annotations = {
+      version: 1,
+      coordinateSpace: "normalized",
+      imageWidth: 100,
+      imageHeight: 100,
+      shapes: [{ id: "shape_1", type: "text", color: "#AABBCC", x: 0.1, y: 0.1, width: 0.4, height: 0.2, fontSize: 16, text: "Review this area" }],
+    };
+    const fidelity = { version: 1, kind: "sanitized-dom", limitations: ["images", "external-styles"] };
+    const completedReceipts = Array.from({ length: 3 }, (_, index) => storedDirectReceipt({
+      comment: `Completed rich receipt ${index}`,
+      pageUrl: "https://client.example/pricing/",
+      mentions: [],
+      requestId: `request_history_${index}`,
+      clientFeedbackId: `client-history-${index}`,
+      reviewRevisionId: "revision_a1",
+      screenshotDataUrl: historyScreenshot,
+      screenshotFailureNote: null,
+      screenshotMode: "page",
+      viewport: { width: 1280, height: 720, devicePixelRatio: 1 },
+      coordinates: { pageX: 0, pageY: 0, viewportX: 0, viewportY: 0 },
+      selectedElement: null,
+      captureContext: { documentWidth: 1280, documentHeight: 1600, scrollX: 0, scrollY: 0 },
+      richPayload: { version: 1, screenshotAnnotations: annotations, captureFidelity: fidelity, attachments: [], copyRequest: null },
+    }, "completed", index + 1));
+    draftDatabase.records.set(trustedDraftKey(), trustedDraftRecord(completedReceipts));
+
+    const harness = await operateTrustedHostScript({
+      embedded: true,
+      submissionMode: "direct",
+      draftContext: true,
+      submissionStatus: 503,
+      draftDatabase,
+    });
+    await settleTrustedHost(12);
+    const artifactPort = harness.channels[1]?.port1;
+    const renewal = artifactPort?.messages.find((message) =>
+      (message as Record<string, unknown>)?.protocol === "shiplet.artifact.lifecycle.command.v1" &&
+      (message as Record<string, unknown>)?.type === "renew",
+    ) as Record<string, unknown> | undefined;
+    expect(renewal).toBeDefined();
+    if (!artifactPort || !renewal) return;
+    await artifactPort.dispatch({
+      protocol: "shiplet.artifact.lifecycle.v1",
+      type: "alive",
+      channelNonce: renewal.channelNonce,
+      shipletId: renewal.shipletId,
+      revisionId: renewal.revisionId,
+      sequence: renewal.sequence,
+    });
+    const drawOnPage = harness.createdElements.find((element) => element.getAttribute("aria-label") === "Draw on page");
+    expect(drawOnPage).toBeDefined();
+    if (!drawOnPage) return;
+    await drawOnPage.dispatch("click", { isTrusted: true });
+    const pageCaptureCommand = artifactPort.messages.at(-1) as Record<string, unknown> | undefined;
+    expect(pageCaptureCommand).toMatchObject({
+      protocol: "shiplet.artifact.page-capture.command.v1",
+      type: "capture",
+    });
+    if (!pageCaptureCommand) return;
+    const screenshotDataUrl = pngDataUrlOfSize(2_100_000);
+    const captureResult = {
+      protocol: "shiplet.artifact.page-capture.result.v1",
+      type: "result",
+      channelNonce: pageCaptureCommand.channelNonce,
+      shipletId: pageCaptureCommand.shipletId,
+      revisionId: pageCaptureCommand.revisionId,
+      requestId: pageCaptureCommand.requestId,
+      pageUrl: "https://client.example/pricing/",
+      status: "captured",
+      payload: {
+        screenshotDataUrl,
+        screenshotFailureNote: null,
+        screenshotMode: "page",
+        viewport: { width: 1280, height: 720, devicePixelRatio: 1 },
+        captureContext: { documentWidth: 1280, documentHeight: 1600, scrollX: 0, scrollY: 0 },
+        fidelity,
+      },
+    };
+    await artifactPort.dispatch(captureResult);
+    await drawOnPage.dispatch("click", { isTrusted: true });
+    const ignoredCommand = artifactPort.messages.at(-1) as Record<string, unknown> | undefined;
+    if (ignoredCommand?.type === "capture") {
+      await artifactPort.dispatch({
+        ...captureResult,
+        channelNonce: ignoredCommand.channelNonce,
+        shipletId: ignoredCommand.shipletId,
+        revisionId: ignoredCommand.revisionId,
+        requestId: ignoredCommand.requestId,
+        payload: { ...captureResult.payload, privateCaptureField: "must-not-persist" },
+      });
+    }
+    await settleTrustedHost(12);
+    expect(harness.comment).toBeDefined();
+    expect(harness.form).toBeDefined();
+    if (!harness.comment || !harness.form) return;
+    harness.comment.value = "Review the captured page";
+    await harness.form.dispatch("submit", { preventDefault: vi.fn(), isTrusted: true });
+    expect(harness.submissionRequests).toHaveLength(1);
+    const firstRequest = harness.submissionRequests[0]!;
+    const firstSerializedBody = (firstRequest.init as { body?: unknown }).body as string;
+    expect(firstSerializedBody.length).toBeGreaterThan(2 * 1024 * 1024);
+    expect(firstRequest.body).toMatchObject({
+      comment: "Review the captured page",
+      screenshotMode: "page",
+      selectedElement: null,
+      richPayload: { captureFidelity: fidelity },
+    });
+    expect(firstSerializedBody).not.toContain("privateCaptureField");
+
+    const saved = draftDatabase.records.get(trustedDraftKey()) as { topDraft: Record<string, unknown>; operations: Array<Record<string, unknown>> } | undefined;
+    expect(saved).toBeDefined();
+    if (!saved) return;
+    expect(saved.topDraft.capture).toMatchObject({ screenshotMode: "page", selectedElement: null, fidelity });
+    expect(Object.keys(saved.topDraft.capture as Record<string, unknown>).sort()).toEqual([
+      "captureContext", "coordinates", "fidelity", "screenshotDataUrl", "screenshotFailureNote", "screenshotMode", "selectedElement", "viewport",
+    ]);
+    expect(saved.operations.slice(0, 3).every((operation) => !("serializedBody" in operation) && !("binding" in operation))).toBe(true);
+    expect(saved.operations.slice(0, 3).every((operation) => Object.keys(operation.immutablePayload as Record<string, unknown>).every((key) => ["requestId", "clientFeedbackId"].includes(key)))).toBe(true);
+    const failedReceipt = saved.operations.at(-1)!;
+    expect(failedReceipt).toMatchObject({ state: "failed", serializedBody: firstSerializedBody });
+
+    const reloaded = await operateTrustedHostScript({
+      embedded: true,
+      submissionMode: "direct",
+      draftContext: true,
+      submissionStatus: 201,
+      draftDatabase,
+    });
+    await settleTrustedHost(12);
+    const retryButton = reloaded.createdElements.find((element) => element.className === "shiplet-review-secondary shiplet-review-operation-retry");
+    expect(retryButton?.hidden).toBe(false);
+    await retryButton?.dispatch("click", { isTrusted: true });
+    expect(reloaded.submissionRequests).toHaveLength(1);
+    expect((reloaded.submissionRequests[0]?.init as { body?: unknown }).body).toBe(firstSerializedBody);
+    expect(reloaded.submissionRequests[0]?.body).toEqual(firstRequest.body);
+    expect(JSON.stringify(reloaded.submissionRequests[0]?.body)).not.toContain("privateCaptureField");
+  }, 30_000);
+
+  it("restores an annotated element capture under the selected storage schema and retries its immutable body", async () => {
+    const draftDatabase = memoryIndexedDb();
+    const screenshotDataUrl = pngDataUrlOfSize(2_100_000);
+    const selectedElement = { selector: "#hero", tagName: "H1", text: "Portable Shiplets" };
+    const capture = {
+      screenshotDataUrl: null,
+      screenshotFailureNote: null,
+      screenshotMode: "element",
+      viewport: { width: 1280, height: 720, devicePixelRatio: 2 },
+      coordinates: { pageX: 240, pageY: 180, viewportX: 240, viewportY: 180 },
+      selectedElement,
+      captureContext: { documentWidth: 1280, documentHeight: 1600, scrollX: 0, scrollY: 80 },
+      screenshotAnnotations: {
+        version: 1,
+        coordinateSpace: "normalized",
+        imageWidth: 100,
+        imageHeight: 100,
+        shapes: [{ id: "annotation_1", type: "text", color: "#AABBCC", x: 0.1, y: 0.1, width: 0.4, height: 0.2, fontSize: 16, text: "Review this area" }],
+      },
+    };
+    const payload = {
+      comment: "Retry the annotated element",
+      pageUrl: "https://client.example/pricing/",
+      mentions: [],
+      requestId: "request_annotated_capture",
+      clientFeedbackId: "client-annotated-capture",
+      reviewRevisionId: "revision_a1",
+      screenshotDataUrl,
+      screenshotFailureNote: null,
+      screenshotMode: capture.screenshotMode,
+      viewport: capture.viewport,
+      coordinates: capture.coordinates,
+      selectedElement,
+      captureContext: capture.captureContext,
+      richPayload: { version: 1, screenshotAnnotations: capture.screenshotAnnotations, captureFidelity: null, attachments: [], copyRequest: null },
+    };
+    draftDatabase.records.set(trustedDraftKey(), trustedDraftRecord([
+      storedDirectReceipt(payload, "failed")
+    ], {
+      version: 1,
+      draftVersion: 1,
+      text: "Retry the annotated element",
+      copyRequestText: "",
+      mentionIds: [],
+      target: selectedElement,
+      capture,
+      screenshotDataUrl,
+      annotationStrokes: [],
+      mode: "composer",
+    }));
+    const harness = await operateTrustedHostScript({
+      embedded: true,
+      submissionMode: "direct",
+      draftContext: true,
+      submissionStatus: 201,
+      draftDatabase,
+    });
+    await settleTrustedHost(12);
+    const retryButton = harness.createdElements.find((element) => element.className === "shiplet-review-secondary shiplet-review-operation-retry");
+    expect(retryButton?.hidden).toBe(false);
+    await retryButton?.dispatch("click", { isTrusted: true });
+    expect(harness.submissionRequests).toHaveLength(1);
+    const request = harness.submissionRequests[0]!;
+    expect((request.init as { body?: unknown }).body).toBe(JSON.stringify(payload));
+    expect(request.body).toMatchObject({
+      screenshotMode: "element",
+      selectedElement,
+      richPayload: { screenshotAnnotations: capture.screenshotAnnotations },
+    });
+    expect(JSON.stringify(request.body)).not.toContain("privateCaptureField");
   });
 
   it("operates the generated host script and prevents a later widget message from replacing a pending confirmation", async () => {

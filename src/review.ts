@@ -240,18 +240,34 @@ function canonicalReviewEventStatement(
 		status: ReviewStatus;
 		payload: Record<string, unknown>;
 		now: string;
+		eventId?: string;
+		feedbackId?: string;
+		operationFence?: { intentId: string; confirmedOn: string };
 	},
 ) {
+	const payloadFromFeedback =
+		input.eventKind === "review.feedback-created" && input.feedbackId !== undefined;
+	const payloadExpression = payloadFromFeedback
+		? "json_object('feedbackId', id, 'ticketNumber', ticket_number, 'pageUrl', page_url)"
+		: "?";
+	const feedbackSource = input.feedbackId === undefined
+		? ""
+		: ` FROM review_feedback WHERE project_id = ? AND id = ?${input.operationFence
+			? ` AND EXISTS (
+			 SELECT 1 FROM embed_review_operation_intents
+			 WHERE id = ? AND confirmed_on = ? AND completed_on IS NULL
+			)`
+			: ""}`;
 	return db
 		.prepare(
 			`INSERT INTO shiplet_events (
 			 id, project_id, revision_id, actor_kind, actor_id, event_kind,
 			 summary, canonical_status_category, custom_payload_json,
 			 occurred_at, created_at
-			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			) SELECT ?, ?, ?, ?, ?, ?, ?, ?, ${payloadExpression}, ?, ?${feedbackSource}`,
 		)
 		.bind(
-			`event_${crypto.randomUUID().replace(/-/g, "")}`,
+			input.eventId || `event_${crypto.randomUUID().replace(/-/g, "")}`,
 			input.projectId,
 			input.revisionId,
 			input.actor.kind,
@@ -259,9 +275,18 @@ function canonicalReviewEventStatement(
 			input.eventKind,
 			input.summary,
 			canonicalStatusCategory(input.status),
-			JSON.stringify(input.payload),
+			...(payloadFromFeedback ? [] : [JSON.stringify(input.payload)]),
 			input.now,
 			input.now,
+			...(input.feedbackId === undefined
+				? []
+				: [
+						input.projectId,
+						input.feedbackId,
+						...(input.operationFence
+							? [input.operationFence.intentId, input.operationFence.confirmedOn]
+							: []),
+					]),
 		);
 }
 
@@ -740,7 +765,7 @@ export async function createReviewFeedback(
 			: null;
 	const now = timestamps.now();
 	const id = durableIntent?.result_feedback_id || newId("review");
-	const ticketNumber = await nextTicketNumber(env.DB, project.id);
+	const candidateTicketNumber = await nextTicketNumber(env.DB, project.id);
 	const durableScreenshotDescriptor = durableIntent
 		? durableReviewScreenshotDescriptor(durableIntent.payload_json)
 		: null;
@@ -778,7 +803,7 @@ export async function createReviewFeedback(
 		  screenshot_mode, viewport_json, coordinates_json, selected_element_json,
 		  capture_context_json, user_agent, submitted_by_user_id, submitted_by_email,
 		  source, created_on, updated_on)
-		 SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+		 SELECT ?, ?, ?, ?, (SELECT COALESCE(MAX(ticket_number), 0) + 1 FROM review_feedback WHERE project_id = ?), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
 		 FROM projects project
 		 JOIN embed_review_operation_intents intent ON intent.id = ?
 		 WHERE project.id = ? AND project.active_revision_id = ?
@@ -831,7 +856,7 @@ export async function createReviewFeedback(
 		  screenshot_mode, viewport_json, coordinates_json, selected_element_json,
 		  capture_context_json, user_agent, submitted_by_user_id, submitted_by_email,
 		  source, created_on, updated_on)
-		 SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+		 SELECT ?, ?, ?, ?, (SELECT COALESCE(MAX(ticket_number), 0) + 1 FROM review_feedback WHERE project_id = ?), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
 		 FROM projects project
 		 JOIN embed_review_operation_receipts receipt ON receipt.receipt_hash = ?
 		 WHERE project.id = ? AND project.active_revision_id = ?
@@ -849,14 +874,14 @@ export async function createReviewFeedback(
 		  screenshot_mode, viewport_json, coordinates_json, selected_element_json,
 		  capture_context_json, user_agent, submitted_by_user_id, submitted_by_email,
 		 source, created_on, updated_on)
-		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		 VALUES (?, ?, ?, ?, (SELECT COALESCE(MAX(ticket_number), 0) + 1 FROM review_feedback WHERE project_id = ?), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(project_id, client_feedback_id) DO NOTHING`,
 		);
 	feedbackStatement = feedbackStatement.bind(
 			id,
 			project.id,
 			project.organization_id || "",
 			revisionId,
-			ticketNumber,
+			project.id,
 			payload.clientFeedbackId,
 			payload.name,
 			payload.comment,
@@ -923,49 +948,24 @@ export async function createReviewFeedback(
 			now,
 		),
 	);
-	const canonicalStatement = effectFence
-		? env.DB
-				.prepare(
-					`INSERT INTO shiplet_events (
-					 id, project_id, revision_id, actor_kind, actor_id, event_kind,
-					 summary, canonical_status_category, custom_payload_json,
-					 occurred_at, created_at
-					) SELECT ?, ?, ?, ?, ?, 'review.feedback-created',
-					 'Review feedback created', 'open', ?, ?, ?
-					 WHERE EXISTS (
-					  SELECT 1 FROM review_feedback WHERE id = ? AND project_id = ?
-					 )`,
-				)
-				.bind(
-					canonicalEventId,
-					project.id,
-					revisionId,
-					canonicalActor(user, eventActor).kind,
-					canonicalActor(user, eventActor).id,
-					JSON.stringify({
-						feedbackId: id,
-						ticketNumber,
-						pageUrl: payload.pageUrl,
-					}),
-					now,
-					now,
-					id,
-					project.id,
-				)
-		: canonicalReviewEventStatement(env.DB, {
-			projectId: project.id,
-			revisionId,
-			actor: canonicalActor(user, eventActor),
-			eventKind: "review.feedback-created",
-			summary: "Review feedback created",
-			status: "New",
-			payload: {
-				feedbackId: id,
-				ticketNumber,
-				pageUrl: payload.pageUrl,
-			},
-			now,
-		});
+	const canonicalStatement = canonicalReviewEventStatement(env.DB, {
+		projectId: project.id,
+		revisionId,
+		actor: canonicalActor(user, eventActor),
+		eventKind: "review.feedback-created",
+		summary: "Review feedback created",
+		status: "New",
+		payload: { feedbackId: id, pageUrl: payload.pageUrl },
+		now,
+		eventId: canonicalEventId,
+		feedbackId: id,
+		operationFence: intentFence
+			? {
+					intentId: intentFence.intentId,
+					confirmedOn: intentFence.confirmedOn,
+				}
+			: undefined,
+	});
 	const statements = intentFence
 		? [
 				env.DB
@@ -1025,7 +1025,7 @@ export async function createReviewFeedback(
 					actor: user,
 					feedbackId: id,
 					replyId: null,
-					ticketNumber,
+					ticketNumber: candidateTicketNumber,
 					mentions: payload.mentions,
 					reason: "new_feedback",
 					now,
@@ -1033,6 +1033,24 @@ export async function createReviewFeedback(
 			: [];
 	if (intentFence && durableIntent && user) {
 		statements.push(...durableSideEffectStatements);
+		if (durableSideEffectStatements.length > 0) {
+			statements.push(
+				env.DB.prepare(
+					`UPDATE review_notifications SET message = replace(message, ?, 'PF-' || (
+					 SELECT ticket_number FROM review_feedback WHERE project_id = ? AND id = ?
+					)) WHERE project_id = ? AND feedback_id = ?
+					AND substr(dedupe_key, 1, ?) = ?`,
+				).bind(
+					`PF-${candidateTicketNumber}`,
+					project.id,
+					id,
+					project.id,
+					id,
+					`operation:${durableIntent.id}:`.length,
+					`operation:${durableIntent.id}:`,
+				),
+			);
+		}
 	}
 	const auditStatementIndex = statements.length;
 	const completionStatementIndex = intentFence
@@ -1051,7 +1069,10 @@ export async function createReviewFeedback(
 					 ?, ?, ?
 					 WHERE EXISTS (
 					  SELECT 1 FROM review_feedback WHERE id = ? AND project_id = ?
-					 )`,
+					 )${intentFence ? ` AND EXISTS (
+					  SELECT 1 FROM embed_review_operation_intents
+					  WHERE id = ? AND confirmed_on = ? AND completed_on IS NULL
+					 )` : ""}`,
 				)
 				.bind(
 					auditEventId,
@@ -1067,6 +1088,9 @@ export async function createReviewFeedback(
 					now,
 					id,
 					project.id,
+					...(intentFence
+						? [intentFence.intentId, intentFence.confirmedOn]
+						: []),
 				),
 			...(intentFence ? [env.DB
 				.prepare(
@@ -1124,14 +1148,34 @@ export async function createReviewFeedback(
 				),
 		);
 	}
+	statements.push(
+		env.DB
+			.prepare(
+				`SELECT CASE WHEN EXISTS (
+				 SELECT 1 FROM review_feedback WHERE project_id = ? AND id = ?
+				) THEN 1 ELSE json_extract('review_feedback_insert_missing', '$.invalid') END AS committed`,
+			)
+			.bind(project.id, id),
+	);
 	let results: D1Result<unknown>[];
 	try {
 		results = await env.DB.batch(statements);
-	} catch {
-			if (!intentFence && screenshot?.key && env.REVIEW_ASSETS) {
-				await env.REVIEW_ASSETS.delete(screenshot.key);
+	} catch (error) {
+		await discardReviewScreenshot(env, screenshot?.key, Boolean(durableIntent));
+		if (effectFence) return null;
+		try {
+			const existing = await env.DB
+				.prepare("SELECT id FROM review_feedback WHERE project_id = ? AND client_feedback_id = ?")
+				.bind(project.id, payload.clientFeedbackId)
+				.first<{ id: string }>();
+			if (existing) {
+				const feedback = await getReviewFeedback(env.DB, project.id, existing.id);
+				if (feedback) return feedback;
+			}
+		} catch {
+			// Preserve the original persistence error if a follow-up lookup also fails.
 		}
-		return null;
+		throw error;
 	}
 	const requiredBatchChangeIndexes = effectFence
 		? [
@@ -1144,11 +1188,12 @@ export async function createReviewFeedback(
 			]
 		: [];
 	if (requiredBatchChangeIndexes.some((index) => results[index]?.meta.changes !== 1)) {
-		if (!intentFence && screenshot?.key && env.REVIEW_ASSETS) {
-			await env.REVIEW_ASSETS.delete(screenshot.key);
-		}
+		await discardReviewScreenshot(env, screenshot?.key, Boolean(durableIntent));
 		return null;
 	}
+	const committedFeedback = await getReviewFeedback(env.DB, project.id, id);
+	if (!committedFeedback) throw new Error("Review feedback was not persisted.");
+	const ticketNumber = committedFeedback.ticket_number;
 
 	if (intentFence) {
 		await dispatchDurableOperationEmails(env, project, intentFence.intentId, id);
@@ -1183,7 +1228,9 @@ export async function createReviewFeedback(
 		});
 	}
 
-	return getReviewFeedback(env.DB, project.id, id);
+	const hydratedFeedback = await getReviewFeedback(env.DB, project.id, id);
+	if (!hydratedFeedback) throw new Error("Review feedback was not persisted.");
+	return hydratedFeedback;
 }
 
 export type ReviewFeedbackQueryState = "open" | "closed" | "all";
@@ -1755,6 +1802,7 @@ export async function updateReviewStatus(
 				eventKind: "review.status-changed",
 				summary: "Review status changed",
 				status,
+				feedbackId,
 				payload: { feedbackId, status },
 				now,
 			}),
@@ -2472,6 +2520,19 @@ async function nextTicketNumber(db: D1Database, projectId: string) {
 		.bind(projectId)
 		.first<{ next_ticket_number: number }>();
 	return row?.next_ticket_number || 1;
+}
+
+async function discardReviewScreenshot(
+	env: Env,
+	key: string | undefined,
+	sharedDurableKey = false,
+) {
+	if (!key || sharedDurableKey || !env.REVIEW_ASSETS) return;
+	try {
+		await env.REVIEW_ASSETS.delete(key);
+	} catch {
+		console.error("Failed to clean up rejected review screenshot.");
+	}
 }
 
 async function persistScreenshot(

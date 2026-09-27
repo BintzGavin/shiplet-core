@@ -143,7 +143,7 @@ function bridgeScript() {
 
 async function mountGeneratedHost(
   page: Page,
-  options: { embedded?: boolean; submissionMode?: "sandbox" | "confirmation"; failInitialGet?: boolean; holdOperation?: boolean; unknownOperation?: boolean } = {},
+  options: { embedded?: boolean; submissionMode?: "sandbox" | "confirmation" | "direct"; failInitialGet?: boolean; holdOperation?: boolean; unknownOperation?: boolean } = {},
 ) {
   const embedded = Boolean(options.embedded);
   const reviewPageUrl = `${embedded ? siteOrigin : hostOrigin}/reviewed-page`;
@@ -325,7 +325,7 @@ async function mountGeneratedHost(
           json: { error: "Review context unavailable" },
         });
       }
-      const confirmationContext = options.submissionMode === "confirmation";
+      const confirmationContext = options.submissionMode === "confirmation" || options.submissionMode === "direct";
       return route.fulfill({
         status: 200,
         headers: { "cache-control": "private, no-store" },
@@ -656,6 +656,29 @@ test("keeps readable data, active identity, draft focus and selection across sta
   await expect(reply).toHaveValue("Draft survives a stale refresh");
 
   await page.screenshot({ path: `${evidenceRoot}/hosted-recovered-draft.png`, fullPage: true });
+});
+
+test("submits one hosted Page comment in place with no confirmation popup", async ({ page }) => {
+  const fixture = await mountGeneratedHost(page, { submissionMode: "direct" });
+  fixture.setHoldComments(true);
+  const surface = fixture.surface;
+  await surface.locator(".shiplet-review-comments-launcher").click();
+  await surface.getByRole("button", { name: "New comment", exact: true }).click();
+  await surface.getByRole("button", { name: "Page comment", exact: true }).click();
+  const composer = surface.locator("#shiplet-annotation-composer");
+  await expect(composer).toBeVisible();
+  const comment = composer.locator("#shiplet-review-comment");
+  await comment.fill("One direct page comment");
+  const pageCount = page.context().pages().length;
+  const submission = composer.getByRole("button", { name: "Send annotation", exact: true }).click();
+  await expect.poll(() => fixture.counts().commentMutationCount).toBe(1);
+  await expect(comment).toBeDisabled();
+  expect(page.context().pages()).toHaveLength(pageCount);
+  await fixture.releaseComment("success");
+  await submission;
+  await expect(comment).toHaveValue("");
+  await expect(composer).toBeHidden();
+  await page.screenshot({ path: `${evidenceRoot}/hosted-one-submit.png`, fullPage: true });
 });
 
 test("keeps new-comment context on failure and confirmation, while explicit Cancel fully discards it", async ({ page }) => {
