@@ -28,6 +28,19 @@ function hidden(html: string, name: string) {
   return html.match(new RegExp(`name="${name}" value="([^"]+)"`))?.[1] || "";
 }
 
+async function callbackFromHandoff(response: Response) {
+  expect(response.status).toBe(200);
+  expect(response.headers.get("location")).toBeNull();
+  expect(response.headers.get("content-type")).toContain("text/html");
+  expect(response.headers.get("content-security-policy")).toContain("form-action 'self'");
+  const page = await response.text();
+  expect(page).toContain("Authorization approved");
+  expect(page).toContain("Return to CLI");
+  const href = page.match(/<a href="([^"]+)"/)?.[1];
+  expect(href).toBeTruthy();
+  return new URL(href!.replace(/&amp;/g, "&"));
+}
+
 async function sha256Base64Url(value: string) {
   const bytes = new Uint8Array(
     await crypto.subtle.digest("SHA-256", new TextEncoder().encode(value)),
@@ -187,15 +200,21 @@ describe("CLI browser authorization session", () => {
       headers: { Origin: "http://localhost", "Content-Type": "application/x-www-form-urlencoded", ...OWNER },
       body: new URLSearchParams({ request_id: requestId, approval: "approve" }),
     });
-    expect(approved.status).toBe(302);
     expect(approved.headers.get("cache-control")).toBe("no-store");
     expect(approved.headers.get("pragma")).toBe("no-cache");
     expect(approved.headers.get("referrer-policy")).toBe("no-referrer");
-    const callback = new URL(approved.headers.get("location") || "");
+    const callback = await callbackFromHandoff(approved);
     expect(callback.origin + callback.pathname).toBe(redirectUri);
     expect(callback.searchParams.get("state")).toBe(state);
     const code = callback.searchParams.get("code") || "";
     expect(code).toMatch(/^shiplet_cli_code_/);
+
+    const repeatedApproval = await request("/cli/authorize/complete", {
+      method: "POST",
+      headers: { Origin: "http://localhost", "Content-Type": "application/x-www-form-urlencoded", ...OWNER },
+      body: new URLSearchParams({ request_id: requestId, approval: "approve" }),
+    });
+    expect(repeatedApproval.status).toBe(403);
 
     const wrongPkce = await request("/api/cli/session/exchange", {
       method: "POST",
@@ -264,7 +283,7 @@ describe("CLI browser authorization session", () => {
       },
       body: new URLSearchParams({ request_id: requestId, approval: "approve" }),
     });
-    const code = new URL(approved.headers.get("location") || "").searchParams.get("code");
+    const code = (await callbackFromHandoff(approved)).searchParams.get("code");
     const exchange = await request("/api/cli/session/exchange", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
