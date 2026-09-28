@@ -2,6 +2,19 @@ const http = require("node:http");
 const crypto = require("node:crypto");
 const childProcess = require("node:child_process");
 const { createScopedSessionFetch } = require("./scoped-session-fetch.cjs");
+const { renderCliCallbackPage } = require("./auth-page.cjs");
+
+function sendCallbackPage(response, valid) {
+  const nonce = crypto.randomBytes(24).toString("base64");
+  response.writeHead(valid ? 200 : 400, {
+    "content-type": "text/html; charset=utf-8",
+    "cache-control": "no-store",
+    "referrer-policy": "no-referrer",
+    "x-content-type-options": "nosniff",
+    "content-security-policy": `default-src 'none'; style-src 'nonce-${nonce}'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'`,
+  });
+  response.end(renderCliCallbackPage(valid, nonce));
+}
 
 function base64Url(buffer) {
   return Buffer.from(buffer)
@@ -89,21 +102,14 @@ async function createBrowserSessionFetch(options) {
         !stateMatches ||
         !/^shiplet_cli_code_[A-Za-z0-9]{32,200}$/.test(code)
       ) {
-        response.writeHead(400, { "content-type": "text/plain; charset=utf-8" });
-        response.end("Authorization did not match this CLI process.");
+        sendCallbackPage(response, false);
         rejectCallback(new Error("CLI authorization state did not match."));
         return;
       }
-      response.writeHead(200, {
-        "content-type": "text/html; charset=utf-8",
-        "cache-control": "no-store",
-        "content-security-policy": "default-src 'none'; frame-ancestors 'none'",
-      });
-      response.end("<!doctype html><title>Shiplet CLI authorized</title><p>Authorization complete. You can close this window.</p>");
+      sendCallbackPage(response, true);
       resolveCallback(code);
     } catch {
-      response.writeHead(400, { "content-type": "text/plain; charset=utf-8" });
-      response.end("Invalid callback.");
+      sendCallbackPage(response, false);
       rejectCallback(new Error("Invalid CLI authorization callback."));
     }
   });

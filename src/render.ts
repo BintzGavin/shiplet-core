@@ -2879,6 +2879,29 @@ details textarea { margin-top: 8px; }
 }
 .auth-proof-list li::marker { color: var(--action); }
 .auth-card .link-btn, .auth-card .btn { min-width: 180px; height: 46px; }
+.auth-card { overflow-wrap: anywhere; }
+.auth-card form { display: flex; flex-wrap: wrap; justify-content: center; gap: 12px; width: 100%; }
+.auth-card .btn, .auth-card .link-btn { height: auto; min-height: 46px; white-space: normal; }
+.auth-stage-compact { padding: clamp(24px, 6vh, 64px) 0; }
+.auth-card.auth-decision { text-align: left; justify-items: stretch; gap: 20px; background-image: none; margin: 0; }
+.auth-decision h1 { line-height: 1.15; }
+.auth-decision .success-card-label { justify-self: start; }
+.auth-decision p { margin: 0; color: var(--text-soft); line-height: 1.6; }
+.auth-decision .auth-account { padding: 16px 0; border-block: 1px dashed var(--line); }
+.auth-account span { display: block; color: var(--text-muted); font-size: var(--type-small); margin-bottom: 4px; }
+.auth-decision .auth-permissions { padding-left: 20px; color: var(--text-soft); line-height: 1.6; }
+.auth-permissions li + li { margin-top: 8px; }
+.auth-decision form { justify-content: flex-start; }
+.auth-recommendation { color: var(--accent-strong); font-size: var(--type-small); font-weight: 650; }
+.auth-agent-entry { width: 100%; margin-top: 12px; padding-top: 20px; border-top: 1px dashed var(--line); }
+.auth-agent-entry a { display: inline-block; padding: 8px 0; font-weight: 650; }
+.auth-agent-entry p { color: var(--text-soft); font-size: var(--type-small); }
+.agent-auth-recommendation { display: grid; justify-items: start; gap: 12px; padding-bottom: 24px; margin-bottom: 24px; border-bottom: 1px dashed var(--line); }
+.agent-auth-recommendation p { max-width: 65ch; color: var(--text-soft); }
+@media (max-width: 540px) {
+  .auth-card form { flex-direction: column; }
+  .auth-card form .btn { width: 100%; }
+}
 .auth-docs-link {
   font-family: var(--font-mono);
   font-size: var(--type-small);
@@ -2887,7 +2910,7 @@ details textarea { margin-top: 8px; }
 .auth-docs-link:hover { color: var(--accent-strong); }
 
 @media (prefers-reduced-motion: no-preference) {
-  .js .auth-card { animation: rise 0.6s var(--ease-out) 0.5s both; }
+  .js .auth-card:not(.auth-decision) { animation: rise 0.6s var(--ease-out) 0.5s both; }
 }
 
 .sr-only {
@@ -5610,6 +5633,12 @@ export const BuildSettingsPage = (nonce: KernelDocumentNonce) => `
       </section>
 
       <section class="success-card shiplet-panel" id="agents">
+        <div class="agent-auth-recommendation">
+          <span class="auth-recommendation">Recommended for agent work</span>
+          <h2>Connect with the CLI</h2>
+          <p>Run a Shiplet command from a source checkout, approve access in your browser, then return to your agent. The short-lived session stays in memory.</p>
+          <a class="btn btn-primary" href="/docs/cli">Set up CLI authentication</a>
+        </div>
         <span class="success-card-label">Dock crew</span>
         <h2>${glyph("plug", "section-glyph")}API Keys and MCP</h2>
         <p>One organization key can publish shiplets and read review feedback through the Code Mode MCP endpoint. Tokens are shown once when created.</p>

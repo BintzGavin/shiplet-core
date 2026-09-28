@@ -18,6 +18,38 @@ function captureOutput() {
   return { write(chunk) { value += String(chunk); }, value: () => value };
 }
 
+test("loopback authorization shows styled completion and recovery pages without exposing callback data", async () => {
+  for (const valid of [true, false]) {
+    let callbackResponse;
+    const session = createBrowserSessionFetch({
+      apiUrl: "http://127.0.0.1:43111",
+      stdout: captureOutput(),
+      fetch: async () => new Response(JSON.stringify(sessionPayload()), { status: 201 }),
+      openBrowser(authorizeValue) {
+        const authorize = new URL(authorizeValue);
+        const callback = new URL(authorize.searchParams.get("redirect_uri"));
+        callback.searchParams.set("code", `shiplet_cli_code_${"a".repeat(64)}`);
+        callback.searchParams.set("state", valid ? authorize.searchParams.get("state") : "wrong");
+        callbackResponse = fetch(callback);
+      },
+      timeoutMs: 1_000,
+    });
+    if (valid) await session;
+    else await assert.rejects(session, /state did not match/);
+    const response = await callbackResponse;
+    assert.equal(response.status, valid ? 200 : 400);
+    assert.match(response.headers.get("content-type"), /text\/html/);
+    assert.equal(response.headers.get("cache-control"), "no-store");
+    assert.equal(response.headers.get("referrer-policy"), "no-referrer");
+    const html = await response.text();
+    assert.match(html, /<meta name="viewport"/);
+    assert.match(html, /<style/);
+    assert.match(html, /prefers-color-scheme: dark/);
+    assert.match(html, valid ? /Return to your terminal/ : /Run your CLI command again/);
+    assert.doesNotMatch(html, /shiplet_cli_code_|shiplet_cli_session_/);
+  }
+});
+
 test("browser session rejects state mismatch and closes without exchanging", async () => {
   let exchangeCalls = 0;
   await assert.rejects(

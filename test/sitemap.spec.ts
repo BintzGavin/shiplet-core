@@ -27,6 +27,7 @@ describe("public sitemap", () => {
     expect(guidePaths).toContain("/docs/embed");
     expect(guidePaths).toContain("/docs/browser-capture");
     expect(guidePaths).toContain("/docs/self-hosting");
+    expect(guidePaths).toContain("/docs/cli");
     const urls = locations(await (await request("/sitemap.xml")).text());
     expect(urls).toHaveLength(new Set(urls).size);
     expect(urls.sort()).toEqual(["/", ...guidePaths].map((path) => `https://shiplet.cc${path}`).sort());
@@ -72,7 +73,7 @@ describe("public sitemap", () => {
 
   it("excludes aliases, retired guides, private work and non-HTML resources", async () => {
     const paths = locations(await (await request("/sitemap.xml")).text()).map((url) => new URL(url).pathname);
-    for (const path of ["/docs/introduction", "/docs/wordpress", "/docs/cli", "/docs/deployment", "/docs/external-setup", "/docs/packages-revisions", "/capture", "/downloads/shiplet-browser-companion.zip", "/workspace", "/auth/login", "/api/shiplets", "/shiplets", "/play", "/llms.txt", "/openapi.json"]) {
+    for (const path of ["/docs/introduction", "/docs/wordpress", "/docs/deployment", "/docs/external-setup", "/docs/packages-revisions", "/capture", "/downloads/shiplet-browser-companion.zip", "/workspace", "/auth/login", "/api/shiplets", "/shiplets", "/play", "/llms.txt", "/openapi.json"]) {
       expect(paths).not.toContain(path);
     }
   });

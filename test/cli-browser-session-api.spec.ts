@@ -36,7 +36,9 @@ async function callbackFromHandoff(response: Response) {
   const page = await response.text();
   expect(page).toContain("Authorization approved");
   expect(page).toContain("Return to CLI");
-  const href = page.match(/<a href="([^"]+)"/)?.[1];
+  expect(page).toContain("shiplet-brand-shell");
+  expect(page).toContain("noindex,nofollow,noarchive");
+  const href = page.match(/<a id="cli-return-link"[^>]*href="([^"]+)"/)?.[1];
   expect(href).toBeTruthy();
   return new URL(href!.replace(/&amp;/g, "&"));
 }

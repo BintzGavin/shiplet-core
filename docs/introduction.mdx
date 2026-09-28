@@ -18,8 +18,8 @@ uploaded files and can attach its review layer to an existing public URL.
   its review link.
 - **[Collect feedback](/docs/review-feedback):** leave contextual comments,
   reply to reviewers, and move tickets through review.
-- **[Automate with an agent](/docs/code-mode-mcp):** connect through Code Mode
-  MCP or call the documented REST operations.
+- **[Automate with an agent](/docs/cli):** start with CLI browser authorization,
+  the recommended route for agent work.
 - **[Manage access](/docs/access-control):** choose who can view or edit each
   Shiplet.
 - **[Connect a website](/docs/embed):** attach the Shiplet review
@@ -51,7 +51,9 @@ experience, so they do not become part of the work being reviewed. Read
 
 ## Automation
 
-The public automation paths are Code Mode MCP and direct REST. Interactive MCP
+[CLI authentication](/docs/cli) is the recommended route for agent work. It opens
+browser approval and keeps its short-lived session in memory. Code Mode MCP and
+direct REST remain available for compatible clients and unattended jobs. Interactive MCP
 uses browser OAuth, and CI can use a narrowly scoped organization API key. The
 [OpenAPI document](https://shiplet.cc/openapi.json) is the machine-readable
 contract for documented public REST operations.

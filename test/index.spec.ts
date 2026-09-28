@@ -954,7 +954,7 @@ describe("Shiplet", () => {
       expect(landingHtml).toContain('href="/docs/security"');
       expect(landingHtml).toContain('href="/docs/quickstart"');
       expect(landingHtml).not.toContain('href="/docs/packages-revisions"');
-      expect(landingHtml).not.toContain('href="/docs/cli"');
+      expect(landingHtml).toContain('href="/docs/cli"');
       expect(landingHtml).not.toContain('href="/docs/deployment"');
       expect(landingHtml).not.toContain('href="/docs/external-setup"');
       expect(landingHtml).toContain('data-shiplet-docs-page="introduction"');
@@ -980,7 +980,6 @@ describe("Shiplet", () => {
 
       for (const [route, location] of [
         ["/docs/packages-revisions", "/docs/publishing"],
-        ["/docs/cli", "/docs/code-mode-mcp"],
         ["/docs/deployment", "/docs/publishing"],
         ["/docs/external-setup", "/docs/security"],
       ]) {
@@ -1190,7 +1189,7 @@ describe("Shiplet", () => {
       expect(html).toContain("Open the Prepare page");
       expect(html).toContain("Choose the work to review");
       expect(html).toContain("Open the review link");
-      expect(html).toContain("Optional: automate with MCP");
+      expect(html).toContain("Alternative: connect with MCP");
       expect(html).toContain('href="/docs/review-feedback"');
       expect(html).not.toContain('href="/docs/packages-revisions"');
       expect(html).not.toContain('href="/docs/deployment"');
@@ -1213,7 +1212,7 @@ describe("Shiplet", () => {
       expect(quickstartHtml.indexOf("safe default")).toBeLessThan(
         quickstartHtml.indexOf("Open the review link"),
       );
-      expect(quickstartHtml).toContain("Optional: automate with MCP");
+      expect(quickstartHtml).toContain("Alternative: connect with MCP");
 
       const introduction = await requestHelper("/docs");
       const introductionHtml = await introduction.text();
@@ -1244,9 +1243,9 @@ describe("Shiplet", () => {
     });
 
     it("Given a technical owner, When MCP and widget guidance is read, Then automation stays on the review product boundary", async () => {
-      const retiredCli = await requestHelper("/docs/cli");
-      expect(retiredCli.status).toBe(301);
-      expect(retiredCli.headers.get("location")).toBe("/docs/code-mode-mcp");
+      const cliGuide = await requestHelper("/docs/cli");
+      expect(cliGuide.status).toBe(200);
+      expect(await cliGuide.text()).toContain("Recommended for agent work");
 
       const publicMcpHtml = await (
         await requestHelper("/docs/code-mode-mcp")
@@ -1329,6 +1328,7 @@ describe("Shiplet", () => {
         "/docs/access-control",
         "/docs/api-keys",
         "/docs/api-surface",
+        "/docs/cli",
         "/docs/code-mode-mcp",
         "/docs/extensions",
         "/docs/security",
@@ -4859,6 +4859,7 @@ describe("Shiplet", () => {
         "extensions",
         "security",
         "publishing",
+        "cli",
         "api-surface",
       ]) {
         expect(sitemapXml).toContain(
@@ -4867,7 +4868,6 @@ describe("Shiplet", () => {
       }
       for (const retiredRoute of [
         "packages-revisions",
-        "cli",
         "deployment",
         "external-setup",
       ]) {

@@ -191,6 +191,7 @@ Add a trusted review layer to builds, files, and live URLs for contextual feedba
 
 ## Machine-readable resources
 
+- Agent authentication (recommended CLI route): ${absoluteSiteUrl(baseUrl, "/docs/cli")}
 - Website: ${absoluteSiteUrl(baseUrl, "/")}
 - Documentation: ${absoluteSiteUrl(baseUrl, "/docs")}
 - Why Shiplet: ${absoluteSiteUrl(baseUrl, "/docs/why-shiplet")}
@@ -202,6 +203,8 @@ Add a trusted review layer to builds, files, and live URLs for contextual feedba
 - Review client: ${absoluteSiteUrl(baseUrl, "/api/review/client.js")}
 
 ## Access model
+
+The CLI is the recommended authentication route for agent work. Run commands from a Shiplet source checkout; the CLI opens browser approval and uses an in-memory session for up to ten minutes, revoked when the command finishes. The CLI and browser must run on the same computer. There is no public npm package. Use Code Mode MCP for remote agents or MCP clients, and scoped organization API keys for unattended CI.
 
 Public discovery files describe Shiplet. Preparing review artifacts, organization management, API access, and MCP execution require authenticated access or an organization API token.
 `;

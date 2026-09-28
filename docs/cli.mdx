@@ -3,6 +3,11 @@ title: "CLI"
 description: "Prepare static reviews and manage portable Shiplet drafts, revisions, deployments, rollbacks, and exports."
 ---
 
+**Recommended for agent work.** The CLI opens browser approval so you can sign
+in and authorize your local agent without copying credentials. Return to your
+terminal or agent after approval. Human reviewers can keep signing in directly
+in the browser.
+
 The Shiplet CLI supports static publishing and the complete immutable revision
 workflow. It uses the same package, authorization, validation, approval, and
 optimistic-concurrency contracts as the kernel APIs.
@@ -14,9 +19,9 @@ a Node package. It is available from a **source checkout** and is **not a public
 registry package**. Do not rely on an `npm install shiplet` or `npx shiplet`
 distribution until Shiplet publishes one.
 
-**If you do not already have authorized repository access, use Code Mode MCP or
-direct REST.** The CLI is a contributor workflow, not the public onboarding
-path.
+Use the [Shiplet source repository](https://github.com/BintzGavin/shiplet-core)
+with Node.js 22.12.0 or newer. If your agent cannot run the CLI locally, use
+[Code Mode MCP](/docs/code-mode-mcp) or documented REST operations.
 
 From a local source checkout with dependencies installed:
 
@@ -35,6 +40,21 @@ already-established, least-privilege organization API key from a secret store.
 Never place a key in source, package content, shell history, logs, or command
 examples. Raw organization keys cannot authorize deploy, promote, or rollback;
 those three CLI commands require trusted browser authorization.
+
+## Approve a command
+
+1. Run a command without an API key to use browser authorization.
+2. Sign in if asked and check the account shown on the approval page.
+3. Select **Authorize CLI** only if you started the command.
+4. Select **Return to CLI** on the approval page to complete the local callback.
+5. Return to your terminal or agent for the result, then close the browser window.
+
+Sessions last up to ten minutes and are revoked when the command finishes.
+Each new command can ask for approval again. There is no separate login command.
+Run the CLI and browser on the same computer so the local callback is reachable.
+For an expired request, canceled approval, or mismatched callback, run the
+command again and use the new browser window. For remote or headless agents,
+use a compatible MCP client. A dry run does not authenticate.
 
 ## Command map
 
@@ -66,8 +86,8 @@ npm run shiplet -- prepare ./dist \
 
 Remove `--dry-run` to publish. If the CLI has no established session, it opens
 Shiplet's browser authorization flow. Select **Authorize CLI**, then
-**Return to CLI** on the approval page to complete the local callback. It keeps
-the short-lived session in memory, pins it to the exact Shiplet origin, never prints it, and revokes it
+**Return to CLI** on the approval page. It keeps the short-lived session in
+memory, pins it to the exact Shiplet origin, never prints it, and revokes it
 when the command finishes. Open the returned review URL to review the artifact.
 No Cloudflare connection is required for managed static publishing.
 
