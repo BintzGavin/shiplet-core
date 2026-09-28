@@ -12094,13 +12094,20 @@ app.post("/cli/authorize/complete", async (c) => {
     const callback = new URL(approved.redirectUri);
     callback.searchParams.set("code", approved.code);
     callback.searchParams.set("state", approved.state);
-    return new Response(null, {
-      status: 302,
+    // Keep the authorization form same-origin. Browsers apply form-action to
+    // redirect destinations, so a 302 to loopback can consume the approval
+    // without delivering its code. A fresh document makes this a normal link.
+    const body = `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Return to Shiplet CLI</title></head><body><main><h1>Authorization approved</h1><p>Return to the local CLI to finish connecting. If the CLI has stopped, restart the command to request a new authorization.</p><a href="${escapeAuthHtml(callback.toString())}" rel="noreferrer">Return to CLI</a></main></body></html>`;
+    return new Response(body, {
+      status: 200,
       headers: {
-        location: callback.toString(),
+        "content-type": "text/html; charset=utf-8",
+        "content-security-policy":
+          "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'",
         "cache-control": "no-store",
         pragma: "no-cache",
         "referrer-policy": "no-referrer",
+        "x-content-type-options": "nosniff",
       },
     });
   } catch (error) {
