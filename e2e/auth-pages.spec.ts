@@ -61,12 +61,13 @@ test("sign-in and invitation failures offer styled recovery on mobile", async ({
   }
 });
 
-test("agent access leads with CLI setup and retains MCP and API key controls", async ({ page }) => {
-  await loginAs(page, testUser("agent-cli-first"));
+test("agent access leads with MCP setup and retains CLI and API key controls", async ({ page }) => {
+  await loginAs(page, testUser("agent-mcp-first"));
   await page.goto("/agents");
-  await expect(page.getByRole("heading", { name: "Connect with the CLI" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Connect with MCP" })).toBeVisible();
   await expect(page.getByRole("heading", { name: "API Keys and MCP" })).toBeVisible();
-  await page.getByRole("link", { name: "Set up CLI authentication" }).click();
-  await expect(page).toHaveURL(/\/docs\/cli$/);
-  await expect(page.getByText("Recommended for agent work.", { exact: true })).toBeVisible();
+  await expect(page.locator(".agent-auth-recommendation").getByRole("link", { name: "CLI authentication" })).toBeVisible();
+  await page.getByRole("link", { name: "Set up MCP" }).click();
+  await expect(page).toHaveURL(/\/docs\/code-mode-mcp$/);
+  await expect(page.getByText("Code Mode MCP is the preferred route for agent work.", { exact: true })).toBeVisible();
 });

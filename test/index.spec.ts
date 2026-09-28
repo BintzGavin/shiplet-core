@@ -1189,7 +1189,7 @@ describe("Shiplet", () => {
       expect(html).toContain("Open the Prepare page");
       expect(html).toContain("Choose the work to review");
       expect(html).toContain("Open the review link");
-      expect(html).toContain("Alternative: connect with MCP");
+      expect(html).toContain("Connect with MCP");
       expect(html).toContain('href="/docs/review-feedback"');
       expect(html).not.toContain('href="/docs/packages-revisions"');
       expect(html).not.toContain('href="/docs/deployment"');
@@ -1212,7 +1212,7 @@ describe("Shiplet", () => {
       expect(quickstartHtml.indexOf("safe default")).toBeLessThan(
         quickstartHtml.indexOf("Open the review link"),
       );
-      expect(quickstartHtml).toContain("Alternative: connect with MCP");
+      expect(quickstartHtml).toContain("Connect with MCP");
 
       const introduction = await requestHelper("/docs");
       const introductionHtml = await introduction.text();
@@ -1245,7 +1245,7 @@ describe("Shiplet", () => {
     it("Given a technical owner, When MCP and widget guidance is read, Then automation stays on the review product boundary", async () => {
       const cliGuide = await requestHelper("/docs/cli");
       expect(cliGuide.status).toBe(200);
-      expect(await cliGuide.text()).toContain("Recommended for agent work");
+      expect(await cliGuide.text()).toContain("alternative for local command-line workflows");
 
       const publicMcpHtml = await (
         await requestHelper("/docs/code-mode-mcp")

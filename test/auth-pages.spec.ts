@@ -25,7 +25,8 @@ describe("authentication page experience", () => {
     expect(html).toContain("shiplet-brand-shell");
     expect(html).toContain("auth-page@example.com");
     expect(html).toContain("ten minutes");
-    expect(html).toContain("Recommended for agent work");
+    expect(html).toContain("CLI access");
+    expect(html).not.toContain("Recommended for agent work");
     expect(html).toContain('name="approval" value="approve"');
     expect(html).toContain('name="approval" value="deny"');
     expect(html).toContain("noindex,nofollow,noarchive");
@@ -55,17 +56,22 @@ describe("authentication page experience", () => {
     expect(await response.text()).toBe("Missing WorkOS authorization code");
   });
 
-  it("recommends CLI authentication to agents while keeping browser sign-in and MCP available", async () => {
+  it("recommends MCP to agents while retaining CLI browser authorization", async () => {
     const home = await (await request("/")).text();
     expect(home).toContain('href="/auth/login"');
-    expect(home).toContain('href="/docs/cli"');
+    expect(home).toContain('href="/docs/code-mode-mcp">Working with an agent? Start with MCP');
     const cli = await request("/docs/cli");
     expect(cli.status).toBe(200);
     const html = await cli.text();
-    expect(html).toContain("Recommended for agent work");
+    expect(html).toContain("alternative for local command-line workflows");
     expect(html).toContain("source checkout");
     expect(html).toContain("npm run shiplet -- prepare");
     expect(html).toContain('href="/docs/code-mode-mcp"');
-    expect(await (await request("/llms.txt")).text()).toContain("CLI is the recommended authentication route for agent work");
+    for (const path of ["/docs", "/docs/quickstart", "/docs/cli", "/docs/code-mode-mcp"]) {
+      const guide = await (await request(path)).text();
+      expect(guide).toContain("preferred route for agent work");
+      expect(guide).not.toContain("CLI is the recommended");
+    }
+    expect(await (await request("/llms.txt")).text()).toContain("Code Mode MCP is the preferred route for agent work");
   });
 });

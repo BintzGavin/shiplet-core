@@ -15,8 +15,8 @@ tickets.
   artifact and open its review link.
 - **[Collect feedback](https://shiplet.cc/docs/review-feedback):** leave
   contextual comments and work through review tickets.
-- **[Automate with an agent](https://shiplet.cc/docs/cli):** start with CLI browser
-  authorization, the recommended authentication route for agent work.
+- **[Automate with an agent](https://shiplet.cc/docs/code-mode-mcp):** connect
+  through Code Mode MCP, the preferred route for agent work.
 - **[Manage access](https://shiplet.cc/docs/access-control):** choose who can
   view or edit each Shiplet.
 - **[Connect a website](https://shiplet.cc/docs/embed):** attach the
@@ -46,12 +46,8 @@ The fastest path starts in the browser:
 4. Open the review link, leave a comment, and find the resulting ticket in the
    Shiplet detail page or Feedback view.
 
-For agent-driven work, use [CLI authentication](https://shiplet.cc/docs/cli).
-From a source checkout, run a Shiplet command and approve it in your browser.
-The session stays in memory for up to ten minutes and is revoked when the
-command finishes. No public npm package or separate login command is available.
-
-For remote agents or MCP clients, connect to:
+For agent-driven work, use [Code Mode MCP](https://shiplet.cc/docs/code-mode-mcp),
+the preferred route. Connect an MCP client to:
 
 ```text
 https://shiplet.cc/api/mcp
@@ -61,6 +57,11 @@ The first protected action opens browser authentication. The
 [Code Mode MCP guide](https://shiplet.cc/docs/code-mode-mcp) includes a complete
 client example. The [OpenAPI document](https://shiplet.cc/openapi.json) is the
 machine-readable contract for supported direct REST operations.
+
+For local command-line workflows, [CLI authentication](https://shiplet.cc/docs/cli)
+is also available. Run a command from a source checkout and approve it in your
+browser. The session stays in memory for up to ten minutes and is revoked when
+the command finishes. No public npm package or separate login command is available.
 
 ## Run the source locally
 

@@ -5635,9 +5635,10 @@ export const BuildSettingsPage = (nonce: KernelDocumentNonce) => `
       <section class="success-card shiplet-panel" id="agents">
         <div class="agent-auth-recommendation">
           <span class="auth-recommendation">Recommended for agent work</span>
-          <h2>Connect with the CLI</h2>
-          <p>Run a Shiplet command from a source checkout, approve access in your browser, then return to your agent. The short-lived session stays in memory.</p>
-          <a class="btn btn-primary" href="/docs/cli">Set up CLI authentication</a>
+          <h2>Connect with MCP</h2>
+          <p>Code Mode MCP is the preferred route for agent work. Connect your MCP client and approve access in your browser.</p>
+          <a class="btn btn-primary" href="/docs/code-mode-mcp">Set up MCP</a>
+          <p>For local command-line workflows, use <a href="/docs/cli">CLI authentication</a>.</p>
         </div>
         <span class="success-card-label">Dock crew</span>
         <h2>${glyph("plug", "section-glyph")}API Keys and MCP</h2>

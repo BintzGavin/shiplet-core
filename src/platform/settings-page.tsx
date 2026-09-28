@@ -184,7 +184,7 @@ function settingsPageCopy(route: SettingsRoute) {
 		return {
 			eyebrow: "Agents",
 			title: "Agent access",
-			copy: "Start with CLI browser authorization for agent work, or connect through MCP and scoped API keys.",
+			copy: "Connect agents through Code Mode MCP, or use the CLI for local command-line workflows and scoped API keys for CI.",
 		};
 	}
 	return {
@@ -550,9 +550,10 @@ function AgentsSection() {
 		<section className="success-card shiplet-panel" id="agents">
 			<div className="agent-auth-recommendation">
 				<span className="auth-recommendation">Recommended for agent work</span>
-				<h2>Connect with the CLI</h2>
-				<p>Run a Shiplet command from a source checkout, approve access in your browser, then return to your agent. The short-lived session stays in memory.</p>
-				<a className="btn btn-primary" href="/docs/cli">Set up CLI authentication</a>
+				<h2>Connect with MCP</h2>
+				<p>Code Mode MCP is the preferred route for agent work. Connect your MCP client and approve access in your browser.</p>
+				<a className="btn btn-primary" href="/docs/code-mode-mcp">Set up MCP</a>
+				<p>For local command-line workflows, use <a href="/docs/cli">CLI authentication</a>.</p>
 			</div>
 			<div className="dashboard-section-header">
 				<div>

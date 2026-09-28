@@ -12087,7 +12087,7 @@ app.get("/cli/authorize", async (c) => {
     if (!authorization) return c.text("Invalid CLI authorization request", 400);
     const body = renderPage(`<div class="auth-stage auth-stage-compact">
       <section class="form-container auth-card auth-decision" aria-labelledby="cli-auth-title">
-        <span class="auth-recommendation">Recommended for agent work</span>
+        <span class="auth-recommendation">CLI access</span>
         <h1 id="cli-auth-title">Authorize Shiplet CLI</h1>
         <p>Your local CLI is waiting for permission to work with Shiplet.</p>
         <div class="auth-account"><span>Authorizing as</span><strong>${escapeAuthHtml(user.email)}</strong></div>
@@ -19750,7 +19750,7 @@ app.get("/", async (c) => {
 						<a class="link-btn" href="/auth/login">Prepare a review</a>
 						<a class="btn btn-secondary" href="/play">Try the sandbox</a>
 						<a class="auth-docs-link" href="/docs/why-shiplet">Docs</a>
-						<div class="auth-agent-entry"><a href="/docs/cli">Working with an agent? Start with the CLI</a><p>Recommended for agent work. Approve access in your browser, then continue in your terminal.</p></div>
+						<div class="auth-agent-entry"><a href="/docs/code-mode-mcp">Working with an agent? Start with MCP</a><p>Connect your agent through Code Mode MCP and approve access in your browser.</p></div>
 					</div>
 				</div>`,
         {

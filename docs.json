@@ -40,8 +40,8 @@
       {
         "group": "Automation",
         "pages": [
-          "docs/cli",
           "docs/code-mode-mcp",
+          "docs/cli",
           "docs/api-keys",
           "docs/api-surface"
         ]
