@@ -14,8 +14,6 @@ import {
   testUser,
 } from "./helpers";
 
-const navigationR7EvidenceDir = "/private/tmp/shiplet-parity-navigation-r8-20260920";
-
 type PortableFile = {
   path: string;
   mediaType: string;
@@ -398,7 +396,7 @@ test.describe("trusted review host", () => {
   test("submits the built-in Page comment in place with one disabled request and no popup", async ({
     page,
     request,
-  }) => {
+  }, testInfo) => {
     const user = testUser("trusted-one-submit");
     const organization = await createOrganization(request, user);
     const published = await publishStaticShiplet(request, user, organization.id, {
@@ -455,7 +453,10 @@ test.describe("trusted review host", () => {
     release?.();
     await submission;
     await expect(composer).toBeHidden();
-    await page.screenshot({ path: `${navigationR7EvidenceDir}/hosted-one-submit.png`, fullPage: true });
+    await page.screenshot({
+      path: testInfo.outputPath("hosted-one-submit.png"),
+      fullPage: true,
+    });
   });
 
   test("selects artifact context and saves human-attributed feedback in place", async ({
@@ -915,7 +916,7 @@ test.describe("trusted review host", () => {
       contentType: "application/json",
     });
     await page.screenshot({
-      path: "/private/tmp/shiplet-parity-tail-t2-recovery-r3c-20260921/media/backend06-facade-stability.png",
+      path: testInfo.outputPath("backend06-facade-stability.png"),
       fullPage: true,
     });
     await expectNoPageErrors(errors);
@@ -993,7 +994,7 @@ test.describe("trusted review collaboration controls", () => {
   test("updates status, replies, and watch state from the trusted document", async ({
     page,
     request,
-  }) => {
+  }, testInfo) => {
     const user = testUser("trusted-thread");
     const organization = await createOrganization(request, user);
     const published = await publishStaticShiplet(
@@ -1070,7 +1071,7 @@ test.describe("trusted review collaboration controls", () => {
     });
     await expect(status).toHaveValue("In Progress");
     await page.screenshot({
-      path: `${navigationR7EvidenceDir}/backend-08-native-status.png`,
+      path: testInfo.outputPath("backend-08-native-status.png"),
       fullPage: true,
     });
     await page
@@ -1402,23 +1403,31 @@ test.describe("trusted review collaboration controls", () => {
     await expect(
       confirmation.getByRole("heading", { name: "Feedback sent" }),
     ).toBeVisible();
+    const reviewOptions = page.locator("summary[aria-label='Review options']");
+    await expect(reviewOptions).toBeVisible();
     const presenceBounds = await page
       .locator(".shiplet-review-presence")
       .boundingBox();
-    const refreshBounds = await page
-      .getByRole("button", { name: "Refresh" })
-      .boundingBox();
+    const reviewOptionsBounds = await reviewOptions.boundingBox();
     expect(presenceBounds).toBeTruthy();
-    expect(refreshBounds).toBeTruthy();
-    if (presenceBounds && refreshBounds) {
+    expect(reviewOptionsBounds).toBeTruthy();
+    if (presenceBounds && reviewOptionsBounds) {
       expect(
-        presenceBounds.x < refreshBounds.x + refreshBounds.width &&
-          presenceBounds.x + presenceBounds.width > refreshBounds.x &&
-          presenceBounds.y < refreshBounds.y + refreshBounds.height &&
-          presenceBounds.y + presenceBounds.height > refreshBounds.y,
+        presenceBounds.x < reviewOptionsBounds.x + reviewOptionsBounds.width &&
+          presenceBounds.x + presenceBounds.width > reviewOptionsBounds.x &&
+          presenceBounds.y < reviewOptionsBounds.y + reviewOptionsBounds.height &&
+          presenceBounds.y + presenceBounds.height > reviewOptionsBounds.y,
       ).toBe(false);
     }
-    await page.getByRole("button", { name: "Refresh" }).click();
+    await reviewOptions.click();
+    await expect(reviewOptions.locator("xpath=..")).toHaveAttribute(
+      "open",
+      "",
+    );
+    const refresh = page.locator("[data-shiplet-review-refresh='v1']");
+    await expect(refresh).toBeVisible();
+    await expect(refresh).toBeEnabled();
+    await refresh.click();
     await expect(page.locator(".shiplet-review-list")).toContainText(comment);
     const afterApproval = await request.get(
       `/api/projects/${encodeURIComponent(published.project.id)}/review-feedback`,
