@@ -66,15 +66,15 @@ for (const imageAvailable of [true, false]) {
       await expect(avatars.nth(1)).toHaveCSS("background-size", "400% 300%");
     } else {
       await expect(avatars.first()).toHaveText("AR");
-      await expect(avatars.nth(1)).toHaveText("F");
+      await expect(avatars.nth(1)).toHaveText("R");
       await expect(avatars.first()).toHaveCSS("background-image", "none");
     }
     await avatars.first().hover();
     await expect(avatars.first()).toHaveAttribute("title", "Alfa Reviewer");
     await avatars.nth(1).hover();
-    await expect(avatars.nth(1)).toHaveAttribute("title", "foxtrot@example.com");
+    await expect(avatars.nth(1)).toHaveAttribute("title", "Reviewer");
     await expect(avatars.first()).toHaveAccessibleName("Alfa Reviewer");
-    await expect(avatars.nth(1)).toHaveAccessibleName("foxtrot@example.com");
+    await expect(avatars.nth(1)).toHaveAccessibleName("Reviewer");
     await expect(page.locator("[data-shiplet-artifact-frame]")).toHaveAttribute("sandbox", "allow-scripts allow-forms");
   });
 }

@@ -7,7 +7,6 @@ type PresenceViewer = {
 	id: string;
 	kind: PresenceKind;
 	name: string;
-	email: string | null;
 	avatarPreset: string | null;
 	avatarDataUrl: string | null;
 	color: string;
@@ -49,6 +48,10 @@ type PresenceAttachment = {
 const MAX_TEXT_LENGTH = 240;
 const MAX_AVATAR_DATA_URL_LENGTH = 750_000;
 const DEFAULT_COLOR = "#2f6e88";
+// Signed-in reviewers without a display name are shown with this label.
+// Presence reaches every co-viewer, including anonymous viewers of public
+// Shiplets, so an email address is never used as a name.
+const UNNAMED_REVIEWER_LABEL = "Reviewer";
 
 // Signal-flag cursor colors. Every live reviewer is assigned the least-used
 // color when they join so people on the same page are always distinguishable;
@@ -125,7 +128,7 @@ export class ReviewPresenceCoordinator extends DurableObject<Env> {
 		this.safeSend(server, {
 			type: "presence:ready",
 			connectionId: attachment.connectionId,
-			viewer: attachment.viewer,
+			viewer: publicViewer(attachment.viewer),
 			viewers: this.viewers(),
 			at: Date.now(),
 		});
@@ -172,7 +175,7 @@ export class ReviewPresenceCoordinator extends DurableObject<Env> {
 			ws.serializeAttachment(attachment);
 			this.broadcastToPage(ws, attachment, {
 				type: "cursor:leave",
-				viewer: attachment.viewer,
+				viewer: publicViewer(attachment.viewer),
 				page: attachment.page,
 				at: Date.now(),
 			});
@@ -185,7 +188,7 @@ export class ReviewPresenceCoordinator extends DurableObject<Env> {
 			if (!attachment.viewport) return;
 			this.broadcastToPage(ws, attachment, {
 				type: "viewport:update",
-				viewer: attachment.viewer,
+				viewer: publicViewer(attachment.viewer),
 				page: attachment.page,
 				viewport: attachment.viewport,
 				at: Date.now(),
@@ -210,17 +213,11 @@ export class ReviewPresenceCoordinator extends DurableObject<Env> {
 			request.headers.get("x-shiplet-presence-user-id"),
 			120,
 		);
-		const email = normalizeText(
-			request.headers.get("x-shiplet-presence-user-email"),
-			MAX_TEXT_LENGTH,
-		);
 		const name =
-			normalizeText(
-				request.headers.get("x-shiplet-presence-user-name"),
-				MAX_TEXT_LENGTH,
-			) ||
-			email ||
-			`Guest ${connectionId.slice(0, 3).toUpperCase()}`;
+			presenceDisplayName(request.headers.get("x-shiplet-presence-user-name")) ||
+			(userId
+				? UNNAMED_REVIEWER_LABEL
+				: `Guest ${connectionId.slice(0, 3).toUpperCase()}`);
 		const avatarPreset = normalizeText(
 			request.headers.get("x-shiplet-presence-avatar-preset"),
 			MAX_TEXT_LENGTH,
@@ -229,7 +226,6 @@ export class ReviewPresenceCoordinator extends DurableObject<Env> {
 			id: userId || `guest_${connectionId.replace(/-/g, "").slice(0, 16)}`,
 			kind: userId ? "user" : isSandboxProject(url) ? "sandbox" : "guest",
 			name,
-			email: email || null,
 			avatarPreset: avatarPreset || null,
 			avatarDataUrl: null,
 			color: DEFAULT_COLOR,
@@ -295,7 +291,6 @@ export class ReviewPresenceCoordinator extends DurableObject<Env> {
 				id: `guest_${connectionId.replace(/-/g, "").slice(0, 16)}`,
 				kind: "guest",
 				name: `Guest ${connectionId.slice(0, 3).toUpperCase()}`,
-				email: null,
 				avatarPreset: null,
 				avatarDataUrl: null,
 				color: DEFAULT_COLOR,
@@ -330,7 +325,7 @@ export class ReviewPresenceCoordinator extends DurableObject<Env> {
 		return Array.from(byViewer.values())
 			.sort((a, b) => a.joinedAt - b.joinedAt)
 			.map((attachment) => ({
-				...attachment.viewer,
+				...publicViewer(attachment.viewer),
 				connectionId: attachment.connectionId,
 				page: attachment.page,
 				cursor: attachment.cursor,
@@ -356,7 +351,7 @@ export class ReviewPresenceCoordinator extends DurableObject<Env> {
 		if (!attachment.cursor) return;
 		this.broadcastToPage(sender, attachment, {
 			type: "cursor:update",
-			viewer: attachment.viewer,
+			viewer: publicViewer(attachment.viewer),
 			page: attachment.page,
 			cursor: attachment.cursor,
 			at: Date.now(),
@@ -401,17 +396,16 @@ function normalizeViewer(
 			: current.kind;
 	const kind = authenticatedUserId ? "user" : requestedKind;
 	const id = authenticatedUserId || normalizeViewerId(input.id, current.id);
-	const email = normalizeText(input.email, MAX_TEXT_LENGTH) || current.email;
-	const name =
-		normalizeText(input.name, MAX_TEXT_LENGTH) ||
-		email ||
-		current.name ||
-		"Guest";
+	// A signed-in reviewer's name comes from the platform, not the client, so
+	// nobody can relabel themselves as someone else. Client-supplied emails
+	// are ignored.
+	const name = authenticatedUserId
+		? current.name
+		: presenceDisplayName(input.name) || current.name || "Guest";
 	return {
 		id,
 		kind,
 		name,
-		email,
 		avatarPreset:
 			normalizeText(input.avatarPreset, MAX_TEXT_LENGTH) || current.avatarPreset,
 		avatarDataUrl: normalizeAvatarDataUrl(input.avatarDataUrl) || current.avatarDataUrl,
@@ -419,6 +413,27 @@ function normalizeViewer(
 		// distinguishable; client-supplied colors are ignored.
 		color: current.color,
 	};
+}
+
+// The only viewer fields co-viewers receive. Attachments written before email
+// was dropped from presence may still carry it, so the shape is rebuilt here
+// instead of spreading the stored viewer.
+function publicViewer(viewer: PresenceViewer) {
+	return {
+		id: viewer.id,
+		kind: viewer.kind,
+		name:
+			presenceDisplayName(viewer.name) ||
+			(viewer.kind === "user" ? UNNAMED_REVIEWER_LABEL : "Guest"),
+		avatarPreset: viewer.avatarPreset,
+		avatarDataUrl: viewer.avatarDataUrl,
+		color: viewer.color,
+	};
+}
+
+function presenceDisplayName(value: unknown) {
+	const name = normalizeText(value, MAX_TEXT_LENGTH);
+	return /[^\s@]+@[^\s@]+/.test(name) ? "" : name;
 }
 
 function normalizeViewerId(value: unknown, fallback: string) {

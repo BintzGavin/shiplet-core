@@ -4281,7 +4281,7 @@ async function issueReviewCapabilityToken(
     viewer: {
       id: user.id,
       email: user.email,
-      name: reviewPresenceUserName(user),
+      name: reviewerDisplayName(user),
       avatarPreset: user.avatar_preset || null,
       avatarDataUrl: user.avatar_data_url || null,
     },
@@ -5456,11 +5456,20 @@ function parseReviewBooleanFilter(params: URLSearchParams, name: string) {
   throw new Response(`Invalid ${name} filter`, { status: 400 });
 }
 
-function reviewPresenceUserName(user: ShipletUser) {
-  const parts = [user.first_name, user.last_name]
+// A reviewer's own name, or "" when they have not set one. Use this for
+// anything other viewers can see: presence reaches anonymous viewers of
+// public Shiplets.
+function reviewerDisplayName(user: ShipletUser) {
+  return [user.first_name, user.last_name]
     .map((part) => normalizeOptionalString(part))
-    .filter(Boolean);
-  return parts.join(" ") || user.email;
+    .filter(Boolean)
+    .join(" ");
+}
+
+// Falls back to the email address, so only use it where the caller may
+// already see that email, such as organization member mention lists.
+function reviewerLabel(user: ShipletUser) {
+  return reviewerDisplayName(user) || user.email;
 }
 
 async function listTrustedReviewMentionCandidates(
@@ -5493,7 +5502,7 @@ async function listTrustedReviewMentionCandidates(
     hydrated.push({
       id: mentionUser.id,
       email: mentionUser.email,
-      name: reviewPresenceUserName(mentionUser),
+      name: reviewerLabel(mentionUser),
       avatar_preset: mentionUser.avatar_preset || null,
       avatar_data_url: mentionUser.avatar_data_url || null,
       organization_role: mentionUser.organization_role,
@@ -5598,7 +5607,7 @@ async function listModernReviewMentionCandidates(
 		 WHERE organization_memberships.organization_id = ?`,
 	).bind(...bindings).all<{ id: string; email: string; first_name: string | null; last_name: string | null }>();
 	const candidates: ModernReviewMentionCandidate[] = (rows.results || []).map((candidate) => {
-		const label = reviewPresenceUserName(candidate as ShipletUser);
+		const label = reviewerLabel(candidate as ShipletUser);
 		return { id: candidate.id, label, _sortLabel: modernMentionSortLabel(label), _search: `${candidate.email} ${label}`.normalize("NFKC").toLocaleLowerCase() };
 	}).filter((candidate) => candidate._search.includes(query)).sort((left, right) =>
 		left._sortLabel < right._sortLabel ? -1 : left._sortLabel > right._sortLabel ? 1 : left.id < right.id ? -1 : left.id > right.id ? 1 : 0,
@@ -5629,11 +5638,25 @@ function reviewClientUser(user: ShipletUser | null) {
   return {
     id: user.id,
     email: user.email,
-    name: reviewPresenceUserName(user),
+    name: reviewerLabel(user),
     avatarPreset: user.avatar_preset || null,
     avatarDataUrl: user.avatar_data_url || null,
     kind: "user",
   };
+}
+
+// The presence object trusts x-shiplet-presence-* headers as the platform's
+// statement of who joined, so any the client sent are dropped first.
+function withoutClientPresenceHeaders(request: Request) {
+  const headers = new Headers(request.headers);
+  const clientPresenceHeaders: string[] = [];
+  headers.forEach((_value, headerName) => {
+    if (headerName.startsWith("x-shiplet-presence-")) {
+      clientPresenceHeaders.push(headerName);
+    }
+  });
+  for (const headerName of clientPresenceHeaders) headers.delete(headerName);
+  return headers;
 }
 
 function reviewPresenceRequest(
@@ -5641,13 +5664,14 @@ function reviewPresenceRequest(
   project: Project,
   user: ShipletUser | null,
 ) {
-  const headers = new Headers(request.headers);
+  const headers = withoutClientPresenceHeaders(request);
   headers.set("x-shiplet-presence-project-id", project.id);
   headers.set("x-shiplet-presence-project-name", project.name);
   if (user) {
+    // Co-viewers see only the display name and avatar, never the email.
     headers.set("x-shiplet-presence-user-id", user.id);
-    headers.set("x-shiplet-presence-user-email", user.email);
-    headers.set("x-shiplet-presence-user-name", reviewPresenceUserName(user));
+    const name = reviewerDisplayName(user);
+    if (name) headers.set("x-shiplet-presence-user-name", name);
     if (user.avatar_preset) {
       headers.set(
         "x-shiplet-presence-avatar-preset",
@@ -22341,7 +22365,11 @@ app.get("/api/projects/:projectId/review-presence/ws", async (c) => {
 
     if (isSandboxProjectId(projectId)) {
       const stub = c.env.SHIPLET_ROOT.getByName(projectId);
-      return stub.fetch(c.req.raw);
+      return stub.fetch(
+        new Request(c.req.raw, {
+          headers: withoutClientPresenceHeaders(c.req.raw),
+        }),
+      );
     }
 
     const project = await requireReviewProject(c);

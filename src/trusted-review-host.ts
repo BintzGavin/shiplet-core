@@ -1675,7 +1675,7 @@ ${attachmentDrafts}
 		return {
 			id: viewer.id,
 			kind: viewer.kind,
-			name: (boundedString(viewer.name, 200) && viewer.name.trim()) || (boundedString(viewer.email, 254) && viewer.email.trim()) || "Reviewer",
+			name: (boundedString(viewer.name, 200) && viewer.name.trim()) || "Reviewer",
 			avatarPreset: boundedString(viewer.avatarPreset, 64) ? viewer.avatarPreset : null,
 			avatarDataUrl: typeof viewer.avatarDataUrl === "string" && viewer.avatarDataUrl.length <= 65536 && /^data:image\/(?:png|jpeg|webp);base64,[A-Za-z0-9+/=]+$/.test(viewer.avatarDataUrl) ? viewer.avatarDataUrl : null,
 			color: parsePresenceColor(viewer.color),
