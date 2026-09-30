@@ -8697,7 +8697,9 @@ function customMcpApprovalHttpResponse(
     headers: {
       "content-type": contentType,
       "cache-control": "no-store",
-      "referrer-policy": "no-referrer",
+      // Chromium serializes form Origin as null under no-referrer. Keep the
+      // trusted same-origin POST verifiable without leaking URLs off-origin.
+      "referrer-policy": contentType.startsWith("text/html") ? "same-origin" : "no-referrer",
       "x-content-type-options": "nosniff",
       "content-security-policy":
         "default-src 'none'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'",
@@ -10446,17 +10448,18 @@ async function executeCodeModeRequest(
       feedbackListMatch[1],
       ["feedback:read"],
     );
-    return {
-      feedback: await listReviewFeedback(env.DB, project.id, {
-        pageUrl: stringQuery(request.query?.pageUrl),
-        status: stringQuery(request.query?.status),
-        includeClosed: request.query?.includeClosed === true,
-        limit:
-          typeof request.query?.limit === "number"
-            ? request.query.limit
-            : undefined,
-      }),
-    };
+    const queryUrl = new URL(request.path, "http://localhost");
+    for (const [key, value] of Object.entries(request.query || {})) {
+      if (value !== undefined && value !== null) queryUrl.searchParams.set(key, String(value));
+    }
+    const actorUserId = codeModeSubject(context)?.id || null;
+    const agent = codeModeAgentActor(context);
+    const query = parseReviewFeedbackListQuery(queryUrl, {
+      actorUserId,
+      cursorActor: agent ? `agent:${agent.id}` : `user:${actorUserId}`,
+      defaultState: "open",
+    });
+    return listReviewFeedbackPage(env.DB, project.id, query);
   }
 
   if (feedbackListMatch && request.method === "POST") {

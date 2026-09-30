@@ -13,20 +13,16 @@ function operation(path: string, method: string) {
 }
 
 describe("focused public OpenAPI contract", () => {
-  it("describes only the review product, not its internal package lifecycle", () => {
+  it("describes the review workflow without exposing deployment administration", () => {
     const serialized = JSON.stringify(spec);
     for (const retiredPath of [
-      "/api/shiplets/{projectId}/package",
-      "/api/shiplets/{projectId}/drafts",
-      "/api/drafts/{draftId}/validate",
-      "/api/drafts/{draftId}/promote",
       "/api/shiplets/{projectId}/rollback",
       "/api/revisions/{revisionId}/deployments",
       "/api/cloudflare/oauth/start",
     ]) {
       expect(paths).not.toHaveProperty(retiredPath);
     }
-    expect(serialized).not.toContain("ShipletPackage");
+    expect(schemas).not.toHaveProperty("ShipletPackage");
     expect(serialized).not.toContain("PromotionRequest");
     expect(serialized).not.toContain("DeploymentRequest");
     expect(spec.info.description).toMatch(/prepare an artifact/i);
@@ -34,20 +30,17 @@ describe("focused public OpenAPI contract", () => {
   });
 
   it("publishes the complete bounded review-layer workflow", () => {
+    expect(operation("/api/shiplets/{projectId}/review-layer", "get")["x-shiplet-scopes"]).toEqual([
+      "shiplets:read",
+    ]);
     expect(
-      operation("/api/shiplets/{projectId}/review-layer", "get")[
-        "x-shiplet-scopes"
-      ],
-    ).toEqual(["shiplets:read"]);
-    expect(
-      operation("/api/shiplets/{projectId}/review-layer/previews", "post")
-        .requestBody.content["application/json"].schema,
+      operation("/api/shiplets/{projectId}/review-layer/previews", "post").requestBody.content[
+        "application/json"
+      ].schema,
     ).toEqual({ $ref: "#/components/schemas/ReviewLayerPreviewRequest" });
     expect(
-      operation(
-        "/api/shiplets/{projectId}/review-layer/previews/{previewId}/apply",
-        "post",
-      ).requestBody.content["application/json"].schema,
+      operation("/api/shiplets/{projectId}/review-layer/previews/{previewId}/apply", "post")
+        .requestBody.content["application/json"].schema,
     ).toEqual({ $ref: "#/components/schemas/ReviewLayerApplyRequest" });
 
     expect(schemas.ReviewLayerFile).toMatchObject({
@@ -70,6 +63,13 @@ describe("focused public OpenAPI contract", () => {
     const supported = new Set([
       "get /api/shiplets",
       "post /api/shiplets",
+      "get /api/shiplets/{projectId}/package",
+      "get /api/shiplets/{projectId}/revisions/{revisionId}/package",
+      "post /api/shiplets/{projectId}/drafts",
+      "get /api/drafts/{draftId}/package",
+      "put /api/drafts/{draftId}/package",
+      "post /api/drafts/{draftId}/validate",
+      "post /api/drafts/{draftId}/promote",
       "get /api/shiplets/{projectId}/review-layer",
       "post /api/shiplets/{projectId}/review-layer/previews",
       "post /api/shiplets/{projectId}/review-layer/previews/{previewId}/apply",
@@ -94,12 +94,11 @@ describe("focused public OpenAPI contract", () => {
   it("declares useful success schemas and exact bearer scopes", () => {
     for (const [path, pathItem] of Object.entries(paths)) {
       for (const [method, candidate] of Object.entries(pathItem)) {
-        const success = Object.entries(candidate.responses ?? {}).find(
-          ([status]) => /^2\d\d$/.test(status),
+        const success = Object.entries(candidate.responses ?? {}).find(([status]) =>
+          /^2\d\d$/.test(status),
         )?.[1] as any;
         expect(
-          success?.content?.["application/json"]?.schema ??
-            success?.content?.["image/png"]?.schema,
+          success?.content?.["application/json"]?.schema ?? success?.content?.["image/png"]?.schema,
           `${method.toUpperCase()} ${path}`,
         ).toBeDefined();
 
@@ -129,9 +128,7 @@ describe("focused public OpenAPI contract", () => {
       "Done",
       "Dropped",
     ]);
-    expect(spec.components.securitySchemes.browserSession.name).toBe(
-      "__Host-shiplet_session",
-    );
+    expect(spec.components.securitySchemes.browserSession.name).toBe("__Host-shiplet_session");
     expect(operation("/api/mcp", "post").security).toEqual([
       { bearerAuth: [] },
       { oauthAccessToken: [] },

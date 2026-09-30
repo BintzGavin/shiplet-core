@@ -85,6 +85,18 @@ npm run verify
 That gate runs generated-source checks, type checking, behavior-focused tests,
 Worker dry-runs, license checks, and the dependency audit.
 
+## Kody review workflow
+
+The maintained [Kody source package](integrations/kody/shiplet/README.md) turns a
+caller's Shiplet connection into a complete static artifact review workflow:
+publish, page through contextual feedback, prepare an immutable revision,
+collect before/after evidence, and activate after trusted owner approval.
+
+Run the [local browser demo](integrations/kody/demo/README.md) to exercise a real
+annotation and revision at the original review link. The demo uses local
+Wrangler storage and a synthetic account; hosted OAuth consent and a hosted
+Kody package installation remain separate verification steps.
+
 ## What is in this repository
 
 | Path | Responsibility |

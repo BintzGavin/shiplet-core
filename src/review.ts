@@ -71,6 +71,8 @@ export type ReviewCapability = {
 type JsonObject = Record<string, unknown>;
 
 export type ReviewFeedbackRecord = {
+	/** Active revision recorded by the canonical creation event, not a client claim. */
+	source_revision_id?: string | null;
 	id: string;
 	project_id: string;
 	organization_id: string;
@@ -2252,6 +2254,7 @@ function requireScope(token: ReviewTokenRecord, scope: ReviewScope) {
 async function hydrateFeedbackRows(db: D1Database, rows: ReviewFeedbackRow[]) {
 	if (rows.length === 0) return [];
 	const ids = rows.map((row) => row.id);
+	const revisionsByFeedback = new Map<string, string>();
 	const repliesByFeedback = new Map<string, ReviewReplyRow[]>();
 	const mentionsByFeedback = new Map<string, ReviewMentionRecord[]>();
 	const attachmentsByFeedback = new Map<string, ReviewAttachmentRecord[]>();
@@ -2271,6 +2274,16 @@ async function hydrateFeedbackRows(db: D1Database, rows: ReviewFeedbackRow[]) {
 			repliesByFeedback.set(reply.feedback_id, replies);
 		}
 
+		// Canonical events supply provenance; capture context remains untrusted.
+		for (const projectId of new Set(rows.filter(row => feedbackIds.includes(row.id)).map(row => row.project_id))) {
+			const events = await db.prepare(`SELECT revision_id, json_extract(custom_payload_json, '$.feedbackId') AS feedback_id
+				FROM shiplet_events WHERE project_id = ? AND event_kind = 'review.feedback-created'
+				AND json_extract(custom_payload_json, '$.feedbackId') IN (${placeholders})
+				ORDER BY created_at ASC, id ASC`).bind(projectId, ...feedbackIds).all<{ revision_id: string; feedback_id: string }>();
+			for (const event of events.results || []) {
+				if (!revisionsByFeedback.has(event.feedback_id)) revisionsByFeedback.set(event.feedback_id, event.revision_id);
+			}
+		}
 		const mentions = await listReviewMentions(db, feedbackIds);
 			for (const [feedbackId, feedbackMentions] of mentions) {
 				mentionsByFeedback.set(feedbackId, feedbackMentions);
@@ -2335,7 +2348,7 @@ async function hydrateFeedbackRows(db: D1Database, rows: ReviewFeedbackRow[]) {
 
 	return rows.map((row) =>
 		hydrateFeedbackRow(
-			row,
+			{ ...row, source_revision_id: revisionsByFeedback.get(row.id) ?? null },
 			repliesByFeedback.get(row.id) || [],
 				mentionsByFeedback.get(row.id) || [],
 				attachmentsByFeedback.get(row.id) || [],
