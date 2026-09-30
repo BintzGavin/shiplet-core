@@ -28,7 +28,9 @@ const DOCS_PUBLIC_CONTENT_SHA256: Record<string, string> = {
   "review-feedback":
     "6395cd616a18a9148f47a9f639bfc3d0027b663556f1ac0ecbe271040f4b116b",
   "code-mode-mcp":
-    "da0fd9d5cbedadeb5fa2cc6585510147aa846cfa73840a8b980c93269deb7f78",
+    "c9ee23db3654ff0614fee6aba59a8b2fc088aebde8c73fef0e0d5af762fef123",
+  "chatgpt-plugin":
+    "b5c50b45702742903356ceccf2c5af0cb3770a0b1c1e2362e07a7f55fccfe69a",
   "api-keys":
     "9fb78882f2041ecf900e128ad19c53131617c987bcb347f084d46c871d2ed83a",
   "api-surface":
@@ -267,6 +269,7 @@ const DOCS_PAGES: DocsPage[] = [
     body: `
 <p><strong>Code Mode MCP is the preferred route for agent work.</strong> Connect your MCP client and approve access in the browser. For local command-line workflows, <a href="/docs/cli">CLI authentication</a> is also available.</p>
 <p>Shiplet MCP lets an agent discover the supported API and call it through code. Interactive clients authenticate in the browser. A registered external agent can request access to one Shiplet organization when the environment enables agent registration.</p>
+<p>Using ChatGPT? The <a href="/docs/chatgpt-plugin">ChatGPT plugin</a> has its own endpoint and discrete tools.</p>
 <h2>Endpoint</h2>
 <pre><code>https://shiplet.cc/api/mcp</code></pre>
 <p>OAuth discovery is available at <code>https://shiplet.cc/.well-known/oauth-protected-resource</code>.</p>
@@ -324,6 +327,41 @@ const DOCS_PAGES: DocsPage[] = [
 <h2>Authentication and authority</h2>
 <p>Browser OAuth identifies an interactive user. A registered agent remains a separate actor in Shiplet's audit history, tied to the user who approved it and the selected organization. Its effective authority combines recognized agent permissions, current Shiplet membership and grants, the selected organization, and the requested operation. Unknown permissions grant nothing.</p>
 <p><strong>Next:</strong> connect through browser OAuth, or ask a compatible agent to follow <code>https://shiplet.cc/auth.md</code>, then run <code>search</code>.</p>`,
+  },
+  {
+    slug: "chatgpt-plugin",
+    title: "ChatGPT",
+    description:
+      "Publish pages for review and work through feedback from ChatGPT.",
+    group: "Automation",
+    body: `
+<p>The Shiplet plugin brings review work into ChatGPT. Publish an HTML page or a public URL for review, read the feedback left on it, and reply or change its status without leaving the conversation.</p>
+<h2>What it adds</h2>
+<ul><li><strong>Shiplet reviews</strong> is a sidebar app for browsing your Shiplets and their feedback.</li><li><strong>Review feedback</strong> opens a panel beside a conversation. Select a feedback item to share it with ChatGPT as context, then ask ChatGPT to address it, reply to the thread, or change its status.</li><li>The <strong>HTML file viewer</strong> previews a local <code>.html</code> or <code>.htm</code> file and publishes it for review when you choose. It is available in the ChatGPT desktop app.</li><li><strong>@-mentions</strong> let you mention one of your active Shiplets by name from the composer. They are available in the ChatGPT desktop app.</li></ul>
+<h2>Connect</h2>
+<pre><code>https://shiplet.cc/api/plugin/mcp</code></pre>
+<p>To test the plugin before a directory listing is available, connect it in ChatGPT developer mode.</p>
+<ol><li>Open <strong>Settings</strong>, choose <strong>Security and login</strong>, and turn on <strong>Developer mode</strong>.</li><li>Open the <strong>Plugins</strong> page and add the endpoint.</li><li>Approve Shiplet sign-in in the browser when ChatGPT asks.</li></ol>
+<h2>Tools</h2>
+<p>ChatGPT can call these tools.</p>
+<table class="docs-table" tabindex="0"><thead><tr><th>Tool</th><th>What it does</th><th>Reads or writes</th></tr></thead><tbody>
+  <tr><td><code>list_shiplets</code></td><td>Lists the Shiplets the account can access. Active by default; pass <code>status</code> for archived or all.</td><td>Reads</td></tr>
+  <tr><td><code>list_workspaces</code></td><td>Lists the workspaces the account belongs to.</td><td>Reads</td></tr>
+  <tr><td><code>list_feedback</code></td><td>Lists feedback on one Shiplet, unresolved by default.</td><td>Reads</td></tr>
+  <tr><td><code>get_feedback</code></td><td>Gets one feedback item with its full comment and replies.</td><td>Reads</td></tr>
+  <tr><td><code>publish_html_for_review</code></td><td>Publishes HTML and other text files as a new Shiplet and returns its review link.</td><td>Writes</td></tr>
+  <tr><td><code>create_url_review</code></td><td>Creates a new Shiplet for an existing public http or https page, as an <a href="/docs/publishing">experimental URL preview</a>.</td><td>Writes</td></tr>
+  <tr><td><code>reply_to_feedback</code></td><td>Posts a reply on a feedback thread.</td><td>Writes</td></tr>
+  <tr><td><code>update_feedback_status</code></td><td>Sets the status of a feedback item.</td><td>Writes</td></tr>
+</tbody></table>
+<ul><li>Replies post as the signed-in Shiplet user.</li><li>Publishing creates a new Shiplet each time. Publishing the same page again creates another Shiplet instead of updating the first.</li><li>New Shiplets use <code>organization</code> visibility unless <code>visibility</code> is set.</li><li>An account that belongs to several workspaces chooses one with <code>workspace_id</code>, taken from <code>list_workspaces</code>. Without it, publishing stops and nothing is created.</li></ul>
+<h2>Access</h2>
+<p>Every tool runs as the connected Shiplet account through the same authorization as the documented REST operations. ChatGPT sees only the Shiplets and feedback that account can already access.</p>
+<p><a href="/docs/code-mode-mcp">Code Mode MCP</a> gives an agent the same authority through <code>search</code> and <code>execute</code>. The ChatGPT plugin exposes discrete tools instead.</p>
+<h2>Self-host</h2>
+<p>After <a href="/docs/self-hosting">self-hosting Shiplet</a>, the plugin is served at <code>/api/plugin/mcp</code> on your app origin. OAuth discovery is available at <code>/.well-known/oauth-protected-resource/api/plugin/mcp</code>.</p>
+<ol><li>Add <code>&lt;your-origin&gt;/api/plugin/mcp</code> as a Resource Indicator in your WorkOS AuthKit environment, alongside <code>&lt;your-origin&gt;/api/mcp</code>.</li><li>For OpenAI's plugin domain verification, set the <code>OPENAI_APPS_CHALLENGE_TOKEN</code> Worker secret. Shiplet serves it as plain text at <code>/.well-known/openai-apps-challenge</code>.</li></ol>
+<p><strong>Next:</strong> connect the endpoint in ChatGPT developer mode, then ask ChatGPT to list your Shiplets.</p>`,
   },
   {
     slug: "cli",
