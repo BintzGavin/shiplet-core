@@ -191,6 +191,7 @@ Add a trusted review layer to builds, files, and live URLs for contextual feedba
 
 ## Machine-readable resources
 
+- Agent integration (preferred MCP route): ${absoluteSiteUrl(baseUrl, "/docs/code-mode-mcp")}
 - Website: ${absoluteSiteUrl(baseUrl, "/")}
 - Documentation: ${absoluteSiteUrl(baseUrl, "/docs")}
 - Why Shiplet: ${absoluteSiteUrl(baseUrl, "/docs/why-shiplet")}
@@ -202,6 +203,8 @@ Add a trusted review layer to builds, files, and live URLs for contextual feedba
 - Review client: ${absoluteSiteUrl(baseUrl, "/api/review/client.js")}
 
 ## Access model
+
+Code Mode MCP is the preferred route for agent work. Connect an MCP client and approve access in the browser. The CLI is an alternative for local command-line workflows: run commands from a Shiplet source checkout and approve each command in your browser. CLI sessions stay in memory for up to ten minutes and are revoked when the command finishes. The CLI and browser must run on the same computer; there is no public npm package. Use scoped organization API keys for unattended CI.
 
 Public discovery files describe Shiplet. Preparing review artifacts, organization management, API access, and MCP execution require authenticated access or an organization API token.
 `;

@@ -11,13 +11,14 @@ interface DocsPage {
 
 // prettier-ignore
 const DOCS_PUBLIC_CONTENT_SHA256: Record<string, string> = {
+  "cli": "b9dd3f9d963dffccb1cb63320bdf8d38a25f07a0247d317d7345ebdc57984576",
   "self-hosting": "03dd91928c89a6911867c9c4f4625aa4455306c420af821408540ffb7eac1f38",
   "browser-capture": "1b6542d6a598b88c6dacda840930f1ff5095d9c0952778bb3a26672603a61643",
-  "introduction": "85ada0b46d8b7b9285ea49ab385534abfda44ee3b6e09a89bcd0e84e3aec5042",
+  "introduction": "b507788d477880d6ea7d2a82d14b698d1a89c9e057511bd2a79f31be29538277",
   "why-shiplet":
     "a34409ae0097659bc90a6d30c9ae63733565e418412175f3871993a452735db4",
   "quickstart":
-    "7fac82983b1114abc22bbab2132b1f32ffb18f4e3d2a586bc8c1702bf2c682e2",
+    "9621560be2eeb8a7dd09274e87c8d7084b344be0d8b561ec2d42e684c58c3240",
   "access-control":
     "79149325c91406a2390f14cd814e9a1eae1d3eac6010ac6181040518fa75967a",
   "publishing":
@@ -27,7 +28,7 @@ const DOCS_PUBLIC_CONTENT_SHA256: Record<string, string> = {
   "review-feedback":
     "6395cd616a18a9148f47a9f639bfc3d0027b663556f1ac0ecbe271040f4b116b",
   "code-mode-mcp":
-    "1f4f23f04f0f11d6238515d158ae5f1da6493e2d4da64d343903a5851d5212e3",
+    "da0fd9d5cbedadeb5fa2cc6585510147aa846cfa73840a8b980c93269deb7f78",
   "api-keys":
     "9fb78882f2041ecf900e128ad19c53131617c987bcb347f084d46c871d2ed83a",
   "api-surface":
@@ -51,7 +52,7 @@ const DOCS_PAGES: DocsPage[] = [
 <ul>
   <li><strong><a href="/docs/quickstart">Publish my first review</a>:</strong> prepare an artifact and open its review link.</li>
   <li><strong><a href="/docs/review-feedback">Collect feedback</a>:</strong> leave contextual comments and work through review tickets.</li>
-  <li><strong><a href="/docs/code-mode-mcp">Automate with an agent</a>:</strong> connect through Code Mode MCP or use documented REST operations.</li>
+  <li><strong><a href="/docs/code-mode-mcp">Automate with an agent</a>:</strong> connect through Code Mode MCP, the preferred route for agent work.</li>
   <li><strong><a href="/docs/access-control">Manage access</a>:</strong> choose who can view or edit each Shiplet.</li>
   <li><strong><a href="/docs/embed">Connect a website</a>:</strong> attach the Shiplet review layer to an existing site.</li>
 </ul>
@@ -66,7 +67,7 @@ const DOCS_PAGES: DocsPage[] = [
 <h2>Customize the review experience</h2>
 <p>The built-in toolbar works for ordinary reviews. Shiplet can attach a custom widget and workflow when a team needs different controls or statuses. Those customizations belong to the review experience, so they do not become part of the work being reviewed. Read <a href="/docs/extensions">The review layer</a> for the boundary.</p>
 <h2>Automation</h2>
-<p>The public automation paths are Code Mode MCP and direct REST. The <a href="/openapi.json">OpenAPI document</a> is the machine-readable contract for documented public REST operations.</p>
+<p><a href="/docs/code-mode-mcp">Code Mode MCP</a> is the preferred route for agent work. Interactive MCP uses browser OAuth. <a href="/docs/cli">CLI authentication</a> is also available for local command-line workflows, and CI can use a narrowly scoped organization API key with documented REST operations. The <a href="/openapi.json">OpenAPI document</a> is the machine-readable contract for documented public REST operations.</p>
 <p><strong>Next:</strong> <a href="/docs/quickstart">prepare your first review artifact</a>.</p>`,
   },
   {
@@ -156,9 +157,12 @@ const DOCS_PAGES: DocsPage[] = [
 <h2>3. Open the review link</h2>
 <p>Shiplet places the artifact inside a sandboxed frame and shows trusted review controls around it. Leave a harmless comment, then find the ticket on the Shiplet detail page or in the global Feedback view.</p>
 <p>Read <a href="/docs/review-feedback">Review feedback</a> for ticket work and <a href="/docs/access-control">Access control</a> before sharing the link.</p>
-<h2>Optional: automate with MCP</h2>
+<h2>Working with an agent</h2>
+<p>Start with <a href="/docs/code-mode-mcp">Code Mode MCP</a>, the preferred route for agent work. Connect your MCP client and approve access in your browser.</p>
+<h3>Connect with MCP</h3>
 <pre><code>https://shiplet.cc/api/mcp</code></pre>
 <p>The first protected action opens AuthKit in the browser. <a href="/docs/code-mode-mcp">Code Mode MCP</a> includes the complete setup.</p>
+<p>For local command-line workflows, <a href="/docs/cli">CLI authentication</a> is also available.</p>
 <h2>Troubleshooting</h2>
 <table class="docs-table" tabindex="0"><thead><tr><th>Problem</th><th>Safe recovery</th></tr></thead><tbody>
   <tr><td>A file is rejected</td><td>Remove the unsupported or oversized file and prepare again.</td></tr>
@@ -261,6 +265,7 @@ const DOCS_PAGES: DocsPage[] = [
       "Connect an agent, then prepare artifacts and work with feedback.",
     group: "Automation",
     body: `
+<p><strong>Code Mode MCP is the preferred route for agent work.</strong> Connect your MCP client and approve access in the browser. For local command-line workflows, <a href="/docs/cli">CLI authentication</a> is also available.</p>
 <p>Shiplet MCP lets an agent discover the supported API and call it through code. Interactive clients authenticate in the browser. A registered external agent can request access to one Shiplet organization when the environment enables agent registration.</p>
 <h2>Endpoint</h2>
 <pre><code>https://shiplet.cc/api/mcp</code></pre>
@@ -319,6 +324,28 @@ const DOCS_PAGES: DocsPage[] = [
 <h2>Authentication and authority</h2>
 <p>Browser OAuth identifies an interactive user. A registered agent remains a separate actor in Shiplet's audit history, tied to the user who approved it and the selected organization. Its effective authority combines recognized agent permissions, current Shiplet membership and grants, the selected organization, and the requested operation. Unknown permissions grant nothing.</p>
 <p><strong>Next:</strong> connect through browser OAuth, or ask a compatible agent to follow <code>https://shiplet.cc/auth.md</code>, then run <code>search</code>.</p>`,
+  },
+  {
+    slug: "cli",
+    title: "CLI authentication",
+    description: "Authorize a local CLI command in your browser with a short-lived session.",
+    group: "Automation",
+    body: `
+<p><a href="/docs/code-mode-mcp">Code Mode MCP</a> is the preferred route for agent work. The CLI is an alternative for local command-line workflows. It opens your browser so you can sign in and approve a command without copying credentials. Then return to your terminal to continue.</p>
+<h2>Start from a source checkout</h2>
+<p>The CLI ships with the <a href="https://github.com/BintzGavin/shiplet-core">Shiplet source repository</a>. Use Node.js 22.12.0 or newer and run these commands from that checkout. There is no public npm package; do not use <code>npx shiplet</code> or <code>npm install shiplet</code>.</p>
+<pre><code>npm ci
+npm run shiplet -- --help
+npm run shiplet -- prepare ./dist --name "Review build" --subdomain review-build --visibility organization --json</code></pre>
+<p>Replace <code>./dist</code> with your artifact folder and choose an available subdomain. Add <code>--dry-run</code> to inspect the artifact before publishing; a dry run does not authenticate.</p>
+<h2>Approve the command</h2>
+<ol><li>Run the command without an API key to use browser authorization.</li><li>Sign in to Shiplet if asked. Check the account shown on the approval page.</li><li>Select <strong>Authorize CLI</strong> only if you started the command.</li><li>Select <strong>Return to CLI</strong> on the approval page to complete the local callback.</li><li>Return to your terminal or agent for the result. You can close the browser window.</li></ol>
+<p>The session lasts up to ten minutes, stays in process memory, and is revoked when the command finishes. It is bound to the exact Shiplet origin. Each new command can ask for approval again. No separate login command or pasted credential is required.</p>
+<p>Your existing access still applies. Deployment actions require explicit approval; authorizing the CLI does not grant blanket deployment permission.</p>
+<h2>If authorization stops</h2>
+<p>For an expired request, canceled approval, or mismatched callback, run the command again and use the new browser window. Run the CLI and browser on the same computer so the browser can reach the local callback. For a remote or headless agent, use a compatible <a href="/docs/code-mode-mcp">MCP client</a>.</p>
+<h2>Other authentication routes</h2>
+<ul><li><strong>Human review:</strong> <a href="/auth/login">sign in in the browser</a>.</li><li><strong>MCP clients:</strong> use <a href="/docs/code-mode-mcp">Code Mode MCP</a> with browser OAuth or supported agent registration.</li><li><strong>CI and unattended jobs:</strong> use narrowly scoped <a href="/docs/api-keys">organization API keys</a> from a secret store.</li></ul>`,
   },
   {
     slug: "api-keys",

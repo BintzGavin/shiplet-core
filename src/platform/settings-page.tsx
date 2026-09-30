@@ -184,7 +184,7 @@ function settingsPageCopy(route: SettingsRoute) {
 		return {
 			eyebrow: "Agents",
 			title: "Agent access",
-			copy: "Create scoped API keys and copy the Code Mode MCP endpoint for local agents.",
+			copy: "Connect agents through Code Mode MCP, or use the CLI for local command-line workflows and scoped API keys for CI.",
 		};
 	}
 	return {
@@ -548,6 +548,13 @@ function SharingSection() {
 function AgentsSection() {
 	return (
 		<section className="success-card shiplet-panel" id="agents">
+			<div className="agent-auth-recommendation">
+				<span className="auth-recommendation">Recommended for agent work</span>
+				<h2>Connect with MCP</h2>
+				<p>Code Mode MCP is the preferred route for agent work. Connect your MCP client and approve access in your browser.</p>
+				<a className="btn btn-primary" href="/docs/code-mode-mcp">Set up MCP</a>
+				<p>For local command-line workflows, use <a href="/docs/cli">CLI authentication</a>.</p>
+			</div>
 			<div className="dashboard-section-header">
 				<div>
 					<span className="success-card-label">Dock crew</span>

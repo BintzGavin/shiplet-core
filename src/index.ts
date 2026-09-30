@@ -558,6 +558,7 @@ const RESERVED_PLATFORM_PATHS = new Set([
   "auth",
   "brand",
   "capture",
+  "cli",
   "dispatch",
   "docs",
   "downloads",
@@ -758,6 +759,43 @@ app.use("*", async (c, next) => {
   ) {
     c.res = withNoIndexResponse(c.res);
   }
+});
+
+// Browser authentication failures need the same recovery UI as successful
+// consent pages. Keep API/text clients and redirects on their existing contract.
+app.use("*", async (c, next) => {
+  await next();
+  const path = new URL(c.req.url).pathname;
+  const authPage = path.startsWith("/auth/") ||
+    path === "/cli/authorize" || path === "/cli/authorize/complete" ||
+    path === "/embed/connect" || path === "/embed/install";
+  if (!authPage || !c.req.header("accept")?.includes("text/html")) return;
+  c.header("cache-control", "no-store");
+  c.header("referrer-policy", "no-referrer");
+  if (c.res.status < 400 || !c.res.headers.get("content-type")?.startsWith("text/plain")) return;
+  const message = await c.res.text();
+  const cli = path.startsWith("/cli/");
+  const title = cli ? "CLI authorization stopped" : "Sign-in needs attention";
+  const body = `<div class="auth-stage auth-stage-compact">
+    <section class="form-container auth-card auth-decision" aria-labelledby="auth-title">
+      <span class="success-card-label">${cli ? "CLI access" : "Account access"}</span>
+      <h1 id="auth-title">${title}</h1>
+      <p role="alert">${escapeAuthHtml(message)}</p>
+      <p>${cli ? "Run your CLI command again to start a new authorization request. Approve it only if you started the command." : "Open your original invitation or return to Shiplet to start sign-in again."}</p>
+      <a class="btn btn-primary" href="/">Go to Shiplet</a>
+      ${cli ? '<a class="auth-docs-link" href="/docs/cli">CLI authentication guide</a>' : ""}
+    </section>
+  </div>`;
+  const headers = new Headers(c.res.headers);
+  headers.set("content-type", "text/html; charset=utf-8");
+  headers.delete("content-length");
+  c.res = new Response(renderPage(body, {
+    nonce: kernelDocumentNonce(c),
+    appUrl: appBaseUrl(c.env, c.req.url),
+    title: `${title} | Shiplet`,
+    canonicalPath: null,
+    indexing: "noindex",
+  }), { status: c.res.status, headers });
 });
 
 app.use("*", async (c, next) => {
@@ -11979,7 +12017,6 @@ app.get("/docs/:slug", (c) => {
   if (slug === "introduction") return c.redirect("/docs", 301);
   const retiredPublicDocRedirects: Record<string, string> = {
     "packages-revisions": "/docs/publishing",
-    cli: "/docs/code-mode-mcp",
     deployment: "/docs/publishing",
     wordpress: "/docs/embed",
     "external-setup": "/docs/security",
@@ -12048,13 +12085,37 @@ app.get("/cli/authorize", async (c) => {
       method: url.searchParams.get("code_challenge_method"),
     });
     if (!authorization) return c.text("Invalid CLI authorization request", 400);
-    const body = `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Authorize Shiplet CLI</title></head><body><main><h1>Authorize Shiplet CLI</h1><p>Allow this local CLI process to act as you for ten minutes. It can read and edit Shiplet revisions and perform only explicitly approved deployment actions.</p><form method="post" action="/cli/authorize/complete"><input type="hidden" name="request_id" value="${escapeAuthHtml(authorization.id)}"><button type="submit" name="approval" value="approve">Authorize CLI</button></form></main></body></html>`;
+    const body = renderPage(`<div class="auth-stage auth-stage-compact">
+      <section class="form-container auth-card auth-decision" aria-labelledby="cli-auth-title">
+        <span class="auth-recommendation">CLI access</span>
+        <h1 id="cli-auth-title">Authorize Shiplet CLI</h1>
+        <p>Your local CLI is waiting for permission to work with Shiplet.</p>
+        <div class="auth-account"><span>Authorizing as</span><strong>${escapeAuthHtml(user.email)}</strong></div>
+        <ul class="auth-permissions">
+          <li>Read and edit Shiplet revisions using your existing access.</li>
+          <li>Perform deployment actions only when explicitly approved.</li>
+          <li>Use a session for up to ten minutes, revoked when the command finishes.</li>
+        </ul>
+        <p>Only continue if you started this command. Then return to your terminal or agent.</p>
+        <form method="post" action="/cli/authorize/complete">
+          <input type="hidden" name="request_id" value="${escapeAuthHtml(authorization.id)}">
+          <button class="btn btn-primary" type="submit" name="approval" value="approve">Authorize CLI</button>
+          <button class="btn btn-secondary" type="submit" name="approval" value="deny">Cancel</button>
+        </form>
+        <a class="auth-docs-link" href="/docs/cli">About CLI authentication</a>
+      </section>
+    </div>`, {
+      nonce: kernelDocumentNonce(c),
+      user,
+      appUrl: appBaseUrl(c.env, c.req.url),
+      title: "Authorize Shiplet CLI | Shiplet",
+      canonicalPath: null,
+      indexing: "noindex",
+    });
     return new Response(body, {
       headers: {
         "content-type": "text/html; charset=utf-8",
         "cache-control": "no-store",
-        "content-security-policy":
-          "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'",
         "referrer-policy": "no-referrer",
         "x-content-type-options": "nosniff",
       },
@@ -12094,16 +12155,29 @@ app.post("/cli/authorize/complete", async (c) => {
     const callback = new URL(approved.redirectUri);
     callback.searchParams.set("code", approved.code);
     callback.searchParams.set("state", approved.state);
-    // Keep the authorization form same-origin. Browsers apply form-action to
-    // redirect destinations, so a 302 to loopback can consume the approval
-    // without delivering its code. A fresh document makes this a normal link.
-    const body = `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Return to Shiplet CLI</title></head><body><main><h1>Authorization approved</h1><p>Return to the local CLI to finish connecting. If the CLI has stopped, restart the command to request a new authorization.</p><a href="${escapeAuthHtml(callback.toString())}" rel="noreferrer">Return to CLI</a></main></body></html>`;
+    // A form submission cannot redirect to loopback under form-action 'self'.
+    // Finish in a new document so the user can follow a normal link instead.
+    const body = renderPage(`<div class="auth-stage auth-stage-compact">
+      <section class="form-container auth-card auth-decision" aria-labelledby="cli-handoff-title">
+        <span class="auth-recommendation">CLI access approved</span>
+        <h1 id="cli-handoff-title">Authorization approved</h1>
+        <p>One more step: return to your local CLI to finish connecting.</p>
+        <a id="cli-return-link" class="btn btn-primary" href="${escapeAuthHtml(callback.toString())}" rel="noreferrer">Return to CLI</a>
+        <p>If the CLI has stopped, run your command again to start a new authorization request.</p>
+        <a class="auth-docs-link" href="/docs/cli">CLI authentication guide</a>
+      </section>
+    </div>`, {
+      nonce: kernelDocumentNonce(c),
+      user,
+      appUrl: appBaseUrl(c.env, c.req.url),
+      title: "Return to Shiplet CLI | Shiplet",
+      canonicalPath: null,
+      indexing: "noindex",
+    });
     return new Response(body, {
       status: 200,
       headers: {
         "content-type": "text/html; charset=utf-8",
-        "content-security-policy":
-          "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'",
         "cache-control": "no-store",
         pragma: "no-cache",
         "referrer-policy": "no-referrer",
@@ -19676,6 +19750,7 @@ app.get("/", async (c) => {
 						<a class="link-btn" href="/auth/login">Prepare a review</a>
 						<a class="btn btn-secondary" href="/play">Try the sandbox</a>
 						<a class="auth-docs-link" href="/docs/why-shiplet">Docs</a>
+						<div class="auth-agent-entry"><a href="/docs/code-mode-mcp">Working with an agent? Start with MCP</a><p>Connect your agent through Code Mode MCP and approve access in your browser.</p></div>
 					</div>
 				</div>`,
         {

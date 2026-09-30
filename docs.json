@@ -41,6 +41,7 @@
         "group": "Automation",
         "pages": [
           "docs/code-mode-mcp",
+          "docs/cli",
           "docs/api-keys",
           "docs/api-surface"
         ]
