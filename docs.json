@@ -41,6 +41,7 @@
         "group": "Automation",
         "pages": [
           "docs/code-mode-mcp",
+          "docs/chatgpt-plugin",
           "docs/cli",
           "docs/api-keys",
           "docs/api-surface"

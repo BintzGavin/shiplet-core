@@ -68,6 +68,7 @@ describe("focused public OpenAPI contract", () => {
 
   it("marks exactly the trusted-host operations available to Code Mode", () => {
     const supported = new Set([
+      "get /api/organizations",
       "get /api/shiplets",
       "post /api/shiplets",
       "get /api/shiplets/{projectId}/review-layer",
@@ -89,6 +90,18 @@ describe("focused public OpenAPI contract", () => {
         expect(candidate["x-shiplet-code-mode"], key).toBe(supported.has(key));
       }
     }
+  });
+
+  it("documents organization discovery without member or contact details", () => {
+    const list = operation("/api/organizations", "get");
+    expect(list.operationId).toBe("listOrganizations");
+    expect(list["x-shiplet-scopes"]).toEqual(["shiplets:read"]);
+    expect(Object.keys(schemas.OrganizationSummary.properties).sort()).toEqual([
+      "id",
+      "name",
+      "role",
+    ]);
+    expect(schemas.OrganizationSummary.additionalProperties).toBe(false);
   });
 
   it("declares useful success schemas and exact bearer scopes", () => {

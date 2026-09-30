@@ -192,6 +192,7 @@ Add a trusted review layer to builds, files, and live URLs for contextual feedba
 ## Machine-readable resources
 
 - Agent integration (preferred MCP route): ${absoluteSiteUrl(baseUrl, "/docs/code-mode-mcp")}
+- ChatGPT plugin: ${absoluteSiteUrl(baseUrl, "/docs/chatgpt-plugin")}
 - Website: ${absoluteSiteUrl(baseUrl, "/")}
 - Documentation: ${absoluteSiteUrl(baseUrl, "/docs")}
 - Why Shiplet: ${absoluteSiteUrl(baseUrl, "/docs/why-shiplet")}

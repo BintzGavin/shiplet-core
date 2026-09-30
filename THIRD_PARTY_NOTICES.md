@@ -18,6 +18,20 @@ from these MIT-licensed packages:
   2016 Tanner Linsley.
 - `zustand` 5.0.14 — Copyright (c) 2019 Paul Henschel.
 
+`src/generated-plugin-app.ts` contains the ChatGPT MCP App, a minified browser
+bundle generated from `react`, `react-dom`, and `scheduler` (listed above) and
+these packages:
+
+- @modelcontextprotocol/ext-apps 1.7.5 — Copyright (c) 2024-2025 Model Context
+  Protocol a Series of LF Projects, LLC. Licensed under the MIT License, with new
+  contributions under the Apache License, Version 2.0.
+- @modelcontextprotocol/sdk 1.30.0 — Copyright (c) 2024 Anthropic, PBC. MIT
+  License.
+- @openai/mcp-extensions 0.1.0 — Copyright OpenAI. Licensed under the Apache
+  License, Version 2.0 ([license text](https://www.apache.org/licenses/LICENSE-2.0)).
+  The bundle includes its `styles.css` stylesheet.
+- `zod` 4.4.3 — Copyright (c) 2025 Colin McDonnell. MIT License.
+
 ### MIT License
 
 Permission is hereby granted, free of charge, to any person obtaining a copy of

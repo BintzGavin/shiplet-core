@@ -112,6 +112,30 @@
         },
         "additionalProperties": false
       },
+      "OrganizationSummary": {
+        "type": "object",
+        "required": ["id", "name", "role"],
+        "properties": {
+          "id": { "type": "string" },
+          "name": { "type": "string" },
+          "role": {
+            "type": ["string", "null"],
+            "description": "The authenticated user's membership role. Null for organization API credentials, which are not members."
+          }
+        },
+        "additionalProperties": false
+      },
+      "OrganizationListResponse": {
+        "type": "object",
+        "required": ["organizations"],
+        "properties": {
+          "organizations": {
+            "type": "array",
+            "items": { "$ref": "#/components/schemas/OrganizationSummary" }
+          }
+        },
+        "additionalProperties": false
+      },
       "PublishResponse": {
         "type": "object",
         "required": ["ok", "project", "url"],
@@ -361,6 +385,28 @@
     }
   },
   "paths": {
+    "/api/organizations": {
+      "get": {
+        "operationId": "listOrganizations",
+        "x-shiplet-code-mode": true,
+        "x-shiplet-scopes": ["shiplets:read"],
+        "tags": ["Organizations"],
+        "summary": "List organizations visible to the authenticated actor",
+        "description": "A signed-in user sees every organization they belong to. An organization API credential sees only its own organization. Use an organization ID from this list as organization_id when publishing from an account that belongs to more than one organization.",
+        "responses": {
+          "200": {
+            "description": "Visible organizations.",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/OrganizationListResponse" }
+              }
+            }
+          },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "403": { "$ref": "#/components/responses/Forbidden" }
+        }
+      }
+    },
     "/api/shiplets": {
       "get": {
         "operationId": "listShiplets",

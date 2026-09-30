@@ -12,11 +12,13 @@
 		"audit:security": "npm audit --audit-level=high",
 		"build": "npm run generate:public && wrangler deploy --dry-run && npm run build:support-workers",
 		"build:platform-client": "node scripts/build-platform-client.mjs",
+		"build:plugin-app": "node scripts/build-plugin-app.mjs",
 		"build:support-workers": "wrangler deploy --dry-run --config workers/cloudflare-control-plane/wrangler.jsonc && wrangler deploy --dry-run --config workers/managed-runtime-gateway/wrangler.jsonc && wrangler deploy --dry-run --config workers/deny-egress/wrangler.jsonc",
 		"cf-typegen": "wrangler types",
 		"deploy": "node scripts/self-host-deploy.mjs",
 		"dev": "wrangler dev",
-		"generate:public": "node scripts/build-browser-companion.mjs && node scripts/generate-brand-assets.mjs && node scripts/generate-avatar-presets.mjs && node scripts/generate-why-shiplet-assets.mjs && node scripts/build-platform-client.mjs && wrangler types",
+		"generate:public": "node scripts/build-browser-companion.mjs && node scripts/generate-brand-assets.mjs && node scripts/generate-avatar-presets.mjs && node scripts/generate-why-shiplet-assets.mjs && node scripts/build-platform-client.mjs && node scripts/build-plugin-app.mjs && wrangler types",
+		"package:chatgpt-plugin": "node scripts/package-chatgpt-plugin.mjs",
 		"self-host:capabilities": "node scripts/self-host-config.mjs inspect",
 		"setup:self-host": "bash scripts/self-host-setup.sh",
 		"shiplet": "node src/cli/shiplet.cjs",
@@ -31,7 +33,9 @@
 	"dependencies": {
 		"@cfworker/json-schema": "^4.1.1",
 		"@cloudflare/codemode": "^0.5.1",
+		"@modelcontextprotocol/ext-apps": "^1.7.5",
 		"@modelcontextprotocol/sdk": "^1.25.3",
+		"@openai/mcp-extensions": "^0.1.0",
 		"@tanstack/react-query": "^5.101.0",
 		"@tanstack/react-table": "^8.21.3",
 		"@workos-inc/node": "^10.2.0",
@@ -60,7 +64,7 @@
 		"wrangler": "^4.120.0"
 	},
 	"overrides": {
-		"undici": "7.29.0",
+		"undici": "7.30.0",
 		"sharp": "0.35.4"
 	},
 	"engines": {

@@ -13,6 +13,7 @@ import {
   MAX_AVATAR_UPLOAD_BYTES,
   validateAvatarUpdate,
 } from "../src/avatars";
+import { PLUGIN_TOOL } from "../src/plugin-contract";
 import { validateReviewFeedbackPayload } from "../src/review";
 import { ensureSchema } from "../src/schema";
 import {
@@ -1330,6 +1331,7 @@ describe("Shiplet", () => {
         "/docs/api-surface",
         "/docs/cli",
         "/docs/code-mode-mcp",
+        "/docs/chatgpt-plugin",
         "/docs/extensions",
         "/docs/security",
         "/docs/publishing",
@@ -1463,6 +1465,81 @@ describe("Shiplet", () => {
       expect(visual).toContain("shiplet.cc/api/mcp");
       expect(visual).toContain("Shiplets and feedback");
       expect(visual).not.toMatch(/WorkOS|access token|assertion|refresh token/i);
+    });
+
+    it("Given a ChatGPT user opens the plugin docs, When the guide renders, Then connection, tools, access, and self-hosting are documented", async () => {
+      const response = await requestHelper("/docs/chatgpt-plugin");
+      const html = await response.text();
+      const article =
+        html.match(
+          /<div class="docs-content">([\s\S]*?)<\/div>\s*<\/article>/,
+        )?.[1] ?? "";
+
+      expect(response.status).toBe(200);
+      expect(html).toContain("<title>ChatGPT | Shiplet Docs</title>");
+      expect(html).toContain(
+        '<link rel="canonical" href="https://shiplet.cc/docs/chatgpt-plugin">',
+      );
+      expect(html).toContain('data-shiplet-docs-page="chatgpt-plugin"');
+      expect(article).toContain("<strong>Shiplet reviews</strong>");
+      expect(article).toContain("<strong>Review feedback</strong>");
+      expect(article).toContain("https://shiplet.cc/api/plugin/mcp");
+      expect(article).toContain("Developer mode");
+
+      for (const tool of [
+        PLUGIN_TOOL.listShiplets,
+        PLUGIN_TOOL.listWorkspaces,
+        PLUGIN_TOOL.listFeedback,
+        PLUGIN_TOOL.getFeedback,
+        PLUGIN_TOOL.publishHtml,
+        PLUGIN_TOOL.reviewUrl,
+        PLUGIN_TOOL.replyToFeedback,
+        PLUGIN_TOOL.updateFeedbackStatus,
+      ]) {
+        expect(article, tool).toContain(`<code>${tool}</code>`);
+      }
+      for (const appOnlyTool of [
+        PLUGIN_TOOL.openInbox,
+        PLUGIN_TOOL.openPanel,
+        PLUGIN_TOOL.openHtmlFile,
+        PLUGIN_TOOL.searchMentions,
+      ]) {
+        expect(html, appOnlyTool).not.toContain(appOnlyTool);
+      }
+      expect(article).toContain("<code>workspace_id</code>");
+      expect(article).toContain('href="/docs/code-mode-mcp"');
+      expect(article).toContain(
+        "/.well-known/oauth-protected-resource/api/plugin/mcp",
+      );
+      expect(article).toContain("OPENAI_APPS_CHALLENGE_TOKEN");
+      expect(article).toContain("/.well-known/openai-apps-challenge");
+
+      const nav =
+        html.match(
+          /<nav\b[^>]*aria-label="Documentation sections"[^>]*>([\s\S]*?)<\/nav>/,
+        )?.[1] ?? "";
+      const navPaths = [...nav.matchAll(/href="(\/docs[^"?#]*)"/g)].map(
+        (match) => match[1],
+      );
+      expect(navPaths).toContain("/docs/code-mode-mcp");
+      expect(navPaths.indexOf("/docs/chatgpt-plugin")).toBe(
+        navPaths.indexOf("/docs/code-mode-mcp") + 1,
+      );
+      expect(nav).toContain(
+        '<a href="/docs/chatgpt-plugin" aria-current="page">ChatGPT</a>',
+      );
+
+      const codeMode = await (await requestHelper("/docs/code-mode-mcp")).text();
+      expect(codeMode).toContain('href="/docs/chatgpt-plugin"');
+
+      const metadata = (await (
+        await requestHelper(
+          "/.well-known/oauth-protected-resource/api/plugin/mcp",
+        )
+      ).json()) as { resource_documentation: string };
+      expect(new URL(metadata.resource_documentation).pathname).toBe(
+        "/docs/chatgpt-plugin",
+      );
     });
 
     it("Given a 320px documentation viewport, When tables and actions render, Then content scrolls locally and touch targets remain reachable", async () => {
@@ -4885,6 +4962,7 @@ describe("Shiplet", () => {
       expect(llmsText).toContain("Documentation");
       expect(llmsText).toContain("Code Mode MCP");
       expect(llmsText).toContain("https://shiplet.cc/api/mcp");
+      expect(llmsText).toContain("https://shiplet.cc/docs/chatgpt-plugin");
       expect(llmsText).toContain("review layer");
       expect(llmsText).toContain("sandboxed widget");
       expect(llmsText).toContain("Review artifacts");
