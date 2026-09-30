@@ -489,9 +489,16 @@ import {
   authenticateMcpOAuthUser,
   mcpAuthorizationRequiredResponse,
   mcpProtectedResourceMetadataResponse,
+  pluginMcpProtectedResourceMetadataResponse,
   proxyWorkOSAgentAuthGuide,
   proxyWorkOSAuthorizationServerMetadata,
 } from "./mcp-auth";
+import { PLUGIN_APP_HTML } from "./generated-plugin-app";
+import { PLUGIN_MCP_PATH } from "./plugin-contract";
+import {
+  createPluginMcpServer,
+  PLUGIN_MCP_MAX_REQUEST_BYTES,
+} from "./plugin-mcp";
 import type { AuthenticatedMcpAgentPrincipal } from "./mcp-principal";
 import {
   createD1KernelApprovalService,
@@ -694,6 +701,7 @@ function isPlatformCookieAuthRoute(pathname: string, method: string) {
   if (
     pathname.startsWith("/api/play/") ||
     pathname === "/api/mcp" ||
+    pathname === PLUGIN_MCP_PATH ||
     pathname === "/api/review/client.js" ||
     isEmbedApiPath(pathname) ||
     pathname.startsWith("/api/bootstrap/") ||
@@ -9467,6 +9475,43 @@ async function handleCodeModeMcpRequest(
   }
 }
 
+async function handlePluginMcpRequest(
+  env: Env,
+  db: D1QB,
+  context: CodeModeContext,
+  request: Request,
+  body: unknown,
+  appUrl: string,
+) {
+  const contract = await codeModeRequestContract({ env, context, body });
+  const server = createPluginMcpServer({
+    appUrl,
+    customDomain: env.CUSTOM_DOMAIN,
+    appHtml: PLUGIN_APP_HTML,
+    execute: (options) =>
+      executeTrustedCodeModeRequest(env, db, context, contract, options),
+  });
+  const transport = new WebStandardStreamableHTTPServerTransport({
+    sessionIdGenerator: undefined,
+    enableJsonResponse: true,
+  });
+  await server.connect(transport);
+  const headers = new Headers(request.headers);
+  headers.set("accept", "application/json, text/event-stream");
+  headers.set("content-type", "application/json");
+  const transportRequest = new Request(request.url, {
+    method: "POST",
+    headers,
+  });
+  try {
+    return await transport.handleRequest(transportRequest, {
+      parsedBody: body,
+    });
+  } finally {
+    await server.close();
+  }
+}
+
 async function invokeCodeModeCustomMcpOperation(input: {
   env: Env;
   context: CodeModeContext;
@@ -9802,6 +9847,10 @@ async function executeCodeModeRequest(
     throw new Response("Code Mode request path is not supported.", {
       status: 404,
     });
+  }
+
+  if (request.path === "/api/organizations" && request.method === "GET") {
+    return { organizations: await listVisibleOrganizations(env, context) };
   }
 
   if (request.path === "/api/organizations" && request.method === "POST") {
@@ -10582,6 +10631,65 @@ async function executeCodeModeRequest(
   throw new Response("Code Mode request path is not supported.", {
     status: 404,
   });
+}
+
+type OrganizationSummary = {
+  id: string;
+  name: string;
+  role: string | null;
+};
+
+/**
+ * Organizations the actor may see, without member lists or contact details:
+ * a user sees every membership, an organization API credential only its own
+ * organization, and a delegated OAuth agent only its selected organization.
+ */
+async function listVisibleOrganizations(
+  env: Env,
+  context: CodeModeContext,
+): Promise<OrganizationSummary[]> {
+  if (context.kind === "token") {
+    requireOrganizationApiScope(context.token, "shiplets:read");
+    const organization = await getOrganizationById(
+      env.DB,
+      context.token.organization_id,
+    );
+    return organization
+      ? [{ id: organization.id, name: organization.name, role: null }]
+      : [];
+  }
+  const subject = codeModeSubject(context)!;
+  let organizations: { id: string; name: string }[];
+  if (context.kind === "oauth_agent") {
+    requireCodeModeOAuthPermission(context, "shiplets:read");
+    if (context.principal.organizationId === null) {
+      throw new Response("Delegated MCP organization required", {
+        status: 403,
+      });
+    }
+    const organization = await getOrganizationById(
+      env.DB,
+      context.principal.organizationId,
+    );
+    organizations = organization ? [organization] : [];
+  } else {
+    organizations = await listOrganizationsForUser(env.DB, subject.id);
+  }
+  const visible: OrganizationSummary[] = [];
+  for (const organization of organizations) {
+    const membership = await getOrganizationMembership(
+      env.DB,
+      organization.id,
+      subject.id,
+    );
+    if (!membership) continue;
+    visible.push({
+      id: organization.id,
+      name: organization.name,
+      role: membership.role,
+    });
+  }
+  return visible;
 }
 
 async function requireCodeModeProject(
@@ -12060,6 +12168,27 @@ app.get("/.well-known/oauth-protected-resource", (c) =>
 app.get("/.well-known/oauth-protected-resource/api/mcp", (c) =>
   mcpProtectedResourceMetadataResponse(c.env, appBaseUrl(c.env, c.req.url)),
 );
+
+app.get(`/.well-known/oauth-protected-resource${PLUGIN_MCP_PATH}`, (c) =>
+  pluginMcpProtectedResourceMetadataResponse(
+    c.env,
+    appBaseUrl(c.env, c.req.url),
+  ),
+);
+
+// OpenAI plugin domain verification. Artifact hosts never reach this route:
+// the tenant routing middleware dispatches them before platform routes.
+app.get("/.well-known/openai-apps-challenge", (c) => {
+  const token = c.env.OPENAI_APPS_CHALLENGE_TOKEN;
+  if (!token) return c.text("Not found", 404);
+  return new Response(token, {
+    headers: {
+      "cache-control": "no-store",
+      "content-type": "text/plain; charset=utf-8",
+      "x-content-type-options": "nosniff",
+    },
+  });
+});
 
 app.get("/.well-known/oauth-authorization-server", (c) =>
   proxyWorkOSAuthorizationServerMetadata(c.env),
@@ -19433,6 +19562,86 @@ app.post("/api/mcp", async (c) => {
   }
 });
 
+app.post(PLUGIN_MCP_PATH, async (c) => {
+  try {
+    const contentLength = Number(c.req.header("content-length") || "0");
+    if (contentLength > PLUGIN_MCP_MAX_REQUEST_BYTES) {
+      return c.text("MCP request is too large", 413);
+    }
+    let body: unknown;
+    try {
+      const text = await readRequestTextWithLimit(
+        c.req.raw,
+        PLUGIN_MCP_MAX_REQUEST_BYTES,
+      );
+      body = text ? JSON.parse(text) : {};
+    } catch (error) {
+      if (isResponse(error) && error.status === 413) {
+        return c.text("MCP request is too large", 413);
+      }
+      return mcpError(null, -32700, "Parse error");
+    }
+    const appUrl = appBaseUrl(c.env, c.req.url);
+    const authorization = c.req.header("authorization");
+    let context: CodeModeContext | null = null;
+    const token = await authenticateOrganizationApiToken(
+      c.env.DB,
+      authorization,
+    );
+    if (token) {
+      requireOrganizationApiScope(token, "mcp");
+      context = { kind: "token", token };
+    }
+    if (!context) {
+      const oauthPrincipal = await authenticateMcpOAuthPrincipal(
+        c.env,
+        c.req.raw,
+        { appUrl, resourcePath: PLUGIN_MCP_PATH },
+      );
+      if (oauthPrincipal) {
+        if (
+          oauthPrincipal.credentialKind === "agent_registration" &&
+          !oauthPrincipal.permissions.includes("mcp")
+        ) {
+          throw new Response(
+            "Registered agent is missing required permission: mcp",
+            { status: 403 },
+          );
+        }
+        context = { kind: "oauth_agent", principal: oauthPrincipal };
+      }
+    }
+    if (!context) {
+      const oauthUser = await authenticateMcpOAuthUser(
+        c.env,
+        c.req.raw,
+        appUrl,
+        PLUGIN_MCP_PATH,
+      );
+      if (oauthUser) context = { kind: "user", user: oauthUser };
+    }
+    if (!context) {
+      return mcpAuthorizationRequiredResponse(appUrl, PLUGIN_MCP_PATH);
+    }
+    return handlePluginMcpRequest(
+      c.env,
+      c.var.db,
+      context,
+      c.req.raw,
+      body,
+      appUrl,
+    );
+  } catch (error) {
+    if (isResponse(error)) return error;
+    const message = error instanceof Error ? error.message : "Unknown error";
+    return c.text(`Failed to handle plugin MCP request: ${message}`, 500);
+  }
+});
+
+app.on(["GET", "DELETE"], PLUGIN_MCP_PATH, (c) =>
+  c.text("Method not allowed", 405, { allow: "POST" }),
+);
+
 app.get("/api/review/client.js", () => {
   return new Response(reviewClientScript(), {
     headers: {
@@ -21049,6 +21258,28 @@ app.get("/init", async (c) => {
   // separately authenticated operational workflow. A public GET is never an
   // acceptable reset primitive.
   return c.text("Not found", 404);
+});
+
+app.get("/api/organizations", async (c) => {
+  try {
+    const token = await authenticateOptionalOrganizationCredential(
+      c.env.DB,
+      c.req.header("authorization"),
+      ["shiplets:read"],
+    );
+    const context: CodeModeContext = token
+      ? { kind: "token", token }
+      : { kind: "user", user: await requireCurrentUser(c) };
+    const response = json({
+      organizations: await listVisibleOrganizations(c.env, context),
+    });
+    response.headers.set("cache-control", "no-store");
+    return response;
+  } catch (error) {
+    if (isResponse(error)) return error;
+    const message = error instanceof Error ? error.message : "Unknown error";
+    return c.text(`Failed to list organizations: ${message}`, 500);
+  }
 });
 
 app.post("/api/organizations", async (c) => {

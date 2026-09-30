@@ -16,6 +16,7 @@ export const PLUGIN_TOOL = {
 	reviewUrl: "create_url_review",
 	replyToFeedback: "reply_to_feedback",
 	updateFeedbackStatus: "update_feedback_status",
+	listWorkspaces: "list_workspaces",
 	// App-only entrypoint and extension tools (`_meta.ui.visibility: ["app"]`).
 	openInbox: "open_review_inbox",
 	openPanel: "open_review_panel",
@@ -25,10 +26,13 @@ export const PLUGIN_TOOL = {
 
 export type PluginToolName = (typeof PLUGIN_TOOL)[keyof typeof PLUGIN_TOOL];
 
+// Mirrors REVIEW_STATUSES in src/review.ts, in the same order. "Staging" is a
+// live REST status; omitting it would drop real feedback from plugin results.
 export const FEEDBACK_STATUSES = [
 	"New",
 	"In Progress",
 	"Blocked",
+	"Staging",
 	"Done",
 	"Dropped",
 ] as const;
@@ -96,6 +100,8 @@ export type FeedbackListResult = {
 export type FeedbackDetailResult = {
 	view: "feedback-detail";
 	feedback: PluginFeedbackDetail;
+	/** Optional. Lets the app label a detail opened without the feedback list (inline results, deep links). */
+	shiplet?: Pick<PluginShiplet, "id" | "name" | "reviewUrl">;
 };
 
 /** structuredContent of publish_html_for_review and create_url_review. */
@@ -115,6 +121,8 @@ export type PublishHtmlInput = {
 	name: string;
 	files: { path: string; content: string }[];
 	visibility?: PluginVisibility;
+	/** Required only when the account belongs to more than one workspace. */
+	workspace_id?: string;
 };
 
 export const PUBLISH_HTML_LIMITS = {
@@ -123,3 +131,15 @@ export const PUBLISH_HTML_LIMITS = {
 	/** Total UTF-8 bytes across all file contents. */
 	maxTotalBytes: 2 * 1024 * 1024,
 } as const;
+
+/** A workspace (organization) the connected account belongs to. */
+export type PluginWorkspace = {
+	id: string;
+	name: string;
+};
+
+/** structuredContent of list_workspaces. */
+export type WorkspaceListResult = {
+	view: "workspaces";
+	workspaces: PluginWorkspace[];
+};
