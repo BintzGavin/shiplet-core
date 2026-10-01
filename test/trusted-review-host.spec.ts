@@ -285,6 +285,9 @@ async function operateTrustedHostScript(options?: {
   presenceSelf?: unknown;
   viewport?: { width: number; height: number };
   draftDatabase?: ReturnType<typeof memoryIndexedDb>;
+  localStorage?: { getItem: (key: string) => string | null; setItem: (key: string, value: string) => void };
+  pageUrl?: string;
+  mentionUsers?: Array<{ id: string; name: string; email: string }>;
 }) {
   const pageAttributes = new Map([
     ["data-shiplet-embed-origin", options?.embedded ? "https://client.example" : ""],
@@ -302,7 +305,7 @@ async function operateTrustedHostScript(options?: {
             : "https://app.shiplet.cc/api/projects/shiplet_a/review-draft-context",
         ] as [string, string]]
       : []),
-    ["data-review-page-url", "https://client.example/pricing/"],
+    ["data-review-page-url", options?.pageUrl || "https://client.example/pricing/"],
     ["data-review-artifact-url", "https://client.example/pricing/"],
     ["data-review-avatar-url", "https://app.shiplet.cc/brand/avatars/shiplet-avatar-presets-v9.png"],
     [
@@ -513,6 +516,9 @@ async function operateTrustedHostScript(options?: {
         json: async () => options?.submissionPayload ?? { feedback: { id: "feedback_direct", comment: String((body as { comment?: unknown } | null)?.comment || "") } },
       };
     }
+    if (options?.mentionUsers && requestUrl.pathname.endsWith("mention-users") && !requestUrl.searchParams.has("q")) {
+      return { ok: true, status: 200, json: async () => ({ users: options.mentionUsers }) };
+    }
     if (options?.draftContext && requestUrl.pathname.endsWith("draft-context")) {
       const pageUrl = requestUrl.searchParams.get("page_url") || "https://client.example/pricing/";
       return {
@@ -559,6 +565,7 @@ async function operateTrustedHostScript(options?: {
     "parent",
     "sessionStorage",
     "indexedDB",
+    "localStorage",
     trustedReviewHostScript(),
   );
   execute(
@@ -573,6 +580,7 @@ async function operateTrustedHostScript(options?: {
     parentWindow,
     { getItem: (key: string) => storedIntent.get(key), removeItem: (key: string) => storedIntent.delete(key) },
     draftDatabase,
+    options?.localStorage,
   );
   await Promise.resolve();
   if (options?.dispatchInitialFrameLoads !== false) {
@@ -3766,6 +3774,210 @@ describe("trusted review host boundary", () => {
     });
     await retry;
     expect(harness.comment.value).toBe("");
+  });
+
+  it("[T2] scopes persisted review preferences to the signed-in actor and project", async () => {
+    const preferences = (dock: string) => JSON.stringify({
+      version: 1,
+      dock,
+      launch: "manual",
+      overlaysVisible: true,
+      bubbleColor: "#B44729",
+      annotation: { tool: "pen", color: "#D92D5B", strokeWidth: 5 },
+      motion: "system",
+      copyRequestsEnabled: false,
+    });
+    const ownKey = "shiplet.review.preferences.v1:human:actor_test:shiplet_a";
+    const otherActorKey = "shiplet.review.preferences.v1:human:actor_other:shiplet_a";
+    const otherProjectKey = "shiplet.review.preferences.v1:human:actor_test:shiplet_other";
+    const stored = new Map<string, string>([
+      [otherActorKey, preferences("bottom-left")],
+      [otherProjectKey, preferences("top-left")],
+      [ownKey, preferences("top-right")],
+    ]);
+    const harness = await operateTrustedHostScript({
+      draftContext: true,
+      localStorage: {
+        getItem: (key) => stored.get(key) ?? null,
+        setItem: (key, value) => { stored.set(key, value); },
+      },
+    });
+    await settleTrustedHost(12);
+    expect(harness.body.getAttribute("data-review-dock")).toBe("top-right");
+
+    const dock = harness.createdElements.find((element) => element.getAttribute("aria-label") === "Review dock");
+    expect(dock).toBeDefined();
+    if (!dock) return;
+    dock.value = "bottom-right";
+    await dock.dispatch("change", { isTrusted: true });
+    expect(harness.body.getAttribute("data-review-dock")).toBe("bottom-right");
+    expect(JSON.parse(stored.get(ownKey) || "{}")).toMatchObject({ dock: "bottom-right" });
+    expect(JSON.parse(stored.get(otherActorKey) || "{}")).toMatchObject({ dock: "bottom-left" });
+    expect(JSON.parse(stored.get(otherProjectKey) || "{}")).toMatchObject({ dock: "top-left" });
+    expect(Array.from(stored.keys()).filter((key) => key.startsWith("shiplet.review.preferences.v1:")).sort()).toEqual(
+      [ownKey, otherActorKey, otherProjectKey].sort(),
+    );
+  });
+
+  it("[T2] strips credential-bearing query keys from copied clean review links", async () => {
+    const harness = await operateTrustedHostScript({
+      pageUrl: "https://client.example/pricing/?access_token=secret-token&Credential=secret-credential&plan=team",
+    });
+    const copyHidden = harness.createdElements.find((element) => element.textContent === "Copy review link with review UI hidden");
+    const fallback = harness.createdElements.find((element) => element.getAttribute("aria-label") === "Review link to copy");
+    expect(copyHidden).toBeDefined();
+    expect(fallback).toBeDefined();
+    if (!copyHidden || !fallback) return;
+    expect(fallback.hidden).toBe(true);
+    await copyHidden.dispatch("click", { isTrusted: true });
+    await settleTrustedHost();
+    expect(fallback.hidden).toBe(false);
+    const link = new URL(String(fallback.value));
+    expect(link.origin + link.pathname).toBe("https://client.example/pricing/");
+    expect(link.searchParams.get("plan")).toBe("team");
+    expect(link.searchParams.get("shiplet_review")).toBe("hidden");
+    expect(link.search.toLowerCase()).not.toContain("access_token");
+    expect(link.search.toLowerCase()).not.toContain("credential");
+    expect(link.search).not.toContain("secret-");
+  });
+
+  it("[T2] sends the explicitly selected mention recipients with a direct submission", async () => {
+    const harness = await operateTrustedHostScript({
+      submissionMode: "direct",
+      draftContext: true,
+      presenceViewers: [],
+      mentionUsers: [
+        { id: "user_alex", name: "Alex Rivera", email: "alex@example.com" },
+        { id: "user_bo", name: "Bo Chen", email: "bo@example.com" },
+      ],
+    });
+    await settleTrustedHost(12);
+    const mentionSelect = harness.createdElements.find((element) => element.getAttribute("aria-label") === "Mention reviewers");
+    expect(mentionSelect).toBeDefined();
+    if (!mentionSelect || !harness.form || !harness.comment) return;
+    expect(mentionSelect.children.map((option) => option.value)).toEqual(["user_alex", "user_bo"]);
+    mentionSelect.selectedOptions = [mentionSelect.children[1]];
+    harness.comment.value = "Bo, can you check the pricing table?";
+    await harness.form.dispatch("submit", { preventDefault: vi.fn(), isTrusted: true });
+    await settleTrustedHost(40);
+    expect(harness.submissionRequests).toHaveLength(1);
+    expect(harness.submissionRequests[0]?.body).toMatchObject({
+      comment: "Bo, can you check the pricing table?",
+      mentions: [{ userId: "user_bo" }],
+    });
+  });
+
+  it("[T2] keeps the newest mention query results when an earlier search resolves late", async () => {
+    const harness = await operateTrustedHostScript({
+      submissionMode: "direct",
+      draftContext: true,
+      presenceViewers: [],
+      mentionUsers: [],
+    });
+    type TrustedHostFetchResponse = Awaited<ReturnType<typeof harness.fetch>>;
+    await settleTrustedHost(12);
+    const listbox = harness.createdElements.find((element) => element.getAttribute("aria-label") === "Mention suggestions");
+    expect(listbox).toBeDefined();
+    if (!listbox || !harness.comment) return;
+    const suggestionIds = () => listbox.children
+      .filter((element) => element.getAttribute("role") === "option")
+      .map((element) => (element.dataset as Record<string, string>).userId);
+    const searchResponse = (users: Array<{ id: string; label: string }>): TrustedHostFetchResponse => ({
+      ok: true,
+      status: 200,
+      json: async () => ({ users, nextCursor: null }),
+    });
+
+    let releaseFirst: (response: TrustedHostFetchResponse) => void = () => {};
+    const firstSearch = new Promise<TrustedHostFetchResponse>((resolve) => { releaseFirst = resolve; });
+    harness.fetch.mockImplementationOnce(async () => firstSearch);
+    harness.comment.value = "@al";
+    harness.comment.selectionStart = 3;
+    await harness.comment.dispatch("input", {});
+
+    harness.fetch.mockImplementationOnce(async () => searchResponse([{ id: "user_bo", label: "Bo Chen" }]));
+    harness.comment.value = "@bo";
+    harness.comment.selectionStart = 3;
+    await harness.comment.dispatch("input", {});
+    await settleTrustedHost(12);
+    expect(harness.fetch).toHaveBeenCalledTimes(2);
+    expect(new URL(String(harness.fetch.mock.calls[0]?.[0])).searchParams.get("q")).toBe("al");
+    expect(new URL(String(harness.fetch.mock.calls[1]?.[0])).searchParams.get("q")).toBe("bo");
+    expect(suggestionIds()).toEqual(["user_bo"]);
+
+    releaseFirst(searchResponse([{ id: "user_alex", label: "Alex Rivera" }]));
+    await settleTrustedHost(12);
+    expect(suggestionIds()).toEqual(["user_bo"]);
+    expect(listbox.hidden).toBe(false);
+  });
+
+  it("[T2] admits copy request proposals only while copy requests are enabled", async () => {
+    const harness = await operateTrustedHostScript({
+      embedded: true,
+      submissionMode: "direct",
+      draftContext: true,
+    });
+    await settleTrustedHost(12);
+    const copyChange = harness.createdElements.find((element) => element.getAttribute("aria-label") === "Copy request change");
+    const toggle = harness.createdElements.find((element) => element.getAttribute("aria-label") === "Enable copy requests");
+    expect(copyChange).toBeDefined();
+    expect(toggle).toBeDefined();
+    if (!copyChange || !toggle || !harness.form || !harness.comment) return;
+    expect(toggle.checked).toBe(false);
+
+    copyChange.value = "Replace the hero headline with the new tagline";
+    harness.comment.value = "Proposal while copy requests are disabled";
+    await harness.form.dispatch("submit", { preventDefault: vi.fn(), isTrusted: true });
+    await settleTrustedHost(40);
+    expect(harness.submissionRequests).toHaveLength(1);
+    expect(harness.submissionRequests[0]?.body).toMatchObject({ comment: "Proposal while copy requests are disabled" });
+    expect(harness.submissionRequests[0]?.body).not.toHaveProperty("richPayload");
+    expect(JSON.stringify(harness.submissionRequests[0]?.body)).not.toContain("hero headline");
+
+    toggle.checked = true;
+    await toggle.dispatch("change", { isTrusted: true });
+    copyChange.value = "Replace the hero headline with the new tagline";
+    harness.comment.value = "Proposal while copy requests are enabled";
+    await harness.form.dispatch("submit", { preventDefault: vi.fn(), isTrusted: true });
+    await settleTrustedHost(40);
+    expect(harness.submissionRequests).toHaveLength(2);
+    expect(harness.submissionRequests[1]?.body).toMatchObject({
+      comment: "Proposal while copy requests are enabled",
+      richPayload: {
+        version: 1,
+        copyRequest: { version: 1, changes: [{ kind: "text", proposedText: "Replace the hero headline with the new tagline" }] },
+      },
+    });
+  });
+
+  it("[T2] clears the rich draft when a direct submission completes", async () => {
+    const harness = await operateTrustedHostScript({
+      embedded: true,
+      submissionMode: "direct",
+      draftContext: true,
+    });
+    await settleTrustedHost(12);
+    const copyChange = harness.createdElements.find((element) => element.getAttribute("aria-label") === "Copy request change");
+    const toggle = harness.createdElements.find((element) => element.getAttribute("aria-label") === "Enable copy requests");
+    expect(copyChange).toBeDefined();
+    expect(toggle).toBeDefined();
+    if (!copyChange || !toggle || !harness.form || !harness.comment) return;
+    toggle.checked = true;
+    await toggle.dispatch("change", { isTrusted: true });
+    copyChange.value = "Shorten the pricing footnote";
+    harness.comment.value = "Please review the footnote proposal";
+    await harness.form.dispatch("submit", { preventDefault: vi.fn(), isTrusted: true });
+    await settleTrustedHost(40);
+    expect(harness.submissionRequests).toHaveLength(1);
+    expect(harness.submissionRequests[0]?.body).toMatchObject({
+      richPayload: { copyRequest: { changes: [{ proposedText: "Shorten the pricing footnote" }] } },
+    });
+    const composerMessage = harness.createdElements.find((element) =>
+      element.className === "shiplet-review-status shiplet-review-composer-message",
+    );
+    expect(composerMessage?.textContent).toMatch(/feedback sent/i);
+    expect(harness.comment.value).toBe("");
+    expect(copyChange.value).toBe("");
   });
 
   it("persists a large page capture, compacts completed rich receipts, and retries the saved bytes after reload", async () => {
