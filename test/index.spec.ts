@@ -13,7 +13,10 @@ import {
   MAX_AVATAR_UPLOAD_BYTES,
   validateAvatarUpdate,
 } from "../src/avatars";
-import { validateReviewFeedbackPayload } from "../src/review";
+import {
+  createReviewCapabilityToken,
+  validateReviewFeedbackPayload,
+} from "../src/review";
 import { ensureSchema } from "../src/schema";
 import {
   absolutizeCssUrlsForSnapshot,
@@ -676,9 +679,12 @@ function mergeCookieHeaders(...headers: Array<string | null | undefined>) {
     .join("; ");
 }
 
-async function websocketHelper(path: string): Promise<WebSocket> {
+async function websocketHelper(
+  path: string,
+  headers: Record<string, string> = {},
+): Promise<WebSocket> {
   const response = await requestHelper(path, {
-    headers: { Upgrade: "websocket" },
+    headers: { ...headers, Upgrade: "websocket" },
   });
   expect(response.status).toBe(101);
   const socket = (response as Response & { webSocket?: WebSocket }).webSocket;
@@ -11753,6 +11759,272 @@ describe("Shiplet", () => {
         ]),
       );
       socket.close(1000, "done");
+    });
+
+    it("Given a signed-in reviewer without a display name on a public Shiplet, When an anonymous co-viewer watches presence, Then no message reveals the reviewer's email", async () => {
+      const { project } = await createPublicPresenceShiplet();
+      const reviewerEmail = "quiet.reviewer@example.com";
+      const anonymous = await websocketHelper(
+        `/api/projects/${project.id}/review-presence/ws?path=%2F`,
+      );
+      sendJson(anonymous, {
+        type: "hello",
+        viewer: { id: "guest_watcher", name: "Guest Watcher", kind: "guest" },
+        page: { pathname: "/", href: "https://presence.shiplet.cc/" },
+      });
+      await waitForSocketMessage(
+        anonymous,
+        (candidate) => candidate.type === "presence:update",
+      );
+
+      const reviewer = await websocketHelper(
+        `/api/projects/${project.id}/review-presence/ws?path=%2F`,
+        {
+          "x-shiplet-user-id": "user_presence_quiet",
+          "x-shiplet-user-email": reviewerEmail,
+        },
+      );
+      const ready = await waitForSocketMessage(
+        reviewer,
+        (candidate) => candidate.type === "presence:ready",
+      );
+      const self = ready.viewer as Record<string, unknown>;
+      expect(self.id).toBe("user_presence_quiet");
+      expect(self.kind).toBe("user");
+      expect(self.name).toBe("Reviewer");
+      expect(self.color).toMatch(/^#[0-9a-f]{6}$/i);
+      expect(self).not.toHaveProperty("email");
+
+      // The review client echoes its own identity, including the email it
+      // uses as a local fallback label, in its hello.
+      sendJson(reviewer, {
+        type: "hello",
+        viewer: {
+          id: "user_presence_quiet",
+          kind: "user",
+          name: reviewerEmail,
+          email: reviewerEmail,
+          avatarPreset: "violet-signal",
+        },
+        page: { pathname: "/", href: "https://presence.shiplet.cc/" },
+      });
+      const roster = await waitForSocketMessage(
+        anonymous,
+        (candidate) =>
+          candidate.type === "presence:update" &&
+          Array.isArray(candidate.viewers) &&
+          (candidate.viewers as Array<{ id: string; avatarPreset?: string }>).some(
+            (viewer) =>
+              viewer.id === "user_presence_quiet" &&
+              viewer.avatarPreset === "violet-signal",
+          ),
+      );
+      const listed = (roster.viewers as Array<Record<string, unknown>>).find(
+        (viewer) => viewer.id === "user_presence_quiet",
+      )!;
+      expect(listed.name).toBe("Reviewer");
+      expect(listed).not.toHaveProperty("email");
+
+      const cursorMessage = waitForSocketMessage(
+        anonymous,
+        (candidate) => candidate.type === "cursor:update",
+      );
+      sendJson(reviewer, {
+        type: "cursor:update",
+        page: { pathname: "/", href: "https://presence.shiplet.cc/" },
+        cursor: { x: 10, y: 20, viewportX: 10, viewportY: 20, scrollX: 0, scrollY: 0 },
+      });
+      const cursor = await cursorMessage;
+      expect((cursor.viewer as Record<string, unknown>).name).toBe("Reviewer");
+
+      const viewportMessage = waitForSocketMessage(
+        anonymous,
+        (candidate) => candidate.type === "viewport:update",
+      );
+      sendJson(reviewer, {
+        type: "viewport:update",
+        page: { pathname: "/", href: "https://presence.shiplet.cc/" },
+        viewport: { width: 800, height: 600, scrollX: 0, scrollY: 40 },
+      });
+      const viewport = await viewportMessage;
+
+      const leaveMessage = waitForSocketMessage(
+        anonymous,
+        (candidate) => candidate.type === "cursor:leave",
+      );
+      sendJson(reviewer, {
+        type: "cursor:leave",
+        page: { pathname: "/", href: "https://presence.shiplet.cc/" },
+      });
+      const leave = await leaveMessage;
+
+      for (const message of [ready, roster, cursor, viewport, leave]) {
+        const serialized = JSON.stringify(message);
+        expect(serialized).not.toContain(reviewerEmail);
+        expect(serialized).not.toContain("quiet.reviewer");
+        expect(serialized).not.toContain('"email"');
+      }
+      anonymous.close(1000, "done");
+      reviewer.close(1000, "done");
+    });
+
+    it("Given a signed-in reviewer with a display name, When co-viewers watch presence, Then they see that name and avatar and the reviewer cannot rename themselves", async () => {
+      const { project } = await createPublicPresenceShiplet();
+      const anonymous = await websocketHelper(
+        `/api/projects/${project.id}/review-presence/ws?path=%2F`,
+      );
+      const reviewer = await websocketHelper(
+        `/api/projects/${project.id}/review-presence/ws?path=%2F`,
+        {
+          "x-shiplet-user-id": "user_presence_named",
+          "x-shiplet-user-email": "quinn.named@example.com",
+          "x-shiplet-user-first-name": "Quinn",
+          "x-shiplet-user-last-name": "Rivera",
+        },
+      );
+      sendJson(reviewer, {
+        type: "hello",
+        viewer: {
+          id: "user_presence_named",
+          kind: "user",
+          name: "Workspace Owner",
+          email: "quinn.named@example.com",
+          avatarPreset: "violet-signal",
+        },
+        page: { pathname: "/", href: "https://presence.shiplet.cc/" },
+      });
+      const roster = await waitForSocketMessage(
+        anonymous,
+        (candidate) =>
+          candidate.type === "presence:update" &&
+          Array.isArray(candidate.viewers) &&
+          (candidate.viewers as Array<{ id: string; avatarPreset?: string }>).some(
+            (viewer) =>
+              viewer.id === "user_presence_named" &&
+              viewer.avatarPreset === "violet-signal",
+          ),
+      );
+      const listed = (roster.viewers as Array<Record<string, unknown>>).find(
+        (viewer) => viewer.id === "user_presence_named",
+      )!;
+      expect(listed.name).toBe("Quinn Rivera");
+      expect(listed.avatarPreset).toBe("violet-signal");
+      expect(listed).not.toHaveProperty("email");
+      expect(JSON.stringify(roster)).not.toContain("quinn.named@example.com");
+      anonymous.close(1000, "done");
+      reviewer.close(1000, "done");
+    });
+
+    it("Given a guest that sends an email in its presence hello, When co-viewers watch presence, Then the email is not rebroadcast as a field or a name", async () => {
+      const { project } = await createPublicPresenceShiplet();
+      const watcher = await websocketHelper(
+        `/api/projects/${project.id}/review-presence/ws?path=%2F`,
+      );
+      const guest = await websocketHelper(
+        `/api/projects/${project.id}/review-presence/ws?path=%2F`,
+      );
+      sendJson(guest, {
+        type: "hello",
+        viewer: {
+          id: "guest_emailer",
+          kind: "guest",
+          name: "guest.person@example.com",
+          email: "guest.person@example.com",
+        },
+        page: { pathname: "/", href: "https://presence.shiplet.cc/" },
+      });
+      const roster = await waitForSocketMessage(
+        watcher,
+        (candidate) =>
+          candidate.type === "presence:update" &&
+          Array.isArray(candidate.viewers) &&
+          (candidate.viewers as Array<{ id: string }>).some(
+            (viewer) => viewer.id === "guest_emailer",
+          ),
+      );
+      const listed = (roster.viewers as Array<Record<string, unknown>>).find(
+        (viewer) => viewer.id === "guest_emailer",
+      )!;
+      expect(listed.name).toMatch(/^Guest [0-9A-F]{3}$/);
+      expect(listed).not.toHaveProperty("email");
+      expect(JSON.stringify(roster)).not.toContain("guest.person");
+      watcher.close(1000, "done");
+      guest.close(1000, "done");
+    });
+
+    it("Given an anonymous client that sends the platform's trusted presence headers, When it joins presence, Then it stays an unnamed guest", async () => {
+      const { project } = await createPublicPresenceShiplet();
+      const socket = await websocketHelper(
+        `/api/projects/${project.id}/review-presence/ws?path=%2F`,
+        {
+          "x-shiplet-presence-user-id": "user_spoofed_owner",
+          "x-shiplet-presence-user-name": "Spoofed Owner",
+          "x-shiplet-presence-avatar-preset": "violet-signal",
+        },
+      );
+      const ready = await waitForSocketMessage(
+        socket,
+        (candidate) => candidate.type === "presence:ready",
+      );
+      const self = ready.viewer as Record<string, unknown>;
+      expect(self.kind).toBe("guest");
+      expect(self.id).not.toBe("user_spoofed_owner");
+      expect(self.name).toMatch(/^Guest [0-9A-F]{3}$/);
+      expect(self.avatarPreset).toBeNull();
+      socket.close(1000, "done");
+    });
+
+    it("Given a review capability for a reviewer without a display name, When they join presence on the Shiplet host, Then presence carries a neutral label instead of their email", async () => {
+      await withCustomDomain("shiplet.cc", async () => {
+        const organization = await createTestOrganization(makeRequest);
+        const response = await makeRequest("/projects", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            name: "Private Presence Shiplet",
+            organization_id: organization.id,
+            subdomain: `private-presence-${crypto.randomUUID().slice(0, 8)}`,
+            assets: [
+              {
+                path: "index.html",
+                content: btoa("<!doctype html><h1>Private</h1>"),
+                size: 31,
+              },
+            ],
+          }),
+        });
+        expect(response.status).toBe(201);
+        const { project } = (await response.json()) as {
+          project: { id: string; subdomain: string };
+        };
+        const token = await createReviewCapabilityToken({
+          secret:
+            (env as unknown as { SHIPLET_REVIEW_TOKEN_SECRET?: string })
+              .SHIPLET_REVIEW_TOKEN_SECRET ||
+            "shiplet-test-review-capability-secret",
+          projectId: project.id,
+          viewer: { id: "user_test", email: "test@example.com", name: "" },
+          scopes: ["presence:join"],
+          expiresInSeconds: 60,
+        });
+        const origin = `https://${project.subdomain}.shiplet.cc`;
+        const socket = await websocketHelper(
+          `${origin}/__shiplet/review/presence/ws`,
+          {
+            Origin: origin,
+            Cookie: `__Host-shiplet_artifact_access=${encodeURIComponent(token)}`,
+          },
+        );
+        const ready = await waitForSocketMessage(
+          socket,
+          (candidate) => candidate.type === "presence:ready",
+        );
+        const self = ready.viewer as Record<string, unknown>;
+        expect(self.id).toBe("user_test");
+        expect(self.name).toBe("Reviewer");
+        expect(JSON.stringify(ready)).not.toContain("test@example.com");
+        socket.close(1000, "done");
+      });
     });
 
     it("should broadcast cursors only to viewers on the same review page", async () => {

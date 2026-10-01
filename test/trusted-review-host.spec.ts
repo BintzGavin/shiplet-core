@@ -1765,14 +1765,14 @@ describe("trusted review host boundary", () => {
     expect(avatar?.style.backgroundSize).toBe("cover");
   });
 
-  it("shows the reviewer name on hover, falling back to email when the name is unavailable", async () => {
+  it("shows the reviewer name on hover, falling back to a neutral label rather than an email when the name is unavailable", async () => {
     const harness = await operateTrustedHostScript({ presenceViewers: [
       { id: "user_named", kind: "user", name: "  Gavin Reviewer  ", email: "gavin@example.com" },
       { id: "user_unnamed", kind: "user", email: "reviewer@example.com" },
       { id: "user_blank", kind: "user", name: "   ", email: "second@example.com" },
     ] });
     const avatars = harness.createdElements.filter(element => element.className === "shiplet-review-presence-avatar");
-    const labels = ["Gavin Reviewer", "reviewer@example.com", "second@example.com"];
+    const labels = ["Gavin Reviewer", "Reviewer", "Reviewer"];
     expect(avatars.map(avatar => avatar.getAttribute("title"))).toEqual(labels);
     expect(avatars.map(avatar => avatar.getAttribute("aria-label"))).toEqual(labels);
   });

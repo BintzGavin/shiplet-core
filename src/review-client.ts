@@ -1732,9 +1732,11 @@ ${bubbleLayoutHelpers}
 	}
 
 	function sendPresenceHello() {
+		// Presence is shared with every co-viewer, so the email stays local.
+		const { email: _email, ...viewer } = selfPresenceViewer;
 		sendPresence({
 			type: "hello",
-			viewer: selfPresenceViewer,
+			viewer,
 			page: currentPagePresence(),
 			viewport: currentViewportPresence(),
 		});
