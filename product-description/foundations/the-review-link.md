@@ -30,7 +30,7 @@ stateDiagram-v2
     host --> readonly : identity unavailable (tickets arrive with the first poll)
     ready --> ready : poll every 5 s, route change, focus re-check
     ready --> readonly : identity refused later
-    readonly --> ready : Refresh or focus after access is restored
+    readonly --> ready : focus or visibility after access is restored
 ```
 
 **Before the page.** Opening a review link first checks access. Signed out on a Private or Organization Shiplet, the browser goes to sign-in and comes back to the same page of the review link. Signed in without access, it goes to the access request page (`access/the-access-gate.md`). On an archived Shiplet it shows the archived page instead of the artifact (`shiplets/archive-restore-and-delete.md`). On an unknown address it shows the plain text "Shiplet not found" (a review link on its own host) or the app's plain "404 Not Found" (a path-shaped one).
@@ -50,14 +50,14 @@ stateDiagram-v2
 
 **Review identity** is the trusted host's confirmation of four things together: who the reviewer is, which Shiplet, which revision, and which page. It is checked on arrival, again whenever the window regains focus or the tab becomes visible, before every Send, after any request is refused (401, 403, or 409), when a pending submission is cancelled, and after every route change. Drafts and review preferences are stored under it, so a different person in the same browser, or the same person on another page or after the Shiplet's active revision changed, never sees them.
 
-While a check is in flight the review layer treats identity as unconfirmed, and a Send started in that moment fails with "Review identity is unavailable. Use Refresh after access is restored." When a check fails, the panel's status line says the same, and a storage notice outside the panel reads "Review identity is unavailable. Saved review content stays private until access is restored." Drafts already on screen stay; nothing is sent; the panel's Refresh and the next focus try again.
+While a check is in flight the review layer treats identity as unconfirmed, and a Send started in that moment fails with "Review identity is unavailable. Use Refresh after access is restored." When a check fails, the panel's status line says the same, and a storage notice outside the panel reads "Review identity is unavailable. Saved review content stays private until access is restored." Drafts already on screen stay and nothing is sent. Identity is checked again only when the window regains focus or the tab becomes visible, after a route change, or when a request is refused; the Refresh that the message names reloads the list but does not by itself re-check identity (see Open questions).
 
 **Where the identity comes from** depends on the review link's shape ([navigation and URLs](navigation-and-urls.md#review-link-addresses)):
 
 - **A path on the app** (local development, installations without a custom domain) and **the dashboard preview** use the Shiplet app's own sign-in session.
 - **Its own host** (production) cannot see the app's session. The first visit sends the reviewer through the app's access check, which hands back a review pass for that one Shiplet, valid for 5 minutes and stored as a cookie on the review link's host. See Open questions.
 
-**Signed-out visitors** on an Unlisted or Public review link have no review identity. They see the artifact and, from the first poll onward (about 5 seconds), the tickets and pins, but every attempt to send, reply, change a status, or watch fails, and the identity notice stays up.
+**Signed-out visitors** on an Unlisted or Public review link have no review identity. They see the artifact and, from the first poll onward (about 5 seconds), the tickets and pins, but every attempt to send, reply, or change a status fails, Watch artifact is not offered, and the identity notice stays up.
 
 ## The artifact connection
 
@@ -73,7 +73,7 @@ The artifact connection is a private channel between the trusted host and the Sh
 | Live cursors and following another reviewer | The reviewer's own cursor is not shared; following does nothing |
 | Noticing a route change | The review layer stays on the old page |
 
-When the connection drops (the artifact page froze for 3 seconds, or crashed), the stale notice reads "Artifact tracking disconnected. Use Retry to reconnect.", element selection in progress is cancelled, and Select an element is disabled. The notice's button is labeled Refresh and reloads the ticket list; the connection itself comes back only when the artifact page loads again (a route change inside it, or reloading the review link).
+When the connection drops (the artifact page froze for 3 seconds, or crashed), the stale notice reads "Artifact tracking disconnected. Use Retry to reconnect.", an element selection that is still being prepared is cancelled (one already under way is left on screen with nothing behind it; see [selecting and capturing](../review/selecting-and-capturing.md)), and Select an element is disabled. The notice's button is labeled Refresh and reloads the ticket list; the connection itself comes back only when the artifact page loads again (a route change inside it, or reloading the review link).
 
 ## Keyboard
 
@@ -98,7 +98,7 @@ While the reviewer is following someone, Escape also stops following, in additio
 The artifact can move to another of its pages inside the artifact frame: a link, a form, a script changing the address, or back and forward within the frame. The Shiplet script notices within a tenth of a second and tells the trusted host, which then:
 
 1. saves every draft for the old page to the browser at once;
-2. cancels any element selection in progress and forgets the old page's pin positions;
+2. stops any element selection inside the artifact (the annotation bar stays until Escape or Cancel; see [selecting and capturing](../review/selecting-and-capturing.md)) and forgets the old page's pin positions;
 3. empties the list and shows "Loading comments…";
 4. switches its page to the new one and checks review identity for it;
 5. reloads the list for the new page (the Current page scope follows the artifact; the other scopes reload too), and restores any drafts saved earlier for the new page.
@@ -132,7 +132,7 @@ The Shiplet page embeds the same review layer in an iframe, and its "Open review
 | --- | --- | --- |
 | Role | Every role that can view gets the same review layer. Mention suggestions list only members of the Shiplet's organization, and stay empty for a reviewer who is not a member. Signed-out visitors (Unlisted and Public only) get a read-only layer with the identity notice. | A role lost mid-visit shows at the next request or focus re-check: "Review access changed. Your draft is retained." Drafts stay in the browser under the old identity. |
 | Shiplet state | Private and Organization require sign-in; Unlisted and Public open at once. An archived Shiplet shows the archived page, not the review layer. | Archiving the Shiplet mid-visit makes every later poll fail ("Refresh failed. Showing saved comments and drafts.") and every send fail ("Feedback could not be saved. Retry the same submission."); the open page keeps its tickets and drafts, and the next reload shows the archived page. A new active revision published by an agent makes the next send fail with "This review changed. Your draft is retained; refresh before retrying." |
-| Flags and preferences | The dock preference places the launcher dock and panel; "Open comments" opens the panel on arrival; Reduce motion stops smooth scrolling; the remembered filters choose the first list; Hide comments, if left on, keeps pins hidden; clean link parameters hide parts. No feature flag applies. | Preferences change at once when set in Settings. |
+| Flags and preferences | The dock preference places the launcher dock and panel; "Open comments" opens the panel on arrival; the Motion preference reduces the review layer's animation (smooth scrolling to a ticket follows only the operating system's reduced-motion setting); the remembered filters choose the first list; Hide comments, if left on, keeps pins hidden; clean link parameters hide parts. No feature flag applies. | Preferences change at once when set in Settings. |
 | Keyboard | C, Escape, Ctrl/Cmd+Enter, and Tab as above. | As above. IME compositions are never interrupted by Shiplet's keys. |
 | Narrow screen | At 640 px or less the panel closes by itself after a ticket is sent. At 480 px or less the panel spans the screen's width (and at most 68% of its height), the launcher dock and the annotation bar sit closer to the edges, and the composer's buttons and the annotation bar's Cancel grow to 44 px. | Rotating or resizing re-anchors the composer to its target and moves pins. |
 
@@ -167,6 +167,7 @@ The Shiplet page embeds the same review layer in an iframe, and its "Open review
 - After the artifact connection drops, nothing reconnects it until the artifact page reloads. Whether long-hidden tabs (where browsers slow timers) come back disconnected was not tested.
 - Escape climbing the ladder after a menu or the structured drawing editor handled it looks like a bug: it can discard a whole draft when the reviewer meant to close a menu. May be worth treating as a bug rather than documenting.
 - The polling list never drops a ticket, so tickets closed by others linger in an Open scope until Refresh. Confirm by hand.
+- The identity messages tell the reviewer to "Use Refresh after access is restored", but Refresh does not re-check identity when the list itself loads fine; a reviewer whose identity check failed once (for example on a brief network error) stays unable to send until they leave and refocus the window. Read from code; may be worth treating as a bug.
 - The order in which arrival steps finish (identity, connection, list) varies; what a reviewer sees in the first second was not watched.
 
 Verified against shiplet-core commit `3327af4`
