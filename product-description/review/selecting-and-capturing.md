@@ -2,11 +2,11 @@
 
 ## Summary
 
-Selecting and capturing is how a ticket gets its context. In **annotation mode** the reviewer points at the artifact and clicks one element; Shiplet records that element as the ticket's target and takes an **element capture**: the point clicked, the viewport and scroll position, the element's selector, tag, and visible text, and a screenshot of the visible page. **Draw on page** takes a **page capture** instead: a screenshot of the visible page with no target, opened straight into the drawing editor. Both feed the composer, which this document hands over to ([the composer](the-composer.md)). Annotation mode is entered from Annotate in the launcher dock, the C shortcut, or Select an element in the comments panel's "+" menu; it shows as a blue outline around the artifact, a slightly darker artifact, and a bar at the top center reading "Annotating · {path}" with a Cancel button. Element selection is pointer-only. It needs the artifact connection ([the review link](../foundations/the-review-link.md#the-artifact-connection)) and works for every role that can view, including signed-out visitors, who can capture but not send.
+Selecting and capturing is how a ticket gets its context. In **annotation mode** the reviewer points at the artifact and clicks one element; Shiplet records that element as the ticket's target and takes an **element capture**: the point clicked, the viewport and scroll position, the element's selector, tag, and visible text, and a screenshot of the visible page. **Draw on page** takes a **page capture** instead: a screenshot of the visible page with no target, opened straight into the drawing editor. Both feed the composer, which this document hands over to ([the composer](the-composer.md)). Annotation mode is entered from Annotate in the launcher dock, the C shortcut, or Select an element in the comments panel's "+" menu; it shows as a blue outline around the artifact, a slightly darker artifact, and the annotation bar at the top center reading "Annotating · {path}" with a Cancel button. Element selection is pointer-only. It needs the artifact connection ([the review link](../foundations/the-review-link.md#the-artifact-connection)) and works for every role that can view, including signed-out visitors, who can capture but not send.
 
 ## The simple case
 
-The reviewer selects Annotate. The launcher dock and the pins disappear, the artifact gets a blue outline, and the "Annotating · /" bar appears at the top. Moving the pointer over the artifact draws a teal box around whichever element is under it. They click a button in the artifact: the button does not act; instead the box disappears, an orange marker appears at the point clicked with a teal outline around the button, and the composer opens beside it with the comment field focused. Its target, shown when the composer is expanded, reads like "BUTTON · Buy now · main > button.cta".
+The reviewer selects Annotate. The launcher dock and the pins disappear, the artifact gets a blue outline, and the annotation bar ("Annotating · /") appears at the top. Moving the pointer over the artifact draws a teal box around whichever element is under it. They click a button in the artifact: the button does not act; instead the box disappears, an orange marker appears at the point clicked with a teal outline around the button, and the composer opens beside it with the comment field focused. Its target, shown when the composer is expanded, reads like "BUTTON · Buy now · main > button.cta".
 
 For a whole-page drawing, the reviewer opens the comments panel, selects "+" (New comment) and Draw on page. The visible part of the artifact is captured, the composer opens with "Page · /" as its target and a note under the comment field saying how faithful the capture is, and the structured drawing editor opens on the screenshot.
 
@@ -19,7 +19,7 @@ stateDiagram-v2
     preparing --> selecting : artifact ready
     preparing --> idle : Escape (nothing kept)
     selecting --> captured : click an element (capture taken)
-    selecting --> idle : Escape, bar Cancel (nothing kept)
+    selecting --> idle : Escape, annotation bar Cancel (nothing kept)
     captured --> [*] : composer opens with the capture
     idle --> pagecapture : Draw on page (connection ready)
     pagecapture --> [*] : composer and drawing editor open
@@ -29,13 +29,13 @@ stateDiagram-v2
 
 **Annotate, C, or Select an element** first prepares. If the composer already holds a draft, Annotate and C reopen it instead and annotation mode does not start (Select an element in the panel starts it anyway). Preparing sends a request to the artifact to start selection; nothing visible changes yet, except that the panel's status line reads "Preparing element selection…", or "Connecting to the artifact…" while the artifact connection is not yet up, in which case the request waits for it. Pressing Annotate or C again while preparing does nothing.
 
-When the artifact answers, **selecting** begins, all at once: the comments panel closes, any composer and its target marker are hidden, the launcher dock and every pin, pin stack, and Page comments button are hidden, the artifact gets its blue outline and darkens slightly, and the "Annotating · {path}" bar appears with Cancel. The panel's status reads "Select an element to annotate. Press Escape to cancel."
+When the artifact answers, **selecting** begins, all at once: the comments panel closes, any composer and its target marker are hidden, the launcher dock and every pin, pin stack, and Page comments button are hidden, the artifact gets its blue outline and darkens slightly, and the annotation bar ("Annotating · {path}") appears with Cancel. The panel's status reads "Select an element to annotate. Press Escape to cancel."
 
 **Draw on page** (in the panel's "+" menu) needs the artifact connection to be ready; without it, or while an earlier page capture is still running, the choice does nothing. Otherwise the menu closes and the visible page is captured at once ("Capturing the visible page…"). There is no selecting phase.
 
 ### Leave untouched
 
-Escape (pressed in the review layer or inside the artifact) or the bar's Cancel ends annotation mode without capturing anything. Everything hidden comes back: the launcher dock, pins, and the Page comments button; the artifact loses its outline; focus returns to Annotate (or to Comments, if selection never got past preparing). No capture is recorded. Escape and Cancel end selection through the same path as cancelling the composer, so if a draft existed when selection began (possible only through Select an element in the panel), that draft is discarded too. Reloading or leaving the page during selection keeps nothing of the selection, and leaves an earlier draft as it was; selection itself is not a draft.
+Escape (pressed in the review layer or inside the artifact) or the annotation bar's Cancel ends annotation mode without capturing anything. Everything hidden comes back: the launcher dock, pins, and the Page comments button; the artifact loses its outline; focus returns to Annotate (or to Comments, if selection never got past preparing). No capture is recorded. Escape and Cancel end selection through the same path as cancelling the composer, so if a draft existed when selection began (possible only through Select an element in the panel), that draft is discarded too. Reloading or leaving the page during selection keeps nothing of the selection, and leaves an earlier draft as it was; selection itself is not a draft.
 
 ### Begin editing
 
@@ -72,13 +72,13 @@ Annotation mode ends and the composer opens compact beside the point, with an or
 | Shiplet state | No difference by visibility. | Archiving the Shiplet does not interrupt selection; the send fails later. |
 | Flags and preferences | Hide comments makes no difference here, because pins are hidden during selection anyway. The drawing defaults (pen, color #D92D5B, width 5) are used when Draw on page opens the editor. No feature flag applies. | No effect. |
 | Keyboard | C starts preparing when no text field has focus and no draft exists. There is no keyboard way to choose an element. | Escape cancels, from the review layer or from inside the artifact. Tab moves focus within the artifact as usual and does not select. |
-| Narrow screen | At 480 px or less the bar spans the width and its Cancel is 44 px tall. Selection works by tap. | A tap both shows the box and chooses the element. |
+| Narrow screen | At 480 px or less the annotation bar spans the width and its Cancel is 44 px tall. Selection works by tap. | A tap both shows the box and chooses the element. |
 
 ## Cancel and interrupt
 
 | Event | Before editing | While editing or submitting |
 | --- | --- | --- |
-| Escape or Cancel | Escape while preparing stops it; focus returns to Comments. An earlier draft is discarded. | Escape or the bar's Cancel ends selection with nothing captured, and discards an earlier draft if there was one. After the click (while the capture is being made) there is no cancel; the composer opens when it is ready. |
+| Escape or Cancel | Escape while preparing stops it; focus returns to Comments. An earlier draft is discarded. | Escape or the annotation bar's Cancel ends selection with nothing captured, and discards an earlier draft if there was one. After the click (while the capture is being made) there is no cancel; the composer opens when it is ready. |
 | Leaving by a link inside Shiplet | Nothing is recorded. | Nothing is recorded; selection is not a draft. |
 | Browser back or forward | As leaving. | As leaving. |
 | Reload, or the tab or window is closed | Nothing is kept. | Nothing is kept. A capture already handed to the composer is kept as its draft. |
@@ -89,7 +89,7 @@ Annotation mode ends and the composer opens compact beside the point, with an or
 | The same record changed in another tab | No effect. | No effect. |
 | The same record changed by another person | Their new tickets arrive by polling; their pins stay hidden until selection ends. | As before editing. |
 | Autofill, a password manager, or an input method (IME) writes into a field | No effect. | Escape during an IME composition inside the artifact does not cancel selection. |
-| The artifact navigates to another page (review link only) | While preparing, the artifact page reloading restarts the request on the new page. | Selection stops working inside the artifact (the element box and the click capture are gone), but the bar, the outline, and the hidden pins remain until Escape or Cancel. A capture in progress is dropped. |
+| The artifact navigates to another page (review link only) | While preparing, the artifact page reloading restarts the request on the new page. | Selection stops working inside the artifact (the element box and the click capture are gone), but the annotation bar, the outline, and the hidden pins remain until Escape or Cancel. A capture in progress is dropped. |
 
 After an interrupt the reviewer is back on the review link with nothing captured, except when the capture had already reached the composer.
 
@@ -109,13 +109,13 @@ After an interrupt the reviewer is back on the review link with nothing captured
 
 **Live updates and collaboration.** Polling continues during selection, but pins are hidden. The reviewer's cursor keeps being shared with other reviewers.
 
-**Status messages and notifications.** The bar is the visible cue; the panel's status texts during selection are mostly unseen because the panel is closed. Nothing notifies anyone.
+**Status messages and notifications.** The annotation bar is the visible cue; the panel's status texts during selection are mostly unseen because the panel is closed. Nothing notifies anyone.
 
 **URL and browser storage.** The URL never changes. Captures, including screenshots up to about 13 MB as text, are stored with the draft in IndexedDB.
 
 **Localization and time.** English only.
 
-**Accessibility.** Element selection cannot be done from the keyboard, so keyboard and screen reader users can write page comments but cannot attach a target. The bar is announced politely when it appears. The selection box and markers are visual only.
+**Accessibility.** Element selection cannot be done from the keyboard, so keyboard and screen reader users can write page comments but cannot attach a target. The annotation bar is announced politely when it appears. The selection box and markers are visual only.
 
 **Side effects others notice.** None until the ticket is sent. The artifact never learns which element was chosen, and the click is not delivered to it.
 
@@ -129,12 +129,12 @@ After an interrupt the reviewer is back on the review link with nothing captured
 - **Private elements pass clicks through.** Clicking inside an element marked private during selection is not captured and reaches the artifact, so a private link navigates.
 - **Escape while re-targeting discards the draft.** Starting Select an element from the panel while a draft exists, then pressing Escape, loses the draft's text as well as the selection.
 - **Pressing Annotate during preparing** is ignored; there is no visible sign that preparing is under way when the panel is closed.
-- **A connection that drops during selection** leaves the bar up and selection dead, as with a route change; Escape recovers.
+- **A connection that drops during selection** leaves the annotation bar up and selection dead, as with a route change; Escape recovers.
 
 ## Open questions and verification
 
 - The fidelity line not updating on element captures looks like a bug; `docs/review-widget-parity-audit.md` CREATE-07 lists honest evidence feedback as accepted locally. May be worth treating as a bug rather than documenting.
-- A route change or dropped connection during selection leaving the bar and hidden pins with no working selection was read from code, not tried.
+- A route change or dropped connection during selection leaving the annotation bar and hidden pins with no working selection was read from code, not tried.
 - The scroll offset of rebuilt screenshots was a production defect (CREATE-06, closed locally); the current code applies the offset. Confirm with a page scrolled 1,000 px.
 - Whether the 1920 by 1080 crop and the 1x drawing are intended was not determined.
 - Element selection being pointer-only has no keyboard alternative; this is a product question for accessibility.

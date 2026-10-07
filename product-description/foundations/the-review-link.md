@@ -44,7 +44,7 @@ stateDiagram-v2
 3. **Watch status, mention suggestions, and presence** load. Presence shows the reviewer's own avatar ("1 reviewer here") and anyone else on the Shiplet.
 4. **Clean link parameters** are applied: `shiplet_review=hidden` hides the launcher dock, and `shiplet_comments=hidden` hides the pins, each with a single "Show review UI" or "Show comments" button in their place (`review/review-settings-and-links.md`).
 
-**From then on**, the ticket list is polled every 5 seconds while the tab is visible ([the page lifecycle](page-lifecycle.md#live-updates-and-polling)). A poll adds new tickets and updates the ones it returns; it never removes a ticket from the list (see `review/the-comments-panel.md` for what that means for closed tickets).
+**From then on**, the ticket list is polled every 5 seconds while the tab is visible ([the page lifecycle](page-lifecycle.md#live-updates-and-polling)). A poll adds new tickets and updates the ones it returns; it never removes a ticket from the list (see [the comments panel](../review/the-comments-panel.md) for what that means for closed tickets).
 
 ## Who the reviewer is
 
@@ -115,14 +115,14 @@ The Shiplet page embeds the same review layer in an iframe, and its "Open review
 
 | Part | Described in |
 | --- | --- |
-| Launcher dock, comments panel, ticket list, filters, pagination, refresh, options menu | `review/the-comments-panel.md` |
-| Threads in the panel and beside a pin; replies; Resolve, Reopen, Status | `review/threads-and-replies.md` |
+| Launcher dock, comments panel, ticket list, filters, pagination, refresh, options menu | [the comments panel](../review/the-comments-panel.md) |
+| Threads in the panel and beside a pin; replies; Resolve, Reopen, Status | [threads and replies](../review/threads-and-replies.md) |
 | Pins, pin stacks, the Page comments menu, revealing targets, Hide comments | `review/pins.md` |
-| The composer: opening, compact and expanded, moving, Cancel, Send | `review/the-composer.md` |
-| Annotation mode, element captures, page captures, capture fidelity | `review/selecting-and-capturing.md` |
+| The composer: opening, compact and expanded, moving, Cancel, Send | [the composer](../review/the-composer.md) |
+| Annotation mode, element captures, page captures, capture fidelity | [selecting and capturing](../review/selecting-and-capturing.md) |
 | Drawing on screenshots | `review/drawing-on-screenshots.md` |
 | Attachments, mentions, copy requests | `review/attachments-mentions-and-copy-requests.md` |
-| What Send commits, failure and retry, drafts across reload | `review/sending-and-drafts.md` |
+| What Send commits, failure and retry, drafts across reload | [sending and drafts](../review/sending-and-drafts.md) |
 | Presence and following | `review/presence-and-following.md` |
 | Settings, clean links, Watch | `review/review-settings-and-links.md` |
 
@@ -134,7 +134,7 @@ The Shiplet page embeds the same review layer in an iframe, and its "Open review
 | Shiplet state | Private and Organization require sign-in; Unlisted and Public open at once. An archived Shiplet shows the archived page, not the review layer. | Archiving the Shiplet mid-visit makes every later poll fail ("Refresh failed. Showing saved comments and drafts.") and every send fail ("Feedback could not be saved. Retry the same submission."); the open page keeps its tickets and drafts, and the next reload shows the archived page. A new active revision published by an agent makes the next send fail with "This review changed. Your draft is retained; refresh before retrying." |
 | Flags and preferences | The dock preference places the launcher dock and panel; "Open comments" opens the panel on arrival; Reduce motion stops smooth scrolling; the remembered filters choose the first list; Hide comments, if left on, keeps pins hidden; clean link parameters hide parts. No feature flag applies. | Preferences change at once when set in Settings. |
 | Keyboard | C, Escape, Ctrl/Cmd+Enter, and Tab as above. | As above. IME compositions are never interrupted by Shiplet's keys. |
-| Narrow screen | At 640 px or less the panel closes by itself after a ticket is sent. At 480 px or less the panel spans the screen's width (and at most 68% of its height), the launcher dock and mode bar sit closer to the edges, and the composer's buttons and the mode bar's Cancel grow to 44 px. | Rotating or resizing re-anchors the composer to its target and moves pins. |
+| Narrow screen | At 640 px or less the panel closes by itself after a ticket is sent. At 480 px or less the panel spans the screen's width (and at most 68% of its height), the launcher dock and the annotation bar sit closer to the edges, and the composer's buttons and the annotation bar's Cancel grow to 44 px. | Rotating or resizing re-anchors the composer to its target and moves pins. |
 
 ## Cancel and interrupt
 
@@ -157,7 +157,7 @@ The Shiplet page embeds the same review layer in an iframe, and its "Open review
 
 - **Opening a non-HTML file's address directly** shows it without any review layer, so it cannot be reviewed there; it can be reviewed through the page that shows it.
 - **The address bar never follows the artifact.** Sharing the browser's address after navigating inside the artifact shares the first page, not the current one.
-- **Escape in a menu or the mention suggestions also climbs the ladder.** The Page comments menu, a pin stack menu, and the mention suggestions close themselves on Escape, and the same keypress then also closes the panel or cancels the composer (`review/the-composer.md`).
+- **Escape in a menu or the mention suggestions also climbs the ladder.** The Page comments menu, a pin stack menu, and the mention suggestions close themselves on Escape, and the same keypress then also closes the panel or cancels the composer ([the composer](../review/the-composer.md)).
 - **A Send in the instant after focus returns** from the artifact to the review layer can meet a focus re-check still in flight and fail with the identity message; sending again works.
 - **The connection notice names a button that is not there**: it says Retry, and its button says Refresh and does not reconnect.
 

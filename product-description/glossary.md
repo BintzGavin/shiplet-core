@@ -58,7 +58,7 @@ The vocabulary used across these documents. When a document uses one of these wo
 
 **Capture.** What the review layer records about the artifact when a ticket is started on it: the viewport size and pixel ratio, the scroll offset, the point clicked, the target (for an element capture), and usually a screenshot. An element capture comes from choosing an element; a page capture comes from Draw on page and has no target.
 
-**Capture fidelity.** How faithful a capture's screenshot is, shown under the comment field: captured from the selected image, reconstructed from the visible page (images, canvas, media, form values, and external styles may be missing), an approximate fallback, or no image.
+**Capture fidelity.** How faithful a capture's screenshot is, shown in the composer under the comment field (the fidelity line): captured from the selected image, reconstructed from the visible page (images, canvas, media, form values, and external styles may be missing), an approximate fallback, or no image.
 
 **Reply.** A follow-up comment on a ticket, with its own author and time. Replies cannot be edited or deleted.
 
@@ -72,7 +72,7 @@ The vocabulary used across these documents. When a document uses one of these wo
 
 ## People and access
 
-**Organization administrator.** A member of an organization with the admin (or owner) role. Administrators can view and edit every Shiplet in the organization, manage invite links and API keys, and invite administrators.
+**Organization administrator.** A member of an organization with the admin (or owner) role. Administrators can view and edit every Shiplet in the organization, create teams, manage invite links and API keys, and invite administrators.
 
 **Member.** A person who belongs to an organization without the administrator role. A member can view every Organization-visibility Shiplet in it and create Shiplets of their own.
 
@@ -100,6 +100,8 @@ The vocabulary used across these documents. When a document uses one of these wo
 
 **Artifact connection.** The private channel between the trusted host and a small Shiplet script inside the artifact frame. Element selection, captures, pins that follow their targets, the C and Escape shortcuts pressed inside the artifact, following, and route changes all need it. The host renews it every second and treats it as disconnected after 3 seconds without an answer.
 
+**Review pass.** A short-lived permission, valid for 5 minutes for one Shiplet, that the app hands to a review link on its own host after checking the person's access there, because that host cannot see the app's sign-in session. It is kept as a cookie on the review link's host.
+
 **Review identity.** The trusted host's check, on arrival and again on focus, before sending, and after a route change, of who the reviewer is, for which Shiplet, revision, and page. Drafts and review preferences are stored under it, so a different person or page never sees them.
 
 **Launcher dock.** The bordered group at a corner of the review link (bottom right by default) holding **Annotate** (starts a new ticket on an element) and **Comments** (opens the comments panel, with the ticket count).
@@ -116,7 +118,9 @@ The vocabulary used across these documents. When a document uses one of these wo
 
 **Composer.** The card where a new ticket is written: a comment field, the target line, capture fidelity, attachments, Details, Cancel, and Send. It is compact (comment and actions) or expanded (Details open, with element details, the drag handle, and drawing tools). The interface calls it the annotation card; its heading is "New annotation".
 
-**Annotation mode.** The state between pressing Annotate (or C) and choosing an element: the artifact highlights the element under the pointer, a bar reads "Annotating · {path}" with a Cancel button, and pins are hidden.
+**Annotation mode.** The state between pressing Annotate (or C) and choosing an element: the artifact highlights the element under the pointer, the *annotation bar* is shown, and pins are hidden.
+
+**Annotation bar.** The bar at the top center of a review link reading "Annotating · {path}" with a Cancel button. It is shown during annotation mode and for as long as the composer is open. Its Cancel ends annotation mode or cancels the composer, discarding the draft.
 
 **Creation menu.** The three choices the panel's "+" (New comment) button offers: Page comment, Draw on page, Select an element.
 
@@ -130,7 +134,7 @@ The vocabulary used across these documents. When a document uses one of these wo
 
 **Saved.** Stored on Shiplet's server, so that anyone who can view the Shiplet sees it after a refresh. A ticket is saved when the server answers Send with the ticket; a grant is saved when the share request succeeds. Nothing is saved by typing.
 
-**Draft.** Unsent work in the review layer: the composer's comment, mentions, target, capture, drawing, attachments, and copy request, and the text and mentions typed into any reply field. Drafts are kept in the browser (IndexedDB) under the review identity and survive a reload; they never reach the server until sent.
+**Draft.** Unsent work in the review layer: the composer's comment, mentions, target, capture, drawing, attachments, and copy request, and the text and mentions typed into any reply field. Everything except attachments is kept in the browser (IndexedDB) under the review identity and page and survives a reload; attachments last only as long as the page. Nothing in a draft reaches the server until it is sent.
 
 **Dirty.** A form or draft with at least one change since it was opened or last sent. Platform forms (everything outside the review link) track no dirty state and never warn before leaving; the review layer keeps dirty drafts in the browser instead.
 

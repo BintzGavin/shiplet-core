@@ -16,7 +16,7 @@ A feature document narrates its interaction in these five phases, in this order,
 
 **While editing.** Typing, choosing, and pointer work. Platform forms validate nothing until submit, apart from what the browser itself checks on submit (an email field's format, a URL field's format, a required field). The review layer keeps saving the draft, keeps polling, and keeps the composer anchored to its target as the artifact scrolls.
 
-**Submit.** The work is sent. Platform forms send one request and wait; most do not disable their button, so a second click sends a second request. The review layer disables the form while a ticket is pending and can only ever create one ticket per Send, even across a failure and a retry (see `review/sending-and-drafts.md`).
+**Submit.** The work is sent. Platform forms send one request and wait; most do not disable their button, so a second click sends a second request. The review layer disables the form while a ticket is pending and can only ever create one ticket per Send, even across a failure and a retry (see [sending and drafts](../review/sending-and-drafts.md)).
 
 ## Saved, unsaved, and where unsent work lives
 

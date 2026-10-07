@@ -2,7 +2,7 @@
 
 ## Summary
 
-This document owns what happens to review-layer work between the reviewer's first keystroke and a saved ticket: how unsent work is kept in the browser as a draft, how Send turns the composer's draft into exactly one ticket, what a failed send looks like and how Retry submission resends it without ever creating a duplicate, and what comes back after a reload. It applies to the composer on a review link and on the dashboard preview. Drafts also cover the text typed into reply fields; sending a reply is owned by `review/threads-and-replies.md`. The composer's own controls are in [the composer](the-composer.md); the meaning of every interrupt is in [the page lifecycle](../foundations/page-lifecycle.md). Sending needs a confirmed review identity ([the review link](../foundations/the-review-link.md#who-the-reviewer-is)) and working browser storage, and is open to every role that can view.
+This document owns what happens to review-layer work between the reviewer's first keystroke and a saved ticket: how unsent work is kept in the browser as a draft, how Send turns the composer's draft into exactly one ticket, what a failed send looks like and how Retry submission resends it without ever creating a duplicate, and what comes back after a reload. It applies to the composer on a review link and on the dashboard preview. Drafts also cover the text typed into reply fields; sending a reply is owned by [threads and replies](threads-and-replies.md). The composer's own controls are in [the composer](the-composer.md); the meaning of every interrupt is in [the page lifecycle](../foundations/page-lifecycle.md). Sending needs a confirmed review identity ([the review link](../foundations/the-review-link.md#who-the-reviewer-is)) and working browser storage, and is open to every role that can view.
 
 ## The simple case
 
@@ -89,7 +89,7 @@ A Retry submission button appears under the message.
 
 | Event | Before editing | While editing or submitting |
 | --- | --- | --- |
-| Escape or Cancel | Nothing to discard. | Cancel or Escape discards the composer's text, mentions, target, capture, and drawing from the screen; the stored copy follows at the next save (at once when a capture was discarded). It does not clear attachments, the copy request, or a failed submission. While a send is in flight, the Cancel button only saves the draft; Escape and the bar's Cancel clear the screen, but the request still completes and the ticket is saved. |
+| Escape or Cancel | Nothing to discard. | Cancel or Escape discards the composer's text, mentions, target, capture, and drawing from the screen; the stored copy follows at the next save (at once when a capture was discarded). It does not clear attachments, the copy request, or a failed submission. While a send is in flight, the Cancel button only saves the draft; Escape and the annotation bar's Cancel clear the screen, but the request still completes and the ticket is saved. |
 | Leaving by a link inside Shiplet | Nothing new is recorded. | The draft is saved first. A send in flight still completes on the server; on return it shows as failed with "This submission may have reached the server…", and Retry submission returns the saved ticket. |
 | Browser back or forward | As leaving. | As leaving. |
 | Reload, or the tab or window is closed | The stored draft comes back. | As leaving; attachments are lost. |

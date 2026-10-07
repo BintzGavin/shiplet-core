@@ -2,7 +2,7 @@
 
 ## Summary
 
-The composer is the card where a new ticket is written. It floats over the artifact on a review link or the dashboard preview, next to the element the ticket is about, or near the bottom right of the window for a page comment. It opens from Annotate in the launcher dock, from the C shortcut, from the comments panel's "+" (New comment) menu, and by itself when an element or page capture arrives; while it is open, the launcher dock is hidden and a bar at the top of the window reads "Annotating · {path}" with a Cancel button. It has two sizes. **Compact** (the default) shows the comment field, the capture fidelity line, Attachments, and a row with Details, Draw (when there is a screenshot), and Send. **Expanded** (after Details) adds a header ("New annotation", the revision and page, Drag, Close), the target line, Element details, Mention reviewers, the target controls, and a Cancel button. Anyone who can view the Shiplet can write and send; a signed-out visitor on an Unlisted or Public link can type but cannot send. This document owns how the composer opens, its two sizes, where it sits, and the difference between closing and cancelling. Choosing the target is in [selecting and capturing](selecting-and-capturing.md); what Send commits, failures, retries, and drafts across reloads are in [sending and drafts](sending-and-drafts.md).
+The composer is the card where a new ticket is written. It floats over the artifact on a review link or the dashboard preview, next to the element the ticket is about, or near the bottom right of the window for a page comment. It opens from Annotate in the launcher dock, from the C shortcut, from the comments panel's "+" (New comment) menu, and by itself when an element or page capture arrives; while it is open, the launcher dock is hidden and the annotation bar at the top of the window reads "Annotating · {path}" with a Cancel button. It has two sizes. **Compact** (the default) shows the comment field, the capture fidelity line, Attachments, and a row with Details, Draw (when there is a screenshot), and Send. **Expanded** (after Details) adds a header ("New annotation", the revision and page, Drag, Close), the target line, Element details, Mention reviewers, the target controls, and a Cancel button. Anyone who can view the Shiplet can write and send; a signed-out visitor on an Unlisted or Public link can type but cannot send. This document owns how the composer opens, its two sizes, where it sits, and the difference between closing and cancelling. Choosing the target is in [selecting and capturing](selecting-and-capturing.md); what Send commits, failures, retries, and drafts across reloads are in [sending and drafts](sending-and-drafts.md).
 
 ## The simple case
 
@@ -24,9 +24,9 @@ stateDiagram-v2
     expanded --> sending : Send, Ctrl/Cmd+Enter
     sending --> closed : saved (draft cleared)
     sending --> compact : failed (draft kept, Retry submission)
-    compact --> closed : Escape, mode bar Cancel (draft discarded)
-    expanded --> closed : Cancel, mode bar Cancel (draft discarded)
-    selecting --> closed : Escape, mode bar Cancel
+    compact --> closed : Escape, annotation bar Cancel (draft discarded)
+    expanded --> closed : Cancel, annotation bar Cancel (draft discarded)
+    selecting --> closed : Escape, annotation bar Cancel
 ```
 
 ### Arrive
@@ -39,7 +39,7 @@ The composer opens in one of five ways, and each decides what it starts with.
 - **Draw on page** (from "+") captures the visible page, opens the composer with that capture and no target, and opens the structured drawing editor on the screenshot (`review/drawing-on-screenshots.md`). The panel stays open.
 - **Select an element** (from "+") starts annotation mode even when a draft exists; the new element replaces the draft's target and keeps its text.
 
-Whatever the way in, the composer opens compact, the launcher dock hides, the "Annotating · {path}" bar appears at the top center with its Cancel button, and the comment field takes focus.
+Whatever the way in, the composer opens compact, the launcher dock hides, the annotation bar ("Annotating · {path}") appears at the top center with its Cancel button, and the comment field takes focus.
 
 **Where it sits.** With a target, the composer is placed 70 px away from the target point, trying below-right, below-left, above-right, and above-left in that order and taking the first that fits inside the window, or the one that overflows least. A small pin marks the point and an outline marks the element. Without a target it sits near the bottom right corner, whatever the dock preference. It always stays at least 8 px inside the window.
 
@@ -49,7 +49,7 @@ Whatever the way in, the composer opens compact, the launcher dock hides, the "A
 
 Opening the composer creates no ticket and sends nothing. What leaving it does depends on how:
 
-- **Escape** on a compact composer, or the bar's **Cancel**, closes it and discards the draft: the comment, chosen mentions, target, capture, and drawing. A composer that only holds a fresh element capture loses that capture. Nothing is sent. Attachments and copy request text are not discarded (see Edge cases).
+- **Escape** on a compact composer, or the annotation bar's **Cancel**, closes it and discards the draft: the comment, chosen mentions, target, capture, and drawing. A composer that only holds a fresh element capture loses that capture. Nothing is sent. Attachments and copy request text are not discarded (see Edge cases).
 - **Escape** on an expanded composer only returns it to compact; a second Escape cancels.
 - **Leaving the page** or reloading keeps the draft in the browser; it comes back the next time Annotate or C is used.
 
@@ -97,7 +97,7 @@ Changing the Copy requests setting or the window size during editing takes effec
 
 | Event | Before editing | While editing or submitting |
 | --- | --- | --- |
-| Escape or Cancel | Escape on compact, or the bar's Cancel, closes the composer and discards any capture it opened with. On expanded, Escape returns to compact first. | Same, and the typed draft is discarded. While saving, the composer's Cancel button does nothing, but Escape and the bar's Cancel still close the composer and discard what is on screen; the ticket being saved is still saved and appears in the list with the next poll. |
+| Escape or Cancel | Escape on compact, or the annotation bar's Cancel, closes the composer and discards any capture it opened with. On expanded, Escape returns to compact first. | Same, and the typed draft is discarded. While saving, the composer's Cancel button does nothing, but Escape and the annotation bar's Cancel still close the composer and discard what is on screen; the ticket being saved is still saved and appears in the list with the next poll. |
 | Leaving by a link inside Shiplet | Nothing new is recorded; a capture already taken is kept as a draft. | The draft is saved in the browser first. A send in flight completes on the server; on return the composer offers it as failed, and Retry submission returns the ticket already saved instead of making a second one. |
 | Browser back or forward | As leaving. | As leaving. |
 | Reload, or the tab or window is closed | A capture is restored as a draft. | The draft (text, mentions, target, capture, drawing, copy request) is restored; the composer stays closed until Annotate or C reopens it. Attachments are lost. |
@@ -110,7 +110,7 @@ Changing the Copy requests setting or the window size during editing takes effec
 | Autofill, a password manager, or an input method (IME) writes into a field | No effect; the composer's fields are not autofill targets. | During an IME composition, Ctrl/Cmd+Enter and Escape do nothing and mention suggestions pause; they work again when it ends. |
 | The artifact navigates to another page (review link only) | The composer stays open. The capture is saved as the old page's draft and the outline and pin stop following (the old element is gone). | The composer stays open. The text is saved as the old page's draft. If the new page has a saved draft, its text replaces what is shown; if not, the same text and the old page's target stay in the composer and will be sent as a ticket on the new page. |
 
-After an interrupt the reviewer is either still in the composer with the draft intact, or back at the review link with the launcher dock showing and the draft waiting behind Annotate and C. Only Escape on a compact composer, the bar's Cancel, the expanded Cancel button, and a successful send remove a draft.
+After an interrupt the reviewer is either still in the composer with the draft intact, or back at the review link with the launcher dock showing and the draft waiting behind Annotate and C. Only Escape on a compact composer, the annotation bar's Cancel, the expanded Cancel button, and a successful send remove a draft.
 
 ## Interactions with other systems
 
@@ -134,19 +134,19 @@ After an interrupt the reviewer is either still in the composer with the draft i
 
 **Localization and time.** English only; the composer shows no times.
 
-**Accessibility.** The comment field is labeled "Annotation" and the Send button "Send annotation"; the expanded composer is announced as a dialog but does not trap focus. The composer's message is a status region, and an alert when it reports an error. The Cancel button is not reachable in compact; Escape and the bar's Cancel are.
+**Accessibility.** The comment field is labeled "Annotation" and the Send button "Send annotation"; the expanded composer is announced as a dialog but does not trap focus. The composer's message is a status region, and an alert when it reports an error. The Cancel button is not reachable in compact; Escape and the annotation bar's Cancel are.
 
 **Side effects others notice.** A saved ticket appears for everyone viewing the Shiplet within 5 seconds, its owner and watchers are notified, and anyone mentioned is notified (and, if they could not view the Shiplet, given access to it; see [Shiplets and tickets](../foundations/shiplets-and-tickets.md#mentions)).
 
 ## Edge cases
 
 - **Change element and Select element only collapse the composer once the draft has content.** Both use Annotate's rule (reopen the draft if there is one), and the draft always has content once a target or any text exists, so the expanded composer just shrinks back to compact. The only way to re-target a written draft is "+" then Select an element in the panel, which is unreachable while the composer is open because the launcher dock is hidden.
-- **Cancel keeps attachments and the copy request.** Escape, the bar's Cancel, and the expanded Cancel clear the text, mentions, target, capture, and drawing, but attachments and copy request text stay. Because they count as a draft, the next Annotate or C reopens the composer with them instead of starting element selection.
+- **Cancel keeps attachments and the copy request.** Escape, the annotation bar's Cancel, and the expanded Cancel clear the text, mentions, target, capture, and drawing, but attachments and copy request text stay. Because they count as a draft, the next Annotate or C reopens the composer with them instead of starting element selection.
 - **Escape in the mention suggestions cancels the composer.** The suggestions list handles Escape by closing itself, but the same keypress continues up the Escape ladder and, on a compact composer, discards the whole draft.
 - **Page comment drops a target.** Choosing Page comment while a restored draft holds a target removes the target and capture but keeps the text.
 - **Draw on page replaces a target** without asking: the page capture takes the place of any element capture the draft had.
 - **A contextual thread and the composer can be open together** (open a pin's thread, then press C). Escape closes the thread first.
-- **The bar says "Annotating" the whole time** the composer is open, not only while choosing an element.
+- **The annotation bar says "Annotating" the whole time** the composer is open, not only while choosing an element.
 - **A new ticket is listed even when the filters exclude it.** It is added to the top of the list on success, and drops out at the next Refresh or filter change.
 
 ## Open questions and verification

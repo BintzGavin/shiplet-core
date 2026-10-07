@@ -206,14 +206,14 @@ Status is one of `not started`, `drafted`, or `verified`.
 | access/the-access-gate.md | not started |
 | access/the-workspace-page.md | not started |
 | access/invite-links.md | not started |
-| review/the-comments-panel.md | not started |
-| review/threads-and-replies.md | not started |
+| review/the-comments-panel.md | drafted |
+| review/threads-and-replies.md | drafted |
 | review/pins.md | not started |
-| review/the-composer.md | not started |
-| review/selecting-and-capturing.md | not started |
+| review/the-composer.md | drafted |
+| review/selecting-and-capturing.md | drafted |
 | review/drawing-on-screenshots.md | not started |
 | review/attachments-mentions-and-copy-requests.md | not started |
-| review/sending-and-drafts.md | not started |
+| review/sending-and-drafts.md | drafted |
 | review/presence-and-following.md | not started |
 | review/review-settings-and-links.md | not started |
 | feedback/the-feedback-view.md | not started |
