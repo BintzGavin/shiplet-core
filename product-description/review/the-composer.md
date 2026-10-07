@@ -34,7 +34,7 @@ stateDiagram-v2
 The composer opens in one of five ways, and each decides what it starts with.
 
 - **Annotate or C with no draft** starts annotation mode instead; the composer opens only when an element has been chosen ([selecting and capturing](selecting-and-capturing.md)). It then starts with that element as its target and the capture taken at the click.
-- **Annotate or C with a draft** reopens the composer with the draft as it was, without choosing an element. A draft is anything left from before: comment text, a copy request, chosen mentions, a target or capture, drawing strokes, attachments, or a submission still marked failed. This is also how a draft restored after a reload comes back.
+- **Annotate or C with a draft** reopens the composer with the draft as it was, without choosing an element. A draft is anything left from before: comment text, a copy request, chosen mentions, a target or capture, drawing strokes, or attachments. A failed submission on its own does not count; without other content, Annotate and C start element selection and the composer shows the failure when it opens. This is also how a draft restored after a reload comes back.
 - **Page comment** (from "+" in the panel) closes the panel, drops any target or capture the draft had (keeping its text), sets the fidelity line to "No image attached.", and opens the composer.
 - **Draw on page** (from "+") captures the visible page, opens the composer with that capture and no target, and opens the structured drawing editor on the screenshot (`review/drawing-on-screenshots.md`). The panel stays open.
 - **Select an element** (from "+") starts annotation mode even when a draft exists; the new element replaces the draft's target and keeps its text.
