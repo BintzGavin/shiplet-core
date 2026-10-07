@@ -56,7 +56,7 @@ Every feature document follows the same skeleton so that documents are comparabl
 7. **Edge cases.** Anything a user could notice that is not covered above.
 8. **Open questions and verification.** The shiplet-core commit the document was verified against, and any behavior that could not be confirmed.
 
-Item 5 matters most. Asking the same interrupt questions of every feature is how gaps and inconsistencies are found. What each interrupt means across the product is defined once, in `foundations/page-lifecycle.md`.
+Item 5 matters most. Asking the same interrupt questions of every feature is how gaps and inconsistencies are found. What each interrupt means across the product is defined once, in [foundations/page-lifecycle.md](foundations/page-lifecycle.md).
 
 ### Method
 
@@ -95,7 +95,7 @@ These were decided without the user, from the code and the product docs, because
 - **Out of scope: operator and advanced paths.** Self-hosting and deployment (`scripts/self-host-*`, `workers/`), the Shiplet ownership page (`/shiplets/:id/ownership`: revision packages, Cloudflare connection, managed runtime), Worker-code artifacts (unavailable unless Workers for Platforms is configured), custom hostnames, and the docs site (`/docs`) are left out. The docs site is content, not behavior.
 - **Custom review widgets get one cross-cutting document.** They are not part of the default surface, but an agent can attach one to any Shiplet, and then the review link visibly changes (a widget frame, Custom actions, confirmations). One document describes that change rather than every review document carrying a widget row.
 - **Notifications are described once.** Who is notified of what (mentions, new tickets, replies, status changes, watching) lives in `cross-cutting/notifications-and-watching.md`; every document's "Side effects others notice" paragraph links there instead of restating the rules.
-- **What each interrupt means is described once.** `foundations/page-lifecycle.md` owns the meaning of every row of the interrupt table and the polling intervals; the review-specific meanings (a disconnected artifact, a route change inside the artifact) are owned by `foundations/the-review-link.md`.
+- **What each interrupt means is described once.** [foundations/page-lifecycle.md](foundations/page-lifecycle.md) owns the meaning of every row of the interrupt table and the polling intervals; the review-specific meanings (a disconnected artifact, a route change inside the artifact) are owned by [foundations/the-review-link.md](foundations/the-review-link.md).
 - **The dashboard preview is the review link.** The Shiplet page embeds the same review layer in an iframe. The review documents describe both at once and note the few differences; the foundation for the review link owns them.
 - **Interaction shape.** The unit of interaction is a page or form lifecycle, and its phases are Arrive, Leave untouched, Begin editing, While editing, and Submit. Pointer work inside the review link (choosing an element, drawing, dragging the composer) is narrated inside While editing. The variant rows, the interrupt list, and the order of cross-cutting concerns are fixed as written in the document template above.
 - **Where to run it.** For verification, the product runs locally in test-auth mode exactly as the browser tests run it: `npm ci`, then `npm run build:platform-client`, then `npx wrangler dev --config wrangler.test.jsonc --local --port 8787 --env-file {file}` with `SHIPLET_AUTH_MODE=test`, `CUSTOM_DOMAIN=` (empty), `SHIPLET_APP_URL=http://localhost:8787`, and `WORKOS_REDIRECT_URI=http://localhost:8787/auth/callback` in that file. Sign in by opening `/auth/callback?code=test-code::{email}`. With `CUSTOM_DOMAIN` empty, a review link is `http://localhost:8787/{address}/` rather than `https://{address}.shiplet.cc/`. A real sign-in needs a WorkOS AuthKit application (`.dev.vars` from `.dev.vars.example`), and invitation emails are only simulated in test mode.
@@ -135,7 +135,8 @@ preparing/
                                  inside the artifact frame
 
 shiplets/
-  the-shiplets-list.md           all Shiplets in a workspace: search, copy URL, archive, restore
+  the-shiplets-list.md           all Shiplets in a workspace: search, copy URL, archive, restore;
+                                 also the compact Shiplet table on the Access page
   the-shiplet-page.md            one Shiplet's page: the embedded review, the comment list, Watch,
                                  lifecycle, agent handoff
   the-invite-reviewers-form.md   granting a person, a team, or the organization a role on one
@@ -190,16 +191,16 @@ Status is one of `not started`, `drafted`, or `verified`.
 | goal.md | drafted |
 | bug-triage.md | not started |
 | verification/ (3 checklists and a README) | not started |
-| foundations/page-lifecycle.md | not started |
-| foundations/shiplets-and-tickets.md | not started |
-| foundations/access-and-roles.md | not started |
-| foundations/navigation-and-urls.md | not started |
-| foundations/the-review-link.md | not started |
+| foundations/page-lifecycle.md | drafted |
+| foundations/shiplets-and-tickets.md | drafted |
+| foundations/access-and-roles.md | drafted |
+| foundations/navigation-and-urls.md | drafted |
+| foundations/the-review-link.md | drafted |
 | preparing/the-prepare-page.md | not started |
 | preparing/how-artifacts-are-shown.md | not started |
 | shiplets/the-shiplets-list.md | not started |
 | shiplets/the-shiplet-page.md | not started |
-| shiplets/the-invite-reviewers-form.md | not started |
+| shiplets/the-invite-reviewers-form.md | drafted |
 | shiplets/archive-restore-and-delete.md | not started |
 | access/your-account.md | not started |
 | access/the-access-gate.md | not started |

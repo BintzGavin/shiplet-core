@@ -95,7 +95,7 @@ Every feature's Modifiers table has these five rows, with these meanings.
 
 **Keyboard.** Enter (submits a platform form from a text field; adds a line in the review layer's text areas), Ctrl/Cmd+Enter (sends from the composer or a reply), Escape, Tab, and the C shortcut on a review link.
 
-**Narrow screen.** A viewport 640 px wide or less. The review layer collapses its panel after sending and keeps its controls at least 44 px tall; platform pages turn every multi-column grid into one column. The Shiplet page already stacks its columns at 900 px or less.
+**Narrow screen.** A viewport 640 px wide or less. Platform pages turn every multi-column grid into one column (the Shiplet page already stacks its two columns at 900 px or less). The review layer closes its comments panel by itself after a ticket is sent, and at 480 px or less it widens the panel to the screen and grows the composer's buttons to 44 px.
 
 ## Edge cases
 

@@ -33,7 +33,47 @@ Do not describe code. Describe what the user sees and does. Technical detail goe
 
 ## Things already established (do not re-derive, do not contradict)
 
-(Filled in as the foundations are written.)
+Numbers and timings:
+
+- Review layer: the ticket list polls every 5 s while the tab is visible and refreshes when the browser comes back online; the first page and every Load more bring up to 100 tickets; a poll adds and updates tickets but never removes one. Drafts are saved to IndexedDB about 150 ms after a change and at once when the tab is hidden or the page is left. The artifact connection is renewed every second and counts as disconnected after 3 s of silence. Presence reconnects after 1, 2, 4, 8, 16, then every 30 s. Cursors are sent at most every 50 ms, viewport changes every 80 ms. The bridge checks the artifact's address every 100 ms.
+- Platform pages: notification and feedback counts (and the Feedback and Inbox lists) poll every 15 s, first 1.5 s after load, and on focus or visibility; skipped while hidden. The Shiplets list and invite links refresh only on focus when older than 30 s. The Shiplet page never polls.
+- Sign-in sessions last 14 days from sign-in, not extended by use. A review pass on a review link with its own host lasts 5 minutes.
+- Archive restore window: 30 days. Comment and reply: 5,000 characters. Copy request: 4,000. Mentions: 20 from the review layer (25 accepted from agents). Attachments: 4 files, 5 MiB each, 10 MiB total, photos and video. Pins: at most 250 drawn per page; pins within 36 px of each other form a stack. Replies shown per thread: 100.
+- Narrow screen is 640 px or less (the review layer's panel also closes after sending at that width); the review layer's CSS changes again at 480 px; the Shiplet page stacks its columns at 900 px.
+
+Rules and definitions:
+
+- What every interrupt row means, platform pages versus the review layer, is the table in `foundations/page-lifecycle.md`. The review layer's own machinery (artifact connection, review identity, the Escape ladder, the C shortcut, route changes, the dashboard preview) is in `foundations/the-review-link.md`.
+- Platform forms keep nothing unsent, track no dirty state, never warn before leaving, and mostly do not disable their button while a request is in flight (a double click sends twice). They show the server's text verbatim in a top banner and a result banner; banners are not announced to screen readers.
+- The review layer keeps every draft (composer and reply fields) in the browser under the review identity (person, Shiplet, revision, page). Attachments are not kept across reload. It never shows raw server text; its messages are fixed strings placed where the reviewer is working.
+- Authority is checked by the server on every request, never latched at page load; most controls are shown to everyone and refuse on use. Viewing permits commenting, replying, changing status, and watching. Editing (owner, organization administrator, editor or owner grant) permits inviting and archiving from the Shiplet page; any organization member can archive and restore from the Shiplets list; only the owner can permanently delete, and only the owner sees Restore on the archived page.
+- Viewer and reviewer grants are identical in effect. The invite reviewers form offers Reviewer, Viewer, and Owner, and the server refuses Owner.
+- A mention of an organization member who cannot view the Shiplet gives them a reviewer grant. Accepting a Shiplet invitation also makes the invitee an organization member.
+- Statuses are exactly New, In Progress, Blocked, Staging, Done, Dropped, in that order. Done and Dropped are closed. Resolve sets Done; Reopen sets New. Any status can change to any other.
+- Tickets are labeled PF-n per Shiplet, never reused; tickets and replies cannot be edited or deleted. A Send carries an identity the server remembers, so a retry never creates a second ticket.
+- Name, address, visibility, organization, and artifact of a Shiplet cannot be changed in the web app.
+- `?feedback={ticket id}` deep links land on the Shiplet page, which ignores the parameter.
+- Unlisted and Public behave identically. Signed-out visitors on them see tickets from the first poll but cannot send anything.
+
+Naming decisions:
+
+- Say Shiplet (capitalized) for the code's project; organization for what the interface also calls a workspace; ticket for the saved record and comment for its text; review link for the Shiplet's address; dashboard preview for the Shiplet page's embedded copy; composer for the "New annotation" card; draft for unsent review-layer work.
+- The code's "subdomain" is the interface's "Shiplet address"; write address.
+- Ctrl/Cmd for the code's ctrlKey or metaKey.
+
+Ownership of review-layer states (each state is described in exactly one document; others link):
+
+- `foundations/the-review-link.md`: arriving (access check, identity, first load), review identity and its re-checks, the artifact connection, the Escape ladder and the C shortcut, route changes inside the artifact, the dashboard preview.
+- `review/the-comments-panel.md`: the launcher dock; panel open and closed; the ticket list's loading, empty, loaded, stale, and error states; polling and Refresh; filters and their storage; pagination; the options menu (it links out for Watch, Hide comments, and Settings); previous and next.
+- `review/threads-and-replies.md`: which thread is active and in which presentation (list or contextual); the reply field and its sending state; Resolve, Reopen, and the Status picker and their sending state; provenance; Open feedback.
+- `review/pins.md`: where pins are drawn and when they are hidden (overlay off, annotation mode, target hidden or offscreen, 250 limit); pin stacks and their menus; the Page comments menu; revealing a target; Hide comments and Show comments.
+- `review/the-composer.md`: every way the composer opens (Annotate, C, the creation menu, a capture arriving, a restored draft); compact and expanded; anchoring and dragging; Close versus Cancel; what the Send button does up to handing the submission over.
+- `review/selecting-and-capturing.md`: annotation mode (preparing, selecting), the element capture and its target, Draw on page's page capture, Remove target and Change element, capture fidelity.
+- `review/drawing-on-screenshots.md`: the freehand overlay (Draw on screenshot) and the structured editor (pen, arrow, text, undo, Apply, Cancel).
+- `review/attachments-mentions-and-copy-requests.md`: the attachment chooser and its limits, mention suggestions and the Mention reviewers list, the copy request field.
+- `review/sending-and-drafts.md`: a ticket submission from Send to saved or failed; Retry submission; what a failed submission blocks; draft saving, restoring, and the storage notice.
+- `review/presence-and-following.md`: the presence roster, cursors, colors, following and stopping.
+- `review/review-settings-and-links.md`: Settings (dock, launch, motion, copy requests), clean review links and Show review UI, Watch artifact.
 
 ## Order of work
 
