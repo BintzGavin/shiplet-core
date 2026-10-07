@@ -36,7 +36,7 @@ The vocabulary used across these documents. When a document uses one of these wo
 
 **Visibility.** Who can open a Shiplet without a grant: **Private** (administrators, the owner, and grant holders only), **Organization** (every member of its organization; the default), **Unlisted** (anyone with the link, signed in or not), **Public** (anyone, and intended for discovery). The Shiplets list shows Organization as "Workspace". Visibility never grants editing.
 
-**Archived.** A Shiplet that has been archived: it leaves the active lists, its review link shows an archived page instead of the artifact, and nobody can leave feedback on it. It keeps its tickets and access settings for a 30-day restore window, after which it is scheduled for deletion. The opposite is active.
+**Archived.** A Shiplet that has been archived: it leaves the active lists, its review link shows an archived page instead of the artifact, and nobody can leave feedback on it. It keeps its tickets and access settings. The interface promises a 30-day restore window and records a delete-after date 30 days out, but nothing in this source deletes the Shiplet on that date, and restoring still works after it. The opposite is active.
 
 **Review layer.** Everything Shiplet draws around the artifact on a review link: the launcher dock, the comments panel, pins, the composer, presence, and (when an agent attached one) a *custom review widget*.
 

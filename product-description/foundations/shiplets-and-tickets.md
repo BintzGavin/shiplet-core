@@ -22,7 +22,7 @@ A Shiplet is created on the Prepare page (or by an agent through the API) and ho
 
 Name, address, visibility, organization, and owner are chosen once. The web app has no way to rename a Shiplet, change its address, change its visibility, move it to another organization, or replace its artifact; a new revision can only come from the API.
 
-A Shiplet is **active** or **archived**. Archiving hides it from the active lists, replaces its review link with an archived page, and stops all new feedback, but keeps its tickets, grants, and watchers. The restore window is 30 days from archiving; after it, the Shiplet is scheduled for deletion. During the window an archived Shiplet can be restored, or (by its owner only, after typing its address) permanently deleted, which cannot be undone. See `shiplets/archive-restore-and-delete.md`.
+A Shiplet is **active** or **archived**. Archiving hides it from the active lists, replaces its review link with an archived page, and stops all new feedback, but keeps its tickets, grants, and watchers. The interface promises a 30-day restore window and records a delete-after date 30 days from archiving, but nothing in this source deletes the Shiplet when that date passes, and restoring keeps working after it. An archived Shiplet can be restored, or (by its owner only, after typing its address) permanently deleted, which cannot be undone. See `shiplets/archive-restore-and-delete.md`.
 
 ## Artifacts and revisions
 
@@ -88,10 +88,11 @@ Everything saved is shared: a Shiplet, its tickets, statuses, replies, mentions,
 | Target text | 500 characters; selector 1,200 characters |
 | Page address of a ticket | 2,048 characters |
 | Replies shown per thread in the review layer | 100 |
-| Archive restore window | 30 days |
+| Archive restore window | 30 days as promised and recorded; not enforced |
 
 ## Open questions and verification
 
+- Nothing in this repository deletes an archived Shiplet when its delete-after date passes (the scheduled job only sweeps temporary files and OAuth records), and restore does not check the date. Either the private operations repository does it, or the 30-day promise is not kept. Needs a product answer.
 - Watchers are notified whether or not they can still view the Shiplet; a person whose access was removed but who still watches it keeps getting notifications naming its tickets. Read from code, not tried.
 - Mentioning an organization member grants them access to a Private Shiplet. `docs/review-feedback.mdx` says mentions "notify only collaborators who can already access the Shiplet" and that a mention "does not widen access". The code widens it. This needs a product call.
 - The 100-reply display cap in the review layer has no "more replies" control; a thread with more replies silently shows the first 100. Not tried.
