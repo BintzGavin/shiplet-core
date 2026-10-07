@@ -75,7 +75,7 @@ On failure, both banners show the server's text verbatim in red, and every field
 
 | Modifier | At arrival | During editing |
 | --- | --- | --- |
-| Role | Everyone who can open the Shiplet page sees the section and can open the fields. Only the owner, an organization administrator, or an editor or owner grant holder can submit successfully; anyone else gets "Shiplet editor access required" after submitting. On the Access page the Shiplet list includes Shiplets the person can view but not edit. | Authority is checked when the request arrives, not when the page loaded: losing editor rights in another tab makes the next submit fail, and gaining them makes it succeed, without a reload. |
+| Role | Everyone who can open the Shiplet page sees the section and can open the fields. Only the owner, an organization administrator, or an editor or owner grant holder can submit successfully; anyone else gets "Shiplet editor access required" after submitting. On the Access page the Shiplet list includes Shiplets the person can view but not edit. | Authority is checked when the request arrives, not when the page loaded: losing editor rights while the page is open makes the next submit fail, and gaining them makes it succeed, without a reload. |
 | Shiplet state | Visibility changes what a grant adds, not how the form behaves. An Organization grant opens a Private Shiplet to every member but changes nothing on an Organization, Unlisted, or Public one; a User grant on an Unlisted or Public Shiplet adds nothing to viewing, but its invitation still makes the invitee an organization member. An archived Shiplet's page still shows the form and the server accepts the grant; the Access page's Shiplet list leaves archived Shiplets out. | Archiving or restoring the Shiplet elsewhere does not affect a submit. Permanently deleting it makes the submit fail with "Shiplet not found". |
 | Flags and preferences | No effect. No feature flag touches the form, and the theme only changes colors. | No effect. |
 | Keyboard | Tab moves through the Shiplet list (Access page only), Share with, Email (or Team), Role, then the button; a hidden field is skipped. Enter or Space on Invite opens the fields. Enter in Email submits; Enter in a list does not. Escape does nothing. | Enter in Email while a request is in flight sends a second, identical request. |
@@ -150,6 +150,6 @@ After any interrupt the person stays where they are (or wherever they navigated 
 - What WorkOS does when the address already belongs to an organization member, or to the inviter, was not determined from code; test mode accepts everything. Needs a run against a real WorkOS application.
 - Whether the Shiplet page is restored from the browser's back-forward cache (with the fields open and the email typed) was not tested; the Access page sets no-store, the Shiplet page does not.
 - Neither banner is an announced live region, read from markup; confirm with a screen reader.
-- The success message's wording for Team and Organization grants and for invitations not yet accepted.
+- The success message is wrong for Team and Organization grants (nothing was sent) and promises a User invitee access they do not have until they accept. A copy fix either way.
 
 Verified against shiplet-core commit `3327af4`
