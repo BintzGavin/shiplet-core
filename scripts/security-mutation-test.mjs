@@ -221,8 +221,14 @@ const mutations = [
   {
     name: "custom widget liveness watchdog stops terminating stalled execution",
     file: "src/trusted-review-host.ts",
-    from: 'heartbeatDeadline = window.setTimeout(() => failWidget("Custom widget exceeded its execution limit."), 750);',
-    to: 'heartbeatDeadline = window.setTimeout(() => postWorker({ protocol: "shiplet.widget.worker.v1", type: "ping", heartbeatId }), 750);',
+    from: 'if (heartbeatMisses >= 2) failWidget("Custom widget exceeded its execution limit.");',
+    to: "if (heartbeatMisses >= 2) heartbeatMisses = 0;",
+  },
+  {
+    name: "custom widget exempts every pong from its message budget",
+    file: "src/trusted-review-host.ts",
+    from: 'data.heartbeatId === heartbeatSequence && heartbeatSequence > heartbeatAcknowledged;',
+    to: 'data.heartbeatId === heartbeatSequence;',
   },
   {
     name: "terminated custom widget hides its trusted recovery action",

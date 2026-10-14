@@ -921,6 +921,119 @@ test.describe("trusted review host", () => {
     });
     await expectNoPageErrors(errors);
   });
+
+  async function openWidget(
+    page: Parameters<typeof loginAs>[0],
+    request: Parameters<typeof createOrganization>[0],
+    label: string,
+    widget: { html: string; script: string },
+  ) {
+    const owner = testUser(label);
+    const organization = await createOrganization(request, owner);
+    const published = await publishStaticShiplet(request, owner, organization.id, {
+      name: `${label} ${Date.now()}`,
+    });
+    await promoteCustomWidget(
+      request,
+      owner,
+      published.project.id,
+      "This operation must never be requested",
+      widget,
+    );
+    await loginAs(page, owner);
+    await page.goto(`/${published.project.subdomain}`, { waitUntil: "domcontentloaded" });
+    const commentsLauncher = page.locator(".shiplet-review-comments-launcher");
+    await expect(commentsLauncher).toBeVisible();
+    await commentsLauncher.click();
+    await expect(page.locator("[data-shiplet-widget-frame]")).toBeVisible();
+    return page.frameLocator("[data-shiplet-widget-frame]");
+  }
+
+  test("keeps a healthy widget running when the review page stalls during a heartbeat", async ({ page, request }) => {
+    const errors = collectPageErrors(page);
+    const widget = await openWidget(page, request, "trusted-widget-page-stall", {
+      html: '<!doctype html><p id="state">Starting isolated widget</p><script src="./widget.js"></script>',
+      script: 'shipletWidget.text("#state", "Worker ready");',
+    });
+    await expect(widget.locator("#state")).toHaveText("Worker ready");
+    const compartment = await page
+      .locator("[data-shiplet-widget-frame]")
+      .elementHandle()
+      .then((handle) => handle?.contentFrame());
+    if (!compartment) throw new Error("Widget compartment frame is missing");
+    // Block the compartment's main thread right after each of the next three
+    // heartbeat pings, as a frozen tab, laptop sleep, or heavy page work
+    // would. The Worker answers on time; the page just cannot see it yet.
+    await compartment.evaluate(() => {
+      const original = Worker.prototype.postMessage;
+      let stalls = 0;
+      Worker.prototype.postMessage = function (this: Worker, value: unknown, ...rest: unknown[]) {
+        const result = (original as (...values: unknown[]) => void).call(this, value, ...rest);
+        if (stalls < 3 && (value as { type?: string } | null)?.type === "ping") {
+          stalls += 1;
+          const until = Date.now() + 2_500;
+          while (Date.now() < until) {}
+        }
+        return result;
+      } as typeof Worker.prototype.postMessage;
+    });
+    await page.waitForTimeout(12_000);
+    await expect(widget.getByRole("status")).toBeHidden();
+    await expect(widget.getByRole("button", { name: "Restart widget" })).toBeHidden();
+    await expectNoPageErrors(errors);
+  });
+
+  test("lets a widget finish one long turn without stopping it", async ({ page, request }) => {
+    const errors = collectPageErrors(page);
+    const widget = await openWidget(page, request, "trusted-widget-long-turn", {
+      html: '<!doctype html><p id="state">Starting isolated widget</p><button id="work" type="button">Do heavy work</button><script src="./widget.js"></script>',
+      script:
+        'shipletWidget.text("#state", "Worker ready"); shipletWidget.on("#work", "click", () => { const until = Date.now() + 1200; while (Date.now() < until) {} shipletWidget.text("#state", "Work finished"); });',
+    });
+    await expect(widget.locator("#state")).toHaveText("Worker ready");
+    for (let turn = 0; turn < 3; turn += 1) {
+      await widget.getByRole("button", { name: "Do heavy work" }).click();
+      await expect(widget.locator("#state")).toHaveText("Work finished");
+      await page.waitForTimeout(2_500);
+      await expect(widget.getByRole("status")).toBeHidden();
+    }
+    await expect(widget.getByRole("button", { name: "Restart widget" })).toBeHidden();
+    await expectNoPageErrors(errors);
+  });
+
+  test("limits widget message bursts per minute instead of over the widget's lifetime", async ({ page, request }) => {
+    test.setTimeout(150_000);
+    const errors = collectPageErrors(page);
+    const widget = await openWidget(page, request, "trusted-widget-message-rate", {
+      html: '<!doctype html><p id="state">Starting isolated widget</p><span id="count">0</span><button id="burst" type="button">Send burst</button><script src="./widget.js"></script>',
+      script:
+        'let sent = 0; shipletWidget.text("#state", "Worker ready"); shipletWidget.on("#burst", "click", () => { for (let index = 0; index < 300; index += 1) shipletWidget.text("#count", String(++sent)); });',
+    });
+    await expect(widget.locator("#state")).toHaveText("Worker ready");
+    const burst = widget.getByRole("button", { name: "Send burst" });
+    const restart = widget.getByRole("button", { name: "Restart widget" });
+
+    // Two bursts inside one minute exceed the 512-message rate.
+    await burst.click();
+    await expect(widget.locator("#count")).toHaveText("300");
+    await burst.click();
+    await expect(widget.getByRole("status")).toHaveText(
+      "Custom widget exceeded its runtime limit.",
+    );
+    await restart.click();
+    await expect(widget.locator("#state")).toHaveText("Worker ready");
+
+    // The same two bursts a minute apart are within budget, and a minute of
+    // heartbeats does not spend it.
+    await burst.click();
+    await expect(widget.locator("#count")).toHaveText("300");
+    await page.waitForTimeout(61_000);
+    await burst.click();
+    await expect(widget.locator("#count")).toHaveText("600");
+    await expect(widget.getByRole("status")).toBeHidden();
+    await expect(restart).toBeHidden();
+    await expectNoPageErrors(errors);
+  });
 });
 
 test.describe("ownership draft editor", () => {

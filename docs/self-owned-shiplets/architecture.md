@@ -153,10 +153,14 @@ it has no Window, parent, channel nonce, MessagePort, credential, or capability.
 The renderer accepts only bounded declarative text, attribute, property, and
 event-binding messages. Review operations are limited to the declared widget
 operations and still traverse the revision/source/nonce-bound trusted-human
-confirmation channel. Message count and byte budgets, binding and pending
-operation caps, startup and lifetime limits, and a heartbeat watchdog terminate
+confirmation channel. Per-minute message count and byte rates, binding and
+pending operation caps, a startup limit, and a heartbeat watchdog terminate
 malformed, flooding, or non-yielding package code without disabling trusted
-review controls. Every terminal state closes the Worker and channel, clears
+review controls. The watchdog stops a Worker after two consecutive on-time
+heartbeat misses (about three seconds of non-yielding code); a deadline that
+fires late because the page itself was frozen, asleep, or busy is not counted.
+Heartbeat replies do not spend the message budget, and there is no wall-clock
+lifetime limit. Every terminal state closes the Worker and channel, clears
 pending/binding state, makes package UI inert, and exposes a trusted restart
 action. Its exact source/origin/nonce/Shiplet/revision-bound request asks the
 trusted parent to reload the no-store renderer, so the nonce, Worker, channel,

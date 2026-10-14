@@ -5590,16 +5590,18 @@ function trustedWidgetCompartmentScript(input: {
 	let nodeCount = 0;
 	let messageCount = 0;
 	let messageBytes = 0;
+	let budgetWindowStart = 0;
 	let worker = null;
 	let workerReady = false;
 	let channelPort = null;
 	let channelNonce = "";
 	let channelConnected = false;
 	let startupTimer = 0;
-	let lifetimeTimer = 0;
 	let heartbeatTimer = 0;
 	let heartbeatDeadline = 0;
 	let heartbeatSequence = 0;
+	let heartbeatAcknowledged = 0;
+	let heartbeatMisses = 0;
 	let terminal = false;
 
 	function decodeBase64(value) {
@@ -5699,7 +5701,6 @@ function trustedWidgetCompartmentScript(input: {
 		if (terminal) return;
 		terminal = true;
 		window.clearTimeout(startupTimer);
-		window.clearTimeout(lifetimeTimer);
 		window.clearInterval(heartbeatTimer);
 		window.clearTimeout(heartbeatDeadline);
 		try { if (worker) worker.terminate(); } catch {}
@@ -5749,27 +5750,57 @@ function trustedWidgetCompartmentScript(input: {
 		channelPort.postMessage({ protocol: "shiplet.widget.operation.v1", type: "request", requestId: data.requestId, channelNonce, shipletId, revisionId, operation: data.operation, payload: data.payload });
 	}
 
+	// Package code runs on the Worker thread, so it cannot delay this page's
+	// timers. A deadline that fires far past its time means the page itself was
+	// frozen, asleep, or busy; that gap is not blamed on the Worker. A Worker
+	// that misses two on-time heartbeats in a row is stopped.
+	function sendHeartbeat() {
+		if (!worker) return;
+		const heartbeatId = ++heartbeatSequence;
+		const deadlineAt = Date.now() + 750;
+		postWorker({ protocol: "shiplet.widget.worker.v1", type: "ping", heartbeatId });
+		window.clearTimeout(heartbeatDeadline);
+		heartbeatDeadline = window.setTimeout(() => {
+			if (heartbeatAcknowledged >= heartbeatId || Date.now() - deadlineAt > 1500) return;
+			heartbeatMisses += 1;
+			if (heartbeatMisses >= 2) failWidget("Custom widget exceeded its execution limit.");
+		}, 750);
+	}
+
 	function handleWorkerMessage(event) {
 		const data = event.data;
 		let size = 0;
 		try { size = new TextEncoder().encode(JSON.stringify(data)).byteLength; } catch { failWidget("Custom widget sent an invalid message."); return; }
-		messageCount += 1;
-		messageBytes += size;
+		// The reply to the newest unanswered ping is kernel bookkeeping and does
+		// not spend the package's budget. Each ping is exempt at most once, so
+		// any other message, a forged pong included, still counts.
+		const heartbeatReply = isRecord(data) && data.type === "pong" && data.heartbeatId === heartbeatSequence && heartbeatSequence > heartbeatAcknowledged;
+		if (!heartbeatReply) {
+			// Message and byte budgets are per-minute rates, not lifetime totals,
+			// so a widget can stay open for a whole review.
+			const now = Date.now();
+			if (now - budgetWindowStart >= 60000) {
+				budgetWindowStart = now;
+				messageCount = 0;
+				messageBytes = 0;
+			}
+			messageCount += 1;
+			messageBytes += size;
+		}
 		if (size > 16384 || messageCount > 512 || messageBytes > 262144 || !isRecord(data) || data.protocol !== "shiplet.widget.worker.v1") { failWidget("Custom widget exceeded its runtime limit."); return; }
-		if (data.type === "ready") {
+		if (data.type === "ready" && !workerReady) {
 			workerReady = true;
 			window.clearTimeout(startupTimer);
 			if (status) status.hidden = true;
-			heartbeatTimer = window.setInterval(() => {
-				if (!worker) return;
-				const heartbeatId = ++heartbeatSequence;
-				postWorker({ protocol: "shiplet.widget.worker.v1", type: "ping", heartbeatId });
-				window.clearTimeout(heartbeatDeadline);
-				heartbeatDeadline = window.setTimeout(() => failWidget("Custom widget exceeded its execution limit."), 750);
-			}, 1000);
+			heartbeatTimer = window.setInterval(sendHeartbeat, 1000);
 			return;
 		}
-		if (data.type === "pong" && data.heartbeatId === heartbeatSequence) { window.clearTimeout(heartbeatDeadline); return; }
+		if (heartbeatReply) {
+			heartbeatAcknowledged = heartbeatSequence;
+			heartbeatMisses = 0;
+			window.clearTimeout(heartbeatDeadline);
+			return;
+		}
 		if (data.type === "mutation") applyMutation(data);
 		else if (data.type === "bind") bindEvent(data);
 		else if (workerReady && data.type === "operation") forwardOperation(data);
@@ -5784,7 +5815,6 @@ function trustedWidgetCompartmentScript(input: {
 		worker.addEventListener("message", handleWorkerMessage);
 		worker.addEventListener("error", (event) => { event.preventDefault(); failWidget("Custom widget stopped safely."); });
 		startupTimer = window.setTimeout(() => { if (!workerReady) failWidget("Custom widget exceeded its startup limit."); }, 1000);
-		lifetimeTimer = window.setTimeout(() => failWidget("Custom widget reached its session limit."), 300000);
 	}
 
 	window.addEventListener("message", (event) => {
