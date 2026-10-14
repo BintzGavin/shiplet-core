@@ -37,6 +37,9 @@ async function callbackFromHandoff(response: Response) {
   expect(page).toContain("Authorization approved");
   expect(page).toContain("Return to CLI");
   expect(page).toContain("shiplet-brand-shell");
+  expect(page).toContain('<span class="success-card-label">CLI access approved</span>');
+  expect(page).toContain("this tab confirms the handoff");
+  expect(page).toContain("If your browser says the page can't be reached");
   expect(page).toContain("noindex,nofollow,noarchive");
   const href = page.match(/<a id="cli-return-link"[^>]*href="([^"]+)"/)?.[1];
   expect(href).toBeTruthy();

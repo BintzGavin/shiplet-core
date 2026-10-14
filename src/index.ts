@@ -780,7 +780,7 @@ app.use("*", async (c, next) => {
     <section class="form-container auth-card auth-decision" aria-labelledby="auth-title">
       <span class="success-card-label">${cli ? "CLI access" : "Account access"}</span>
       <h1 id="auth-title">${title}</h1>
-      <p role="alert">${escapeAuthHtml(message)}</p>
+      <div class="banner banner-error" role="alert">${escapeAuthHtml(message)}</div>
       <p>${cli ? "Run your CLI command again to start a new authorization request. Approve it only if you started the command." : "Open your original invitation or return to Shiplet to start sign-in again."}</p>
       <a class="btn btn-primary" href="/">Go to Shiplet</a>
       ${cli ? '<a class="auth-docs-link" href="/docs/cli">CLI authentication guide</a>' : ""}
@@ -12111,7 +12111,7 @@ app.get("/cli/authorize", async (c) => {
     if (!authorization) return c.text("Invalid CLI authorization request", 400);
     const body = renderPage(`<div class="auth-stage auth-stage-compact">
       <section class="form-container auth-card auth-decision" aria-labelledby="cli-auth-title">
-        <span class="auth-recommendation">CLI access</span>
+        <span class="success-card-label">CLI access</span>
         <h1 id="cli-auth-title">Authorize Shiplet CLI</h1>
         <p>Your local CLI is waiting for permission to work with Shiplet.</p>
         <div class="auth-account"><span>Authorizing as</span><strong>${escapeAuthHtml(user.email)}</strong></div>
@@ -12183,11 +12183,11 @@ app.post("/cli/authorize/complete", async (c) => {
     // Finish in a new document so the user can follow a normal link instead.
     const body = renderPage(`<div class="auth-stage auth-stage-compact">
       <section class="form-container auth-card auth-decision" aria-labelledby="cli-handoff-title">
-        <span class="auth-recommendation">CLI access approved</span>
+        <span class="success-card-label">CLI access approved</span>
         <h1 id="cli-handoff-title">Authorization approved</h1>
         <p>One more step: return to your local CLI to finish connecting.</p>
         <a id="cli-return-link" class="btn btn-primary" href="${escapeAuthHtml(callback.toString())}" rel="noreferrer">Return to CLI</a>
-        <p>If the CLI has stopped, run your command again to start a new authorization request.</p>
+        <p>When your CLI receives the approval, this tab confirms the handoff and you can close it. If your browser says the page can't be reached, the CLI has stopped waiting: run your command again to start a new authorization request.</p>
         <a class="auth-docs-link" href="/docs/cli">CLI authentication guide</a>
       </section>
     </div>`, {
