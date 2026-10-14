@@ -95,8 +95,9 @@ test("the shipped CLI binary completes deploy through browser PKCE without print
       "--api-url",
       `http://127.0.0.1:${port}`,
       "--json",
+      "--no-session-cache",
     ],
-    { env: { PATH: directory }, timeout: 15_000 },
+    { env: { PATH: directory, SHIPLET_CLI_SESSION_STORE: "file", SHIPLET_CONFIG_DIR: path.join(directory, "config") }, timeout: 15_000 },
   );
   assert.equal(stderr, "");
   assert.match(stdout, /Complete Shiplet CLI authorization in your browser/);
@@ -105,7 +106,7 @@ test("the shipped CLI binary completes deploy through browser PKCE without print
   assert.equal(revocationCount, 1);
 });
 
-test("the shipped CLI reuses one browser approval across commands and still steps up for deploy", async (t) => {
+test("the shipped CLI reuses one browser approval across commands, including deploy", async (t) => {
   if (process.platform === "win32") t.skip("Windows browser launcher is covered by unit contract only");
   const authorizations = [];
   const live = new Map();
@@ -201,15 +202,15 @@ test("the shipped CLI reuses one browser approval across commands and still step
 
   const deploy = await run(["deploy", "revision_A", "--target", "target_A", "--approve", "--json"]);
   printed += deploy.stdout;
-  assert.equal(authorizations.length, 2, "deploy asks for its own approval");
-  assert.equal(authorizations[1].session_ttl, undefined);
-  assert.equal(operations.at(-1).reusable, false);
-  assert.deepEqual(revoked, ["command"]);
+  assert.match(deploy.stdout, /"operationStatus": "committed"/);
+  assert.equal(authorizations.length, 1, "deploy reuses the saved approval");
+  assert.equal(operations.at(-1).reusable, true);
+  assert.deepEqual(revoked, []);
 
   const logout = await run(["logout"]);
   printed += logout.stdout;
   assert.match(logout.stdout, /Revoked the Shiplet CLI session/);
-  assert.deepEqual(revoked, ["command", "reusable"]);
+  assert.deepEqual(revoked, ["reusable"]);
   await assert.rejects(run(["whoami"]), (error) => error.code === 1 && /Not signed in/.test(error.stdout));
   assert.doesNotMatch(printed, /shiplet_cli_session_/);
 });

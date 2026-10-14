@@ -451,15 +451,15 @@ and the consent page states which one the human is approving:
 
 - **Reusable session** (`session_ttl` present): the server clamps the lifetime
   to 5 minutes through 8 hours (CLI default 2 hours) and grants
-  `revision:read`, `revision:write`, `session:read`, and `session:revoke`, never
-  `deployment:write`. The CLI stores it per exact origin with the approved
+  `revision:read`, `revision:write`, `deployment:write`, `session:read`, and
+  `session:revoke`. Deploy, promote, and rollback still require the CLI's
+  explicit `--approve` and the kernel's approval rules. The CLI stores it per exact origin with the approved
   account in the OS keychain or a user-only `0600` file, confirms it through
   `GET /api/cli/session` before each reuse, forgets it on expiry, revocation,
   account mismatch, or a 401, and revokes it through `shiplet logout`.
 - **Command session** (`session_ttl` absent): ten minutes, held only in process
-  memory, granted `deployment:write`, and revoked when the command completes.
-  Deploy, promote, and rollback always use one, as does every command under
-  `--no-session-cache` or `SHIPLET_CLI_SESSION_CACHE=0`.
+  memory, with the same scopes, and revoked when the command completes. Every
+  command uses one under `--no-session-cache` or `SHIPLET_CLI_SESSION_CACHE=0`.
 
 Every request rechecks the session row, so revocation and expiry take effect on
 the next request.

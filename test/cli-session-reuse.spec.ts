@@ -7,7 +7,6 @@ const require = createRequire(import.meta.url);
 
 type BootstrapOptions = {
 	apiUrl: string;
-	purpose: "session" | "step-up";
 	sessionCache: boolean;
 	sessionTtlSeconds?: number;
 };
@@ -91,7 +90,7 @@ function recordingBootstrap() {
 				{ status: 200, headers: { "content-type": "application/json" } },
 			);
 		}) as SessionFetch;
-		if (options.purpose === "step-up") sessionFetch.revoke = vi.fn(async () => {});
+		if (!options.sessionCache) sessionFetch.revoke = vi.fn(async () => {});
 		return sessionFetch;
 	});
 	return { bootstrap, calls };
@@ -124,7 +123,6 @@ describe("CLI reusable session wiring", () => {
 		expect(calls).toEqual([
 			expect.objectContaining({
 				apiUrl: API_URL,
-				purpose: "session",
 				sessionCache: true,
 				sessionTtlSeconds: 7200,
 			}),
@@ -159,10 +157,10 @@ describe("CLI reusable session wiring", () => {
 		await run(["fork", "project_A", "--no-session-cache", "--json"], {
 			sessionBootstrap: bootstrap,
 		});
-		expect(calls[0]).toMatchObject({ purpose: "session", sessionCache: false });
+		expect(calls[0]).toMatchObject({ sessionCache: false });
 	});
 
-	it("asks deploy for a fresh step-up approval and revokes it afterward", async () => {
+	it("runs deploy on the saved session without revoking it", async () => {
 		const { bootstrap, calls } = recordingBootstrap();
 		const result = await run(
 			["deploy", "revision_A", "--target", "target_A", "--approve", "--json"],
@@ -170,22 +168,34 @@ describe("CLI reusable session wiring", () => {
 		);
 		expect(result.exitCode).toBe(0);
 		expect(calls).toEqual([
-			expect.objectContaining({ purpose: "step-up", sessionTtlSeconds: undefined }),
+			expect.objectContaining({ sessionCache: true, sessionTtlSeconds: 7200 }),
 		]);
-		const stepUp = (await bootstrap.mock.results[0].value) as SessionFetch;
-		expect(stepUp.revoke).toHaveBeenCalledOnce();
+		const saved = (await bootstrap.mock.results[0].value) as SessionFetch;
+		expect(saved.revoke).toBeUndefined();
+	});
+
+	it("runs deploy on a revoked single-command session with --no-session-cache", async () => {
+		const { bootstrap, calls } = recordingBootstrap();
+		const result = await run(
+			["deploy", "revision_A", "--target", "target_A", "--approve", "--no-session-cache", "--json"],
+			{ sessionBootstrap: bootstrap },
+		);
+		expect(result.exitCode).toBe(0);
+		expect(calls[0]).toMatchObject({ sessionCache: false });
+		const single = (await bootstrap.mock.results[0].value) as SessionFetch;
+		expect(single.revoke).toHaveBeenCalledOnce();
 	});
 
 	it.each([
-		["deploy", ["revision_A", "--target", "target_A", "--approve"]],
-		["promote", ["draft_A", "--expected-active", "revision_A", "--approve"]],
-		["rollback", ["project_A", "--revision", "revision_A", "--expected-active", "revision_B", "--approve"]],
-	])("rejects session cache flags on %s", async (command, args) => {
-		for (const flag of [["--session-ttl", "2h"], ["--no-session-cache"]]) {
-			const result = await run([command, ...args, ...flag]);
-			expect(result.exitCode).toBe(1);
-			expect(result.stderr).toMatch(new RegExp(`${flag[0]} is not valid for shiplet ${command}`));
-		}
+		["deploy", ["revision_A", "--target", "target_A"]],
+		["promote", ["draft_A", "--expected-active", "revision_A"]],
+		["rollback", ["project_A", "--revision", "revision_A", "--expected-active", "revision_B"]],
+	])("still requires --approve for %s before using any session", async (command, args) => {
+		const { bootstrap, calls } = recordingBootstrap();
+		const result = await run([command, ...args], { sessionBootstrap: bootstrap });
+		expect(result.exitCode).toBe(1);
+		expect(result.stderr).toMatch(/requires explicit --approve/);
+		expect(calls).toEqual([]);
 	});
 
 	it("still rejects raw organization keys for deploy before any network access", async () => {

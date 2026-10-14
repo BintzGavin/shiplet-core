@@ -98,7 +98,6 @@ async function bootstrap(cache, server, overrides = {}) {
     apiUrl: ORIGIN,
     fetch: (url, init) => server.fetch(url, init),
     stdout: overrides.stdout || captureOutput(),
-    purpose: "session",
     sessionCache: true,
     sessionTtlSeconds: 7200,
     ...overrides,
@@ -285,17 +284,16 @@ test("logout still deletes the local session when the server cannot confirm revo
   await assert.rejects(readFile(sessionsFile(directory), "utf8"), { code: "ENOENT" });
 });
 
-test("deploy-class step-up and the opt-outs never read or write the cache", { skip: process.platform === "win32" }, async (t) => {
+test("the per-command opt-outs never read or write the cache", { skip: process.platform === "win32" }, async (t) => {
   const directory = await configDir(t);
   const server = fakeServer();
   await bootstrap(cacheFor(server, directory), server);
   const cached = await readFile(sessionsFile(directory), "utf8");
 
-  const stepUp = await bootstrap(cacheFor(server, directory), server, { purpose: "step-up" });
-  assert.equal(typeof stepUp.revoke, "function", "a step-up session is revoked after its command");
-  await bootstrap(cacheFor(server, directory), server, { sessionCache: false });
+  const flagged = await bootstrap(cacheFor(server, directory), server, { sessionCache: false });
+  assert.equal(typeof flagged.revoke, "function", "a per-command session is revoked after its command");
   await bootstrap(cacheFor(server, directory, { SHIPLET_CLI_SESSION_CACHE: "0" }), server);
-  assert.equal(server.commandSessions, 3);
+  assert.equal(server.commandSessions, 2);
   assert.equal(server.authorizations, 1);
   assert.equal(await readFile(sessionsFile(directory), "utf8"), cached);
 });

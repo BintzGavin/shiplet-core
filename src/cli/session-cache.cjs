@@ -440,9 +440,8 @@ function createSessionCache({
   async function bootstrap(options) {
     const apiUrl = normalizeApiUrl(options.apiUrl);
     const fetchImpl = options.fetch;
-    // Deploy, promote and rollback always get a fresh single-command approval,
-    // as does every command when caching is turned off.
-    if (options.purpose === "step-up" || options.sessionCache === false || sessionCacheDisabled(env)) {
+    // With caching turned off, every command gets its own single-command approval.
+    if (options.sessionCache === false || sessionCacheDisabled(env)) {
       return commandSession({ apiUrl, fetch: fetchImpl, stdout: options.stdout });
     }
     const active = await loadActive(apiUrl, fetchImpl, options.stdout);

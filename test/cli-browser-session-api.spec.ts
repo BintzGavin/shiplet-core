@@ -379,12 +379,12 @@ describe("CLI browser authorization session", () => {
     return { page, session };
   }
 
-  it("issues a reusable session for the requested lifetime that cannot deploy, promote, or roll back", async () => {
+  it("issues a reusable session for the requested lifetime that can deploy, promote, and roll back", async () => {
     const before = Date.now();
     const { page, session } = await approvedSession("7200", 43194);
     expect(page).toContain("up to 2 hours");
     expect(page).toContain("shiplet logout");
-    expect(page).toContain("separate approval for each command");
+    expect(page).toContain("explicitly asks with <code>--approve</code>");
     const lifetime = Date.parse(session.expiresOn) - before;
     expect(lifetime).toBeGreaterThan(7190_000);
     expect(lifetime).toBeLessThanOrEqual(7200_000 + 5_000);
@@ -413,7 +413,7 @@ describe("CLI browser authorization session", () => {
       email: OWNER["x-shiplet-user-email"],
     });
     expect(described.expiresOn).toBe(session.expiresOn);
-    expect(described.scopes).not.toContain("deployment:write");
+    expect(described.scopes).toContain("deployment:write");
     expect(JSON.stringify(described)).not.toContain(session.accessToken);
 
     const reused = await request("/api/shiplets", {
@@ -421,19 +421,16 @@ describe("CLI browser authorization session", () => {
     });
     expect(reused.status).toBe(200);
     // The privileged routes resolve their record before authenticating, so
-    // assert at the session boundary: a reusable session is no principal there.
-    const { session: commandSession } = await approvedSession(null, 43190);
+    // assert at the session boundary: the reusable session is the human there.
     for (const path of PRIVILEGED_PATHS) {
-      const privileged = (accessToken: string) =>
-        new Request(`https://shiplet.cc${path}`, {
-          method: "POST",
-          headers: { Authorization: `Bearer ${accessToken}` },
-        });
       await expect(
-        authenticateCliSession((env as Env).DB, privileged(session.accessToken)),
-      ).resolves.toBeNull();
-      await expect(
-        authenticateCliSession((env as Env).DB, privileged(commandSession.accessToken)),
+        authenticateCliSession(
+          (env as Env).DB,
+          new Request(`https://shiplet.cc${path}`, {
+            method: "POST",
+            headers: { Authorization: `Bearer ${session.accessToken}` },
+          }),
+        ),
       ).resolves.toBe(OWNER["x-shiplet-user-id"]);
     }
 
@@ -451,6 +448,17 @@ describe("CLI browser authorization session", () => {
         headers: { Authorization: `Bearer ${session.accessToken}` },
       });
       expect(denied.status).toBe(401);
+    }
+    for (const path of PRIVILEGED_PATHS) {
+      await expect(
+        authenticateCliSession(
+          (env as Env).DB,
+          new Request(`https://shiplet.cc${path}`, {
+            method: "POST",
+            headers: { Authorization: `Bearer ${session.accessToken}` },
+          }),
+        ),
+      ).resolves.toBeNull();
     }
     const secondRevoke = await request("/api/cli/session/revoke", {
       method: "POST",

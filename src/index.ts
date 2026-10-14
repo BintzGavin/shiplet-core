@@ -12125,7 +12125,7 @@ app.get("/cli/authorize", async (c) => {
     const sessionTerms = authorization.sessionTtlSeconds === null
       ? `<li>Perform deployment actions only when explicitly approved.</li>
           <li>Use a session for up to ten minutes, revoked when the command finishes.</li>`
-      : `<li>Deploy, promote, and roll back only with a separate approval for each command.</li>
+      : `<li>Deploy, promote, and roll back when a command explicitly asks with <code>--approve</code>, for as long as this session lasts.</li>
           <li>Keep this session on this computer for up to ${escapeAuthHtml(formatCliSessionDuration(authorization.sessionTtlSeconds))}. Run <code>shiplet logout</code> to end it sooner.</li>`;
     const body = renderPage(`<div class="auth-stage auth-stage-compact">
       <section class="form-container auth-card auth-decision" aria-labelledby="cli-auth-title">

@@ -59,9 +59,10 @@ one account. It lasts two hours by default and never more than eight, a limit
 Shiplet enforces on its side. The CLI keeps it in the OS keychain or a
 user-only `0600` file, never prints it, and checks it with Shiplet before each
 reuse. `shiplet logout` revokes it on Shiplet, which rejects it on its next use.
-A saved session has no deployment authority: deploy, promote, and rollback each
-need a fresh browser approval that is revoked when the command finishes. See
-[CLI](/docs/cli#approve-a-session).
+A saved session can also deploy, promote, and roll back while it lasts; each
+of those commands still needs `--approve`, and raw organization keys still
+cannot run them. Use `--no-session-cache` for a one-command approval that is
+revoked when the command finishes. See [CLI](/docs/cli#approve-a-session).
 
 Keep credentials in the agent or automation provider's secret store. Artifact
 files, widget code, browser scripts, source control, logs, and screenshots are

@@ -39,7 +39,7 @@ For non-interactive commands, `--token` or `SHIPLET_API_KEY` can supply an
 already-established, least-privilege organization API key from a secret store.
 Never place a key in source, package content, shell history, logs, or command
 examples. Raw organization keys cannot authorize deploy, promote, or rollback;
-those three CLI commands require a fresh browser approval of their own.
+those three CLI commands require a browser-approved session.
 
 ## Approve a session
 
@@ -89,7 +89,8 @@ account and expiry:
   new approval instead.
 
 `SHIPLET_CLI_SESSION_STORE` selects `auto` (the default), `keychain`, or `file`.
-`SHIPLET_CONFIG_DIR` sets an absolute directory for the file store. The CLI never
+`SHIPLET_CONFIG_DIR` sets an absolute directory for the file store. Treat a
+saved session like any credential that can publish and activate your Shiplets. The CLI never
 prints, logs, or writes the session into your working directory, and a saved
 session is only ever sent to the origin it was approved for.
 
@@ -115,12 +116,13 @@ it when the command finishes.
 
 ### Deploy, promote, and rollback
 
-A saved session can fork, pull, diff, push, validate, publish, and eject. It
-cannot deploy, promote, or roll back: Shiplet does not grant deployment
-authority to reusable sessions. Those three commands always open a fresh
-browser approval for that one command, keep it in memory for at most ten
-minutes, and revoke it when the command finishes. They still require
-`--approve`, and raw organization keys still cannot authorize them.
+A saved session covers every command, including deploy, promote, and rollback,
+so one approval is enough to publish and activate a revision. Those three
+commands still require `--approve` on each run, and raw organization keys still
+cannot authorize them. Because a saved session can change what is live until it
+expires, keep its lifetime as short as your work allows and run `shiplet
+logout` when you finish. To approve a deployment action on its own instead, run
+it with `--no-session-cache`.
 
 ## Command map
 
@@ -262,9 +264,9 @@ expected ID just to make the command pass; inspect the new active revision and
 fork or reconcile deliberately.
 
 `--approve` records explicit intent. The shipped source-checkout CLI requires
-a fresh browser approval for each deploy, promote, and rollback, even when a
-reusable session is saved; it rejects raw organization keys for those commands
-before network access. Direct REST
+a browser-approved session for deploy, promote, and rollback, and uses the
+saved session when one exists; it rejects raw organization keys for those
+commands before network access. Direct REST
 and core MCP may authorize a project-scoped agent to promote or roll back with
 `shiplets:write` and explicit approval. That kernel authority does not change
 the CLI transport. Customer-owned deployment requires a trusted

@@ -431,7 +431,7 @@ Configuration:
   SHIPLET_CONFIG_DIR         Absolute directory for the file store.
   Authentication    One browser approval creates a reusable session for this API origin,
                     kept in the OS keychain or a user-only file. Deploy, promote, and
-                    rollback always ask for their own approval.
+                    rollback use it too, and still require --approve.
                     Never place key material in source, package content, shell history, or logs.
 
 Flags:
@@ -605,16 +605,11 @@ function assertApplicableFlags(options) {
 		"--expected-active": new Set(["promote", "rollback"]),
 		"--version": new Set(["validate", "push", "diff"]),
 		"--idempotency-key": APPROVAL_COMMANDS,
-		// Deploy, promote, and rollback never use a reusable session.
 		"--session-ttl": new Set(
-			[...VALID_COMMANDS].filter(
-				(name) => !APPROVAL_COMMANDS.has(name) && name !== "logout" && name !== "whoami",
-			),
+			[...VALID_COMMANDS].filter((name) => name !== "logout" && name !== "whoami"),
 		),
 		"--no-session-cache": new Set(
-			[...VALID_COMMANDS].filter(
-				(name) => !APPROVAL_COMMANDS.has(name) && !SESSION_COMMANDS.has(name),
-			),
+			[...VALID_COMMANDS].filter((name) => !SESSION_COMMANDS.has(name)),
 		),
 		"--token": new Set(
 			[...VALID_COMMANDS].filter((name) => !SESSION_COMMANDS.has(name)),
@@ -706,13 +701,11 @@ function sessionTtlFromOptions(options, env) {
 }
 
 // What a session bootstrap needs to decide between a cached session and a
-// single-command approval. Deploy, promote, and rollback ask for "step-up".
-function sessionBootstrapOptions(options, env, purpose) {
+// single-command approval.
+function sessionBootstrapOptions(options, env) {
 	return {
-		purpose,
 		sessionCache: !options.noSessionCache,
-		sessionTtlSeconds:
-			purpose === "step-up" ? undefined : sessionTtlFromOptions(options, env),
+		sessionTtlSeconds: sessionTtlFromOptions(options, env),
 	};
 }
 
@@ -2352,11 +2345,7 @@ async function requestKernel(options, request) {
 			apiUrl: options.apiUrl || request.env.SHIPLET_API_URL || DEFAULT_API_URL,
 			fetch: request.fetch,
 			stdout: request.stdout,
-			...sessionBootstrapOptions(
-				options,
-				request.env,
-				humanSessionRequired ? "step-up" : "session",
-			),
+			...sessionBootstrapOptions(options, request.env),
 		});
 		ownsSession = true;
 	}
@@ -3536,7 +3525,7 @@ async function runCli({
 							apiUrl: options.apiUrl || env.SHIPLET_API_URL || DEFAULT_API_URL,
 							fetch: fetchImpl,
 							stdout,
-							...sessionBootstrapOptions(options, env, "session"),
+							...sessionBootstrapOptions(options, env),
 						})
 					: fetchImpl;
 		let result;
