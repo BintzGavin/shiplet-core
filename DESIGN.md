@@ -284,3 +284,9 @@ with `SHIPLET_FAVICON_SVG` in `src/seo.ts`) and re-run it.
 The injected review widget (`src/review-client.ts`) carries the palette as
 self-contained hex values because it renders inside arbitrary artifact pages;
 when tokens change, update its hex constants to match.
+
+The CLI's loopback callback page (`src/cli/auth-page.cjs`) is served by the
+local CLI under a nonce-only CSP and must work offline, so it carries copies of
+the semantic tokens and the mark plus a static waterline. A test in
+`scripts/browser-session.test.mjs` fails when those copies drift from
+`src/render.ts` or `src/seo.ts`.
