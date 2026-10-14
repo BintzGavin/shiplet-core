@@ -25,7 +25,8 @@ describe("authentication page experience", () => {
     expect(html).toContain("shiplet-brand-shell");
     expect(html).toContain("auth-page@example.com");
     expect(html).toContain("ten minutes");
-    expect(html).toContain("CLI access");
+    expect(html).toContain('<span class="success-card-label">CLI access</span>');
+    expect(html).not.toContain('class="auth-recommendation"');
     expect(html).not.toContain("Recommended for agent work");
     expect(html).toContain('name="approval" value="approve"');
     expect(html).toContain('name="approval" value="deny"');
@@ -46,7 +47,8 @@ describe("authentication page experience", () => {
     expect(response.headers.get("cache-control")).toBe("no-store");
     const html = await response.text();
     expect(html).toContain("auth-card");
-    expect(html).toContain(message);
+    expect(html).toContain('<span class="success-card-label">');
+    expect(html).toContain(`<div class="banner banner-error" role="alert">${message}</div>`);
     expect(html).toContain("Go to Shiplet");
   });
 
