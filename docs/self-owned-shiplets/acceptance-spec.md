@@ -717,8 +717,8 @@ that widget; trusted review controls remain usable.
 
 ### AC-HARD-013 — terminal widget recovery and browser memory boundary
 
-Given a widget fails startup, throws, exceeds its heartbeat/message/lifetime
-budget, or its Worker is terminated by the browser, when the terminal state is
+Given a widget fails startup, throws, misses two on-time heartbeats in a row,
+exceeds its per-minute message or byte rate, or its Worker is terminated by the browser, when the terminal state is
 shown, then package UI is inert, the old Worker and port are closed, pending
 operations and bindings are cleared, and an accessible trusted “Restart widget”
 action is visible. A trusted human click sends an exact source/origin/nonce/

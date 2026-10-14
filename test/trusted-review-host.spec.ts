@@ -4812,6 +4812,14 @@ describe("trusted review host boundary", () => {
     expect(html).toContain("channelNonce, shipletId, revisionId");
     expect(html).not.toContain("window.location.reload()");
     expect(html).toContain("messageCount > 512");
+    // Budgets are per-minute rates and heartbeat replies are free, so an idle
+    // widget can stay open for a whole review.
+    expect(html).toContain("now - budgetWindowStart >= 60000");
+    expect(html).toContain("heartbeatSequence > heartbeatAcknowledged");
+    expect(html).toContain("heartbeatMisses >= 2");
+    expect(html).toContain("Date.now() - deadlineAt > 1500");
+    expect(html).not.toContain("session limit");
+    expect(html).not.toContain("300000");
     expect(html).not.toContain("sandbox allow-scripts allow-forms");
   });
 

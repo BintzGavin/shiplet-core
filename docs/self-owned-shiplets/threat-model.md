@@ -84,8 +84,10 @@ providers behind narrow kernel adapters.
   blob Worker while denying connections, frames, forms, objects, script
   attributes, evaluated code, and trusted-origin script authority. The Worker
   bootstrap removes supported-browser network, nested-worker, realtime,
-  notification, and cross-context IPC globals. Message, byte, node, binding,
-  pending-operation, startup, heartbeat, and lifetime budgets fail closed.
+  notification, and cross-context IPC globals. Per-minute message and byte
+  rates, node, binding, pending-operation, startup, and heartbeat budgets fail
+  closed. There is no wall-clock lifetime cap, so a widget can stay open for a
+  whole review; heartbeat replies do not spend the message budget.
   Because CSP does not provide a general self-navigation control, keeping
   arbitrary package JavaScript outside every browsing context is the primary
   navigation boundary.
