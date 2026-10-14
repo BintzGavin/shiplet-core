@@ -75,8 +75,17 @@ async function boundedJson(response) {
   }
 }
 
-async function createBrowserSessionFetch(options) {
+// Runs the loopback PKCE flow and returns the raw session for the caller to
+// hold. Callers must never print or log `accessToken`.
+async function authorizeInBrowser(options) {
   const apiUrl = normalizeApiUrl(options.apiUrl);
+  const sessionTtlSeconds = options.sessionTtlSeconds;
+  if (
+    sessionTtlSeconds !== undefined &&
+    (!Number.isInteger(sessionTtlSeconds) || sessionTtlSeconds <= 0)
+  ) {
+    throw new Error("CLI session lifetime must be a positive number of seconds.");
+  }
   const fetchImpl = options.fetch;
   if (typeof fetchImpl !== "function") throw new Error("This Node runtime does not provide fetch.");
   const state = base64Url(crypto.randomBytes(32));
@@ -120,6 +129,9 @@ async function createBrowserSessionFetch(options) {
   authorizeUrl.searchParams.set("state", state);
   authorizeUrl.searchParams.set("code_challenge", challenge);
   authorizeUrl.searchParams.set("code_challenge_method", "S256");
+  if (sessionTtlSeconds !== undefined) {
+    authorizeUrl.searchParams.set("session_ttl", String(sessionTtlSeconds));
+  }
   options.stdout.write("Complete Shiplet CLI authorization in your browser.\n");
   (options.openBrowser || launchSystemBrowser)(authorizeUrl.toString());
   let timeout;
@@ -147,19 +159,34 @@ async function createBrowserSessionFetch(options) {
       !/^shiplet_cli_session_[A-Za-z0-9]{32,200}$/.test(body.accessToken) ||
       typeof body.expiresOn !== "string" ||
       Date.parse(body.expiresOn) <= Date.now() ||
-      Date.parse(body.expiresOn) > Date.now() + 15 * 60_000
+      Date.parse(body.expiresOn) >
+        Date.now() +
+          (sessionTtlSeconds === undefined ? 15 * 60_000 : sessionTtlSeconds * 1000 + 60_000)
     ) {
       throw new Error("Shiplet did not return a valid scoped CLI session.");
     }
-    return createScopedSessionFetch({
-      apiUrl,
-      accessToken: body.accessToken,
-      fetch: fetchImpl,
-    });
+    return { apiUrl, accessToken: body.accessToken, expiresOn: body.expiresOn };
   } finally {
     if (timeout) clearTimeout(timeout);
     server.close();
   }
 }
 
-module.exports = { createBrowserSessionFetch };
+// Single-command session: held in memory and revoked by the caller when the
+// command finishes.
+async function createBrowserSessionFetch(options) {
+  const session = await authorizeInBrowser({
+    apiUrl: options.apiUrl,
+    fetch: options.fetch,
+    stdout: options.stdout,
+    openBrowser: options.openBrowser,
+    timeoutMs: options.timeoutMs,
+  });
+  return createScopedSessionFetch({
+    apiUrl: session.apiUrl,
+    accessToken: session.accessToken,
+    fetch: options.fetch,
+  });
+}
+
+module.exports = { authorizeInBrowser, createBrowserSessionFetch, normalizeApiUrl };

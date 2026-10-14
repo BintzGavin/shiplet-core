@@ -230,7 +230,8 @@ New tables are additive:
   reconciliation, exact resource ownership, claim custody, and failures.
 - `cli_authorization_requests`, `cli_sessions`, and append-only
   `cli_session_audit_events` for actor-bound loopback PKCE, random one-use
-  exchange ownership, scoped short-lived sessions, and explicit revocation.
+  exchange ownership, scoped command and reusable sessions, and explicit
+  revocation.
 
 OAuth material lives behind an established platform secret-store binding and
 is referenced only by an opaque `credential_ref`. Plaintext tokens and their
@@ -436,15 +437,32 @@ discovery, and tenant routes with the version Wrangler reports at 100% traffic.
 
 ## CLI browser session contract
 
-The shipped CLI uses an ephemeral browser authorization when no established
-session is injected. It listens only on `127.0.0.1` at `/callback`, creates
-high-entropy state and S256 PKCE, opens the trusted Shiplet consent page, and
-exchanges the actor-bound one-use code for a ten-minute session held only in
-process memory. The server uses a random per-attempt compare-and-set marker so
-same-millisecond exchanges cannot both win. The client pins bearer use to the
-exact configured Shiplet origin, never prints it, and revokes the exact session
-once the command completes. Authorization request, approval, exchange, and
-revocation append credential-free immutable audit rows.
+The shipped CLI uses browser authorization when no established session is
+injected. It listens only on `127.0.0.1` at `/callback`, creates high-entropy
+state and S256 PKCE, opens the trusted Shiplet consent page, and exchanges the
+actor-bound one-use code for a session. The server uses a random per-attempt
+compare-and-set marker so same-millisecond exchanges cannot both win. The
+client pins bearer use to the exact configured Shiplet origin and never prints
+it. Authorization request, approval, exchange, and revocation append
+credential-free immutable audit rows.
+
+The authorization request's optional `session_ttl` selects the session kind,
+and the consent page states which one the human is approving:
+
+- **Reusable session** (`session_ttl` present): the server clamps the lifetime
+  to 5 minutes through 8 hours (CLI default 2 hours) and grants
+  `revision:read`, `revision:write`, `deployment:write`, `session:read`, and
+  `session:revoke`. Deploy, promote, and rollback still require the CLI's
+  explicit `--approve` and the kernel's approval rules. The CLI stores it per exact origin with the approved
+  account in the OS keychain or a user-only `0600` file, confirms it through
+  `GET /api/cli/session` before each reuse, forgets it on expiry, revocation,
+  account mismatch, or a 401, and revokes it through `shiplet logout`.
+- **Command session** (`session_ttl` absent): ten minutes, held only in process
+  memory, with the same scopes, and revoked when the command completes. Every
+  command uses one under `--no-session-cache` or `SHIPLET_CLI_SESSION_CACHE=0`.
+
+Every request rechecks the session row, so revocation and expiry take effect on
+the next request.
 
 ## Isolation, egress, limits, and secrets
 
