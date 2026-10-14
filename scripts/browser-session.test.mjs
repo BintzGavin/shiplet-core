@@ -2,9 +2,11 @@ import assert from "node:assert/strict";
 import crypto from "node:crypto";
 import { test } from "node:test";
 import { createRequire } from "node:module";
+import { readFileSync } from "node:fs";
 
 const require = createRequire(import.meta.url);
 const { createBrowserSessionFetch } = require("../src/cli/browser-session.cjs");
+const { LOOPBACK_TOKENS, SHIPLET_MARK_SVG } = require("../src/cli/auth-page.cjs");
 
 function sessionPayload() {
   return {
@@ -46,8 +48,37 @@ test("loopback authorization shows styled completion and recovery pages without 
     assert.match(html, /<style/);
     assert.match(html, /prefers-color-scheme: dark/);
     assert.match(html, valid ? /Return to your terminal/ : /Run your CLI command again/);
+    assert.match(html, valid ? /You’re done/ : /Authorization stopped/);
+    assert.match(html, valid ? /You can close this tab/ : /close this tab and return to your terminal/);
+    assert.ok(html.includes(SHIPLET_MARK_SVG), "loopback page carries the Shiplet mark");
+    assert.match(html, /class="stamp"/);
+    assert.doesNotMatch(html, /<(?:script|link|img)\b|url\(/, "loopback page loads nothing remote");
     assert.doesNotMatch(html, /shiplet_cli_code_|shiplet_cli_session_/);
   }
+});
+
+function cssTokens(block) {
+  return Object.fromEntries([...block.matchAll(/(--[a-z0-9-]+):\s*([^;]+);/g)].map(([, name, value]) => [name, value.trim()]));
+}
+
+function resolveTokens(tokens, fallback = {}) {
+  const lookup = name => tokens[name] ?? fallback[name];
+  const resolve = (value, depth = 0) => depth > 8 ? value
+    : value.replace(/var\((--[a-z0-9-]+)\)/g, (_, name) => resolve(lookup(name), depth + 1));
+  return Object.fromEntries(Object.entries(tokens).map(([name, value]) => [name, resolve(value)]));
+}
+
+test("loopback page mirrors the Harbor Office tokens and mark used by hosted pages", () => {
+  const render = readFileSync(new URL("../src/render.ts", import.meta.url), "utf8");
+  const seo = readFileSync(new URL("../src/seo.ts", import.meta.url), "utf8");
+  const css = render.slice(render.indexOf("export const CSS"));
+  const light = resolveTokens(cssTokens(css.slice(css.indexOf(":root {"), css.indexOf("}", css.indexOf(":root {")))));
+  const nightWatch = render.match(/const NIGHT_WATCH_TOKENS = `([^`]+)`/)[1];
+  const dark = resolveTokens(cssTokens(nightWatch), light);
+  for (const [name, value] of Object.entries(LOOPBACK_TOKENS.light)) assert.equal(value, light[name], `light ${name}`);
+  for (const [name, value] of Object.entries(LOOPBACK_TOKENS.dark)) assert.equal(value, dark[name], `dark ${name}`);
+  assert.deepEqual(Object.keys(LOOPBACK_TOKENS.dark).sort(), Object.keys(LOOPBACK_TOKENS.light).sort());
+  assert.equal(SHIPLET_MARK_SVG, seo.match(/export const SHIPLET_FAVICON_SVG = `([^`]+)`/)[1]);
 });
 
 test("browser session rejects state mismatch and closes without exchanging", async () => {

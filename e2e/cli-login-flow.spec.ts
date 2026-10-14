@@ -111,6 +111,8 @@ for (const existingSession of [false, true]) {
       expect(events).toEqual([]);
       await page.getByRole("link", { name: "Return to CLI", exact: true }).click();
       await expect(page.getByRole("heading", { name: "Return to your terminal" })).toBeVisible();
+      await expect(page.getByText("Approval handed back", { exact: true })).toBeVisible();
+      await expect(page.getByText("You can close this tab.", { exact: true })).toBeVisible();
       expect(await exited).toBe(0);
       // Boolean assertions keep any unexpected credential-bearing output out of
       // the failure report. The real CLI is responsible for sanitizing output.
