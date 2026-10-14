@@ -450,6 +450,7 @@ import {
 import {
   approveCliAuthorizationRequest,
   createCliAuthorizationRequest,
+  describeCliSession,
   exchangeCliAuthorizationCode,
   revokeCliSession,
 } from "./cli-session";
@@ -873,7 +874,8 @@ const KERNEL_SCHEMA_EPOCH_MARKER = "kernel";
 // Any change to ensureKernelSchemas must explicitly bump this durable epoch.
 // test/kernel-schema-epoch.spec.ts pins the schema digest to this value.
 // 2: organization and team invite link tables.
-const CURRENT_KERNEL_SCHEMA_EPOCH = 2;
+// 3: cli_authorization_requests.session_ttl_seconds for reusable CLI sessions.
+const CURRENT_KERNEL_SCHEMA_EPOCH = 3;
 
 async function readKernelSchemaEpoch(db: D1Database): Promise<number | null> {
   const table = await db
@@ -12091,6 +12093,16 @@ app.get("/.well-known/oauth-authorization-server", (c) =>
 
 app.get("/auth.md", (c) => proxyWorkOSAgentAuthGuide(c.env));
 
+function formatCliSessionDuration(seconds: number) {
+  const hours = Math.floor(seconds / 3600);
+  const minutes = Math.round((seconds % 3600) / 60);
+  const parts = [
+    hours ? `${hours} hour${hours === 1 ? "" : "s"}` : "",
+    minutes ? `${minutes} minute${minutes === 1 ? "" : "s"}` : "",
+  ].filter(Boolean);
+  return parts.join(" ") || "a few minutes";
+}
+
 app.get("/cli/authorize", async (c) => {
   try {
     const user = await getCurrentUser(c.req.raw, c.env);
@@ -12107,8 +12119,14 @@ app.get("/cli/authorize", async (c) => {
       state: url.searchParams.get("state"),
       codeChallenge: url.searchParams.get("code_challenge"),
       method: url.searchParams.get("code_challenge_method"),
+      sessionTtl: url.searchParams.get("session_ttl"),
     });
     if (!authorization) return c.text("Invalid CLI authorization request", 400);
+    const sessionTerms = authorization.sessionTtlSeconds === null
+      ? `<li>Perform deployment actions only when explicitly approved.</li>
+          <li>Use a session for up to ten minutes, revoked when the command finishes.</li>`
+      : `<li>Deploy, promote, and roll back only with a separate approval for each command.</li>
+          <li>Keep this session on this computer for up to ${escapeAuthHtml(formatCliSessionDuration(authorization.sessionTtlSeconds))}. Run <code>shiplet logout</code> to end it sooner.</li>`;
     const body = renderPage(`<div class="auth-stage auth-stage-compact">
       <section class="form-container auth-card auth-decision" aria-labelledby="cli-auth-title">
         <span class="auth-recommendation">CLI access</span>
@@ -12117,8 +12135,7 @@ app.get("/cli/authorize", async (c) => {
         <div class="auth-account"><span>Authorizing as</span><strong>${escapeAuthHtml(user.email)}</strong></div>
         <ul class="auth-permissions">
           <li>Read and edit Shiplet revisions using your existing access.</li>
-          <li>Perform deployment actions only when explicitly approved.</li>
-          <li>Use a session for up to ten minutes, revoked when the command finishes.</li>
+          ${sessionTerms}
         </ul>
         <p>Only continue if you started this command. Then return to your terminal or agent.</p>
         <form method="post" action="/cli/authorize/complete">
@@ -12250,6 +12267,20 @@ app.post("/api/cli/session/exchange", async (c) => {
     return c.text("Failed to exchange CLI authorization", 500, {
       "cache-control": "no-store",
     });
+  }
+});
+
+app.get("/api/cli/session", async (c) => {
+  try {
+    const session = await describeCliSession(c.env.DB, c.req.raw);
+    if (!session) {
+      return c.text("CLI session unavailable", 401, { "cache-control": "no-store" });
+    }
+    const response = json(session, 200);
+    response.headers.set("cache-control", "no-store");
+    return response;
+  } catch {
+    return c.text("Failed to read CLI session", 500, { "cache-control": "no-store" });
   }
 });
 

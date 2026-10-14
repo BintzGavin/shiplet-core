@@ -4,9 +4,16 @@ import { describe, expect, it } from "vitest";
 import app from "../src/index";
 import {
   approveCliAuthorizationRequest,
+  authenticateCliSession,
   createCliAuthorizationRequest,
   exchangeCliAuthorizationCode,
 } from "../src/cli-session";
+
+const PRIVILEGED_PATHS = [
+  "/api/drafts/draft_cli_reusable/promote",
+  "/api/shiplets/project_cli_reusable/rollback",
+  "/api/revisions/revision_cli_reusable/deployments",
+];
 
 const OWNER = {
   "x-shiplet-user-id": "user_cli_browser_session_owner",
@@ -332,6 +339,190 @@ describe("CLI browser authorization session", () => {
         .bind(requestId)
         .run(),
     ).rejects.toThrow(/immutable/i);
+  });
+
+  async function approvedSession(
+    sessionTtl: string | null,
+    port: number,
+    headers: Record<string, string> = OWNER,
+  ) {
+    const verifier = "s".repeat(64);
+    const redirectUri = `http://127.0.0.1:${port}/callback`;
+    const params = new URLSearchParams({
+      redirect_uri: redirectUri,
+      state: `state_${crypto.randomUUID().replace(/-/g, "")}`,
+      code_challenge: await sha256Base64Url(verifier),
+      code_challenge_method: "S256",
+    });
+    if (sessionTtl !== null) params.set("session_ttl", sessionTtl);
+    const authorize = await request(`/cli/authorize?${params}`, { headers });
+    expect(authorize.status).toBe(200);
+    const page = await authorize.text();
+    const approved = await request("/cli/authorize/complete", {
+      method: "POST",
+      redirect: "manual",
+      headers: {
+        Origin: "http://localhost",
+        "Content-Type": "application/x-www-form-urlencoded",
+        ...headers,
+      },
+      body: new URLSearchParams({ request_id: hidden(page, "request_id"), approval: "approve" }),
+    });
+    const code = (await callbackFromHandoff(approved)).searchParams.get("code");
+    const exchange = await request("/api/cli/session/exchange", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ code, verifier, redirectUri }),
+    });
+    expect(exchange.status).toBe(201);
+    const session = (await exchange.json()) as { accessToken: string; expiresOn: string };
+    return { page, session };
+  }
+
+  it("issues a reusable session for the requested lifetime that cannot deploy, promote, or roll back", async () => {
+    const before = Date.now();
+    const { page, session } = await approvedSession("7200", 43194);
+    expect(page).toContain("up to 2 hours");
+    expect(page).toContain("shiplet logout");
+    expect(page).toContain("separate approval for each command");
+    const lifetime = Date.parse(session.expiresOn) - before;
+    expect(lifetime).toBeGreaterThan(7190_000);
+    expect(lifetime).toBeLessThanOrEqual(7200_000 + 5_000);
+
+    const exchanged = await (env as Env).DB.prepare(
+      `SELECT metadata_json FROM cli_session_audit_events
+       WHERE user_id = ? AND event_kind = 'cli.session.exchanged'
+       ORDER BY sequence DESC LIMIT 1`,
+    )
+      .bind(OWNER["x-shiplet-user-id"])
+      .first<{ metadata_json: string }>();
+    expect(JSON.parse(exchanged!.metadata_json)).toMatchObject({ reusable: true, ttlSeconds: 7200 });
+
+    const status = await request("/api/cli/session", {
+      headers: { Authorization: `Bearer ${session.accessToken}` },
+    });
+    expect(status.status).toBe(200);
+    expect(status.headers.get("cache-control")).toBe("no-store");
+    const described = (await status.json()) as {
+      account: { id: string; email: string };
+      expiresOn: string;
+      scopes: string[];
+    };
+    expect(described.account).toEqual({
+      id: OWNER["x-shiplet-user-id"],
+      email: OWNER["x-shiplet-user-email"],
+    });
+    expect(described.expiresOn).toBe(session.expiresOn);
+    expect(described.scopes).not.toContain("deployment:write");
+    expect(JSON.stringify(described)).not.toContain(session.accessToken);
+
+    const reused = await request("/api/shiplets", {
+      headers: { Authorization: `Bearer ${session.accessToken}` },
+    });
+    expect(reused.status).toBe(200);
+    // The privileged routes resolve their record before authenticating, so
+    // assert at the session boundary: a reusable session is no principal there.
+    const { session: commandSession } = await approvedSession(null, 43190);
+    for (const path of PRIVILEGED_PATHS) {
+      const privileged = (accessToken: string) =>
+        new Request(`https://shiplet.cc${path}`, {
+          method: "POST",
+          headers: { Authorization: `Bearer ${accessToken}` },
+        });
+      await expect(
+        authenticateCliSession((env as Env).DB, privileged(session.accessToken)),
+      ).resolves.toBeNull();
+      await expect(
+        authenticateCliSession((env as Env).DB, privileged(commandSession.accessToken)),
+      ).resolves.toBe(OWNER["x-shiplet-user-id"]);
+    }
+
+  });
+
+  it("revokes a reusable session immediately for every route", async () => {
+    const { session } = await approvedSession("3600", 43195);
+    const revoke = await request("/api/cli/session/revoke", {
+      method: "POST",
+      headers: { Authorization: `Bearer ${session.accessToken}` },
+    });
+    expect(revoke.status).toBe(204);
+    for (const path of ["/api/cli/session", "/api/shiplets"]) {
+      const denied = await request(path, {
+        headers: { Authorization: `Bearer ${session.accessToken}` },
+      });
+      expect(denied.status).toBe(401);
+    }
+    const secondRevoke = await request("/api/cli/session/revoke", {
+      method: "POST",
+      headers: { Authorization: `Bearer ${session.accessToken}` },
+    });
+    expect(secondRevoke.status).toBe(401);
+  });
+
+  it("reports an expired reusable session as unavailable", async () => {
+    const { session } = await approvedSession("3600", 43196);
+    await (env as Env).DB.prepare(
+      "UPDATE cli_sessions SET expires_on = ? WHERE user_id = ? AND expires_on > ?",
+    )
+      .bind(new Date(Date.now() - 1_000).toISOString(), OWNER["x-shiplet-user-id"], new Date().toISOString())
+      .run();
+    const status = await request("/api/cli/session", {
+      headers: { Authorization: `Bearer ${session.accessToken}` },
+    });
+    expect(status.status).toBe(401);
+  });
+
+  it("clamps a requested lifetime to the server's 8 hour maximum", async () => {
+    const before = Date.now();
+    const { page, session } = await approvedSession("999999", 43197);
+    expect(page).toContain("up to 8 hours");
+    expect(Date.parse(session.expiresOn) - before).toBeLessThanOrEqual(8 * 3600_000 + 5_000);
+    expect(Date.parse(session.expiresOn) - before).toBeGreaterThan(8 * 3600_000 - 10_000);
+  });
+
+  it("keeps the single-command session at ten minutes with deploy authority and no status access", async () => {
+    const before = Date.now();
+    const { page, session } = await approvedSession(null, 43198);
+    expect(page).toContain("up to ten minutes, revoked when the command finishes");
+    expect(Date.parse(session.expiresOn) - before).toBeLessThanOrEqual(10 * 60_000 + 5_000);
+    const status = await request("/api/cli/session", {
+      headers: { Authorization: `Bearer ${session.accessToken}` },
+    });
+    expect(status.status).toBe(401);
+    const scopes = await (env as Env).DB.prepare(
+      "SELECT scopes_json FROM cli_sessions WHERE expires_on = ?",
+    )
+      .bind(session.expiresOn)
+      .first<{ scopes_json: string }>();
+    expect(JSON.parse(scopes!.scopes_json)).toContain("deployment:write");
+  });
+
+  it.each(["abc", "-1", "1.5", "1234567"])(
+    "rejects a malformed session lifetime: %s",
+    async (sessionTtl) => {
+      const response = await request(
+        `/cli/authorize?${new URLSearchParams({
+          redirect_uri: "http://127.0.0.1:43199/callback",
+          state: `state_${"a".repeat(32)}`,
+          code_challenge: "b".repeat(43),
+          code_challenge_method: "S256",
+          session_ttl: sessionTtl,
+        })}`,
+        { headers: OWNER },
+      );
+      expect(response.status).toBe(400);
+    },
+  );
+
+  it("does not describe a session without a CLI bearer", async () => {
+    for (const headers of [
+      {},
+      OWNER,
+      { Authorization: "Bearer shiplet_cli_session_invalid" },
+    ] as Array<Record<string, string>>) {
+      const response = await request("/api/cli/session", { headers });
+      expect(response.status).toBe(401);
+    }
   });
 
   it.each([

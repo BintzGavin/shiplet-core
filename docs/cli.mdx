@@ -5,8 +5,8 @@ description: "Prepare static reviews and manage portable Shiplet drafts, revisio
 
 [Code Mode MCP](/docs/code-mode-mcp) is the preferred route for agent work.
 The CLI is an alternative for local command-line workflows. It opens browser
-approval so you can sign in and authorize a command without copying credentials.
-Return to your terminal after approval.
+approval so you can sign in and authorize the CLI without copying credentials.
+One approval covers a working session of up to two hours by default.
 
 The Shiplet CLI supports static publishing and the complete immutable revision
 workflow. It uses the same package, authorization, validation, approval, and
@@ -34,27 +34,93 @@ The production default API origin is `https://shiplet.cc`. Use `--api-url`
 only for a trusted Shiplet origin; HTTPS is required except for an explicit
 loopback development origin.
 
-Interactive commands use the short-lived browser authorization flow by default.
+Interactive commands use a reusable browser-approved session by default.
 For non-interactive commands, `--token` or `SHIPLET_API_KEY` can supply an
 already-established, least-privilege organization API key from a secret store.
 Never place a key in source, package content, shell history, logs, or command
 examples. Raw organization keys cannot authorize deploy, promote, or rollback;
-those three CLI commands require trusted browser authorization.
+those three CLI commands require a fresh browser approval of their own.
 
-## Approve a command
+## Approve a session
 
-1. Run a command without an API key to use browser authorization.
-2. Sign in if asked and check the account shown on the approval page.
+1. Run `shiplet login`, or any network command without an API key.
+2. Sign in if asked and check the account and session length shown on the approval page.
 3. Select **Authorize CLI** only if you started the command.
 4. Select **Return to CLI** on the approval page to complete the local callback.
 5. Return to your terminal or agent for the result, then close the browser window.
 
-Sessions last up to ten minutes and are revoked when the command finishes.
-Each new command can ask for approval again. There is no separate login command.
-Run the CLI and browser on the same computer so the local callback is reachable.
-For an expired request, canceled approval, or mismatched callback, run the
-command again and use the new browser window. For remote or headless agents,
-use a compatible MCP client. A dry run does not authenticate.
+```bash
+npm run shiplet -- login
+npm run shiplet -- whoami
+```
+
+Later commands against the same Shiplet origin reuse that session without
+opening the browser until it expires. Run the CLI and browser on the same
+computer so the local callback is reachable. For an expired request, canceled
+approval, or mismatched callback, run the command again and use the new browser
+window. For remote or headless agents, use a compatible MCP client. A dry run
+does not authenticate.
+
+### Session lifetime
+
+A session lasts two hours unless you ask for another length with
+`--session-ttl` or `SHIPLET_CLI_SESSION_TTL`, for example `90m`, `1h30m`, or
+`4h`. The CLI accepts 5 minutes to 8 hours, and Shiplet enforces the same
+maximum on its side whatever the CLI requests. The lifetime starts at approval
+and is not extended by use. The approval page shows the length you are approving.
+
+Before reusing a saved session, the CLI asks Shiplet whether it is still live
+and still belongs to the same account. An expired, revoked, or mismatched
+session is deleted and the CLI asks for a new approval.
+
+### Where the session is kept
+
+The CLI stores the session per exact API origin, together with the approved
+account and expiry:
+
+- **macOS:** the login Keychain, through `/usr/bin/security`.
+- **Linux:** the Secret Service keyring through `secret-tool`, when it and a
+  desktop session bus are available.
+- **Otherwise, or if the keychain refuses the entry:** `cli-sessions.json` in
+  `$XDG_CONFIG_HOME/shiplet` (default `~/.config/shiplet`), or
+  `%APPDATA%\Shiplet` on Windows. The directory is created as `0700` and the
+  file as `0600`. The CLI ignores the file if another user could read it, if
+  it is not a regular file owned by you, or if it is corrupted, and asks for a
+  new approval instead.
+
+`SHIPLET_CLI_SESSION_STORE` selects `auto` (the default), `keychain`, or `file`.
+`SHIPLET_CONFIG_DIR` sets an absolute directory for the file store. The CLI never
+prints, logs, or writes the session into your working directory, and a saved
+session is only ever sent to the origin it was approved for.
+
+### Check, end, or skip the session
+
+```bash
+npm run shiplet -- whoami
+npm run shiplet -- logout
+```
+
+`whoami` shows the account, origin, expiry, and storage location, and exits
+with status 1 when no live session exists. `logout` revokes the session on
+Shiplet, which rejects it immediately, and deletes it from this computer. If
+Shiplet cannot confirm revocation, for example while you are offline, `logout`
+still deletes the local copy, reports the failure, and exits with status 1; the
+session then ends at its expiry. Use `--api-url` with either command for a
+non-default origin.
+
+To approve every command separately, as earlier CLI versions did, pass
+`--no-session-cache` or set `SHIPLET_CLI_SESSION_CACHE=0`. Each command then
+opens browser approval, keeps a ten-minute session only in memory, and revokes
+it when the command finishes.
+
+### Deploy, promote, and rollback
+
+A saved session can fork, pull, diff, push, validate, publish, and eject. It
+cannot deploy, promote, or roll back: Shiplet does not grant deployment
+authority to reusable sessions. Those three commands always open a fresh
+browser approval for that one command, keep it in memory for at most ten
+minutes, and revoke it when the command finishes. They still require
+`--approve`, and raw organization keys still cannot authorize them.
 
 ## Command map
 
@@ -70,6 +136,9 @@ use a compatible MCP client. A dry run does not authenticate.
 | `shiplet promote <draft-id>`             | Atomically activate a validated draft.                                                        |
 | `shiplet rollback <shiplet-id>`          | Atomically reactivate a known-good revision.                                                  |
 | `shiplet eject <shiplet-id> <path>`      | Export a kernel-authority-free portable package; authored files still require secret review.  |
+| `shiplet login`                          | Approve a reusable CLI session in the browser.                                                |
+| `shiplet whoami`                         | Show the saved session's account, origin, expiry, and storage.                                |
+| `shiplet logout`                         | Revoke the saved session on Shiplet and delete it locally.                                    |
 
 ## Prepare a managed static review
 
@@ -84,11 +153,12 @@ npm run shiplet -- prepare ./dist \
   --json
 ```
 
-Remove `--dry-run` to publish. If the CLI has no established session, it opens
-Shiplet's browser authorization flow. Select **Authorize CLI**, then
-**Return to CLI** on the approval page. It keeps the short-lived session in
-memory, pins it to the exact Shiplet origin, never prints it, and revokes it
-when the command finishes. Open the returned review URL to review the artifact.
+Remove `--dry-run` to publish. If the CLI has no saved session for this
+origin, it opens Shiplet's browser authorization flow. Select **Authorize CLI**,
+then **Return to CLI** on the approval page. The CLI saves the session as
+described in [Approve a session](#approve-a-session), pins it to the exact
+Shiplet origin, and never prints it. Open the returned review URL to review the
+artifact.
 No Cloudflare connection is required for managed static publishing.
 
 `shiplet publish` is the compatibility alias for `shiplet prepare`.
@@ -192,8 +262,9 @@ expected ID just to make the command pass; inspect the new active revision and
 fork or reconcile deliberately.
 
 `--approve` records explicit intent. The shipped source-checkout CLI requires
-trusted browser authorization for deploy, promote, and rollback; it rejects
-raw organization keys for those commands before network access. Direct REST
+a fresh browser approval for each deploy, promote, and rollback, even when a
+reusable session is saved; it rejects raw organization keys for those commands
+before network access. Direct REST
 and core MCP may authorize a project-scoped agent to promote or roll back with
 `shiplets:write` and explicit approval. That kernel authority does not change
 the CLI transport. Customer-owned deployment requires a trusted
@@ -291,6 +362,8 @@ the bound request and retry key without making a network request.
 | Local or kernel validation fails                        | Fix the reported package path or contract and validate again. The active revision remains unchanged.                                                                            |
 | Deployment or health check fails                        | Inspect deployment status and retry after the prerequisite recovers. The prior active revision and known-good deployment remain unchanged.                                      |
 | Required authorization or approval is denied or expires | Reauthenticate or obtain only the missing project scope. Customer deployment requires a fresh trusted human session. No side effect is committed without its required approval. |
+| Saved CLI session expired or was revoked                | Run the command again and approve the new browser request, or run `shiplet login`.                                                                                              |
+| Saved CLI session may be exposed                         | Run `shiplet logout` to revoke it on Shiplet immediately.                                                                                                                         |
 | Cloudflare connection is revoked                        | Reconnect through scoped OAuth before another customer-owned update. The last customer-owned deployment keeps running.                                                          |
 | Network response is lost                                | Reuse the exact reported `--idempotency-key`; do not create a second operation with different inputs.                                                                           |
 | Pull or eject destination is non-empty                  | Choose an empty directory, or inspect it before using `--force` for a complete replacement.                                                                                     |

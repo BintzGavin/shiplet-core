@@ -204,7 +204,7 @@ Add a trusted review layer to builds, files, and live URLs for contextual feedba
 
 ## Access model
 
-Code Mode MCP is the preferred route for agent work. Connect an MCP client and approve access in the browser. The CLI is an alternative for local command-line workflows: run commands from a Shiplet source checkout and approve each command in your browser. CLI sessions stay in memory for up to ten minutes and are revoked when the command finishes. The CLI and browser must run on the same computer; there is no public npm package. Use scoped organization API keys for unattended CI.
+Code Mode MCP is the preferred route for agent work. Connect an MCP client and approve access in the browser. The CLI is an alternative for local command-line workflows: run commands from a Shiplet source checkout and approve a session in your browser. One approval is reused for two hours by default, up to an 8 hour maximum, until it expires or shiplet logout revokes it. Deploy, promote, and rollback always need their own approval. The CLI and browser must run on the same computer; there is no public npm package. Use scoped organization API keys for unattended CI.
 
 Public discovery files describe Shiplet. Preparing review artifacts, organization management, API access, and MCP execution require authenticated access or an organization API token.
 `;

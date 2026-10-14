@@ -11,7 +11,7 @@ interface DocsPage {
 
 // prettier-ignore
 const DOCS_PUBLIC_CONTENT_SHA256: Record<string, string> = {
-  "cli": "b9dd3f9d963dffccb1cb63320bdf8d38a25f07a0247d317d7345ebdc57984576",
+  "cli": "c93665021b191d4d1714fcb7da1c6966f90abdca4d6a223e570072acfe87334e",
   "self-hosting": "03dd91928c89a6911867c9c4f4625aa4455306c420af821408540ffb7eac1f38",
   "browser-capture": "1b6542d6a598b88c6dacda840930f1ff5095d9c0952778bb3a26672603a61643",
   "introduction": "b507788d477880d6ea7d2a82d14b698d1a89c9e057511bd2a79f31be29538277",
@@ -338,10 +338,11 @@ const DOCS_PAGES: DocsPage[] = [
 npm run shiplet -- --help
 npm run shiplet -- prepare ./dist --name "Review build" --subdomain review-build --visibility organization --json</code></pre>
 <p>Replace <code>./dist</code> with your artifact folder and choose an available subdomain. Add <code>--dry-run</code> to inspect the artifact before publishing; a dry run does not authenticate.</p>
-<h2>Approve the command</h2>
-<ol><li>Run the command without an API key to use browser authorization.</li><li>Sign in to Shiplet if asked. Check the account shown on the approval page.</li><li>Select <strong>Authorize CLI</strong> only if you started the command.</li><li>Select <strong>Return to CLI</strong> on the approval page to complete the local callback.</li><li>Return to your terminal or agent for the result. You can close the browser window.</li></ol>
-<p>The session lasts up to ten minutes, stays in process memory, and is revoked when the command finishes. It is bound to the exact Shiplet origin. Each new command can ask for approval again. No separate login command or pasted credential is required.</p>
-<p>Your existing access still applies. Deployment actions require explicit approval; authorizing the CLI does not grant blanket deployment permission.</p>
+<h2>Approve a session</h2>
+<ol><li>Run <code>npm run shiplet -- login</code>, or any network command without an API key, to use browser authorization.</li><li>Sign in to Shiplet if asked. Check the account shown on the approval page.</li><li>Select <strong>Authorize CLI</strong> only if you started the command.</li><li>Select <strong>Return to CLI</strong> on the approval page to complete the local callback.</li><li>Return to your terminal or agent for the result. You can close the browser window.</li></ol>
+<p>One approval creates a session that later commands reuse for two hours by default. Set another length with <code>--session-ttl</code> or <code>SHIPLET_CLI_SESSION_TTL</code>, from 5 minutes to 8 hours; Shiplet enforces the 8 hour maximum. The session is bound to the exact Shiplet origin and the approved account, and is kept in the macOS Keychain, the Linux Secret Service keyring, or otherwise a user-only <code>0600</code> file under <code>~/.config/shiplet</code>. It is never printed. No pasted credential is required.</p>
+<p>Run <code>npm run shiplet -- whoami</code> to see the account, origin, and expiry, and <code>npm run shiplet -- logout</code> to revoke the session on Shiplet immediately and delete it locally. To approve every command separately instead, pass <code>--no-session-cache</code> or set <code>SHIPLET_CLI_SESSION_CACHE=0</code>.</p>
+<p>Your existing access still applies. A saved session cannot deploy, promote, or roll back: each of those commands opens its own browser approval, which is revoked when the command finishes.</p>
 <h2>If authorization stops</h2>
 <p>For an expired request, canceled approval, or mismatched callback, run the command again and use the new browser window. Run the CLI and browser on the same computer so the browser can reach the local callback. For a remote or headless agent, use a compatible <a href="/docs/code-mode-mcp">MCP client</a>.</p>
 <h2>Other authentication routes</h2>

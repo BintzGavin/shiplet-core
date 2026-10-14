@@ -483,9 +483,9 @@ stable machine-readable outcomes.
 Given a human runs a production CLI command without an organization API key,
 when the CLI starts authentication, then it uses a loopback-only authorization
 redirect, high-entropy state, PKCE S256, an explicit same-origin browser
-confirmation, a single-use short-lived code, and a process-memory-only scoped
-session. Wrong actor, redirect, verifier, state, expiry, replay, or out-of-scope
-route fails closed; no user is asked to paste a credential.
+confirmation, a single-use short-lived code, and a scoped session. Wrong actor,
+redirect, verifier, state, expiry, replay, or out-of-scope route fails closed;
+no user is asked to paste a credential.
 
 ### AC-CLI-003 — session audit and revocation
 
@@ -495,6 +495,19 @@ attributes the transition to the human. The session holder can revoke the exact
 session without exposing its bearer value. A transient failure receives one
 bounded retry, local closure occurs only after a 204 confirmation, and every
 later request fails closed.
+
+### AC-CLI-004 — reusable session and deployment step-up
+
+Given a human approves a reusable CLI session, when later commands run against
+the same origin before it expires, then they reuse it without another browser
+approval after confirming it is live and belongs to the same account. The
+server clamps its lifetime to at most 8 hours and grants it no deployment
+scope. The CLI stores it only in the OS keychain or a user-only `0600` file and
+never prints it; a missing, corrupted, unsafe, misfiled, expired, revoked, or
+other-account entry is discarded and approval is requested again. Logout
+revokes it server-side, after which every request fails closed, and deletes it
+locally. Deploy, promote, and rollback always obtain a fresh process-memory
+command session that is revoked when the command completes.
 
 ### AC-COMPAT-001 — representative legacy migration
 
