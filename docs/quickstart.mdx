@@ -3,30 +3,30 @@ title: "Quickstart"
 description: "Upload an artifact and open its review link in a few minutes."
 ---
 
-The CLI is the recommended route for local and agent workflows. It runs without
-a custom MCP server. Use Node.js 22.12.0 or newer.
+Prepare your first review from your terminal or agent. Use Node.js 22.12.0
+or newer; no source checkout, global install, or npm account is required.
 
 ## 1. Run the CLI
 
 ```bash
-npx --package=https://github.com/BintzGavin/shiplet-core/releases/download/cli-v0.1.2/shiplet-cli-0.1.2.tgz shiplet --help
-npm install -g https://github.com/BintzGavin/shiplet-core/releases/download/cli-v0.1.2/shiplet-cli-0.1.2.tgz
+npx shiplet-cli --help
 ```
 
-The unscoped `npx shiplet` is an unrelated project. The shiplet-cli npm release is
-pending; the GitHub tarball is the installable route. See [CLI setup](/docs/cli).
+Use `npx shiplet-cli` for Shiplet; `npx shiplet` is an unrelated project.
+See [CLI setup](/docs/cli) for global installation and the full command reference.
 
 ## 2. Prepare your build
 
 ```bash
-shiplet prepare ./dist --name "Review build" --subdomain review-build --visibility organization --dry-run --json
+npx shiplet-cli prepare ./dist --name "Review build" --subdomain review-build --visibility organization --dry-run --json
 ```
 
 Replace `./dist` with your file or static build folder. Check the dry-run output,
 then rerun without `--dry-run`. Approve the browser session on the same computer.
 The CLI preserves folder paths, defaults to organization visibility, and returns
-the review URL. `shiplet login`, `shiplet whoami`, and `shiplet logout` manage the
-session; later commands reuse it for two hours by default.
+the review URL. Use `npx shiplet-cli login`, `npx shiplet-cli whoami`, and
+`npx shiplet-cli logout` to manage the session; later commands reuse it for two
+hours by default.
 
 ## 3. Review and collect feedback
 
@@ -78,10 +78,10 @@ Read [Access control](/docs/access-control) before sharing the link.
 ## Working with an agent
 
 Give your agent the [CLI guide](/docs/cli), let it check the artifact with
-`shiplet prepare --dry-run`, then approve publishing in your browser.
-A custom MCP server is not required. [Code Mode MCP](/docs/code-mode-mcp) is
-optional when your organization permits it and your agent needs API discovery
-or feedback operations beyond the CLI command set.
+`npx shiplet-cli prepare --dry-run`, then approve publishing in your browser.
+[Code Mode MCP](/docs/code-mode-mcp) is also supported for clients that use MCP,
+including API discovery and feedback automation. Follow its connection guide
+to use browser OAuth or supported agent registration.
 
 ## Troubleshooting
 

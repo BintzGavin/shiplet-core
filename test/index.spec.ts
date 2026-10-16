@@ -1195,7 +1195,7 @@ describe("Shiplet", () => {
       expect(html).toContain("1. Run the CLI");
       expect(html).toContain("2. Prepare your build");
       expect(html).toContain("3. Review and collect feedback");
-      expect(html).toContain("Code Mode MCP</a> is optional");
+      expect(html).toContain("Code Mode MCP</a> is also supported");
       expect(html).toContain('href="/docs/review-feedback"');
       expect(html).not.toContain('href="/docs/packages-revisions"');
       expect(html).not.toContain('href="/docs/deployment"');
@@ -1218,7 +1218,7 @@ describe("Shiplet", () => {
       expect(quickstartHtml.indexOf("safe default")).toBeLessThan(
         quickstartHtml.indexOf("3. Review and collect feedback"),
       );
-      expect(quickstartHtml).toContain("Code Mode MCP</a> is optional");
+      expect(quickstartHtml).toContain("Code Mode MCP</a> is also supported");
 
       const introduction = await requestHelper("/docs");
       const introductionHtml = await introduction.text();
@@ -1251,7 +1251,7 @@ describe("Shiplet", () => {
     it("Given a technical owner, When MCP and widget guidance is read, Then automation stays on the review product boundary", async () => {
       const cliGuide = await requestHelper("/docs/cli");
       expect(cliGuide.status).toBe(200);
-      expect(await cliGuide.text()).toContain("CLI is the recommended");
+      expect(await cliGuide.text()).toContain("npx shiplet-cli --help");
 
       const publicMcpHtml = await (
         await requestHelper("/docs/code-mode-mcp")

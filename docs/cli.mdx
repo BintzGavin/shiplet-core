@@ -3,8 +3,7 @@ title: "CLI"
 description: "Prepare static reviews and manage portable Shiplet drafts, revisions, deployments, rollbacks, and exports."
 ---
 
-The CLI is the recommended route for local and agent workflows. It runs without
-a custom MCP server. It opens browser
+Run the CLI from your terminal or agent with `npx shiplet-cli`. It opens browser
 approval so you can authorize the CLI without copying credentials. One approval
 covers a working session of up to two hours by default.
 
@@ -12,21 +11,23 @@ The Shiplet CLI supports static publishing and the complete immutable revision
 workflow. It uses the same package, authorization, validation, approval, and
 optimistic-concurrency contracts as the kernel APIs.
 
-## Availability
+## Install and run
 
-The unscoped npm package `shiplet` belongs to an unrelated project. Do not run
-`npx shiplet` for this product. The intended package is `shiplet-cli`;
-registry publication is pending. Use the versioned GitHub release with
-Node.js 22.12.0 or newer; no source checkout is required.
+Use Node.js 22.12.0 or newer. The public npm package needs no source checkout
+or npm account:
 
 ```bash
-npx --package=https://github.com/BintzGavin/shiplet-core/releases/download/cli-v0.1.2/shiplet-cli-0.1.2.tgz shiplet --help
+npx shiplet-cli --help
 ```
 
-Install the same release once to use the shorter commands below:
+The unscoped npm package `shiplet` belongs to an unrelated project.
+Use `npx shiplet-cli`, not `npx shiplet`, for this product.
+
+All commands below also work with `npx shiplet-cli` in place of `shiplet`.
+To use the shorter `shiplet` commands, install globally:
 
 ```bash
-npm install -g https://github.com/BintzGavin/shiplet-core/releases/download/cli-v0.1.2/shiplet-cli-0.1.2.tgz
+npm install -g shiplet-cli
 shiplet --help
 ```
 
@@ -62,7 +63,7 @@ opening the browser until it expires. Run the CLI and browser on the same
 computer so the local callback is reachable. For an expired request, canceled
 approval, or mismatched callback, run the command again and use the new browser
 window. For remote or headless agents, use a narrowly scoped organization API
-key from a secret store for supported commands, or optional MCP. A dry run does
+key from a secret store for supported commands, or supported MCP. A dry run does
 not authenticate.
 
 ### Session lifetime
@@ -128,11 +129,11 @@ expires, keep its lifetime as short as your work allows and run `shiplet
 logout` when you finish. To approve a deployment action on its own instead, run
 it with `--no-session-cache`.
 
-## Feedback and optional MCP
+## Feedback and MCP
 
 Open the returned review link or [Feedback](https://shiplet.cc/feedback) to read,
 reply, and update tickets. The CLI does not yet expose feedback commands.
-[Code Mode MCP](/docs/code-mode-mcp) and documented REST operations are optional
+[Code Mode MCP](/docs/code-mode-mcp) and documented REST operations are supported
 for automation that needs those operations.
 
 ## Command map
@@ -274,7 +275,7 @@ promotion produces a conflict and leaves the winner active. Never replace the
 expected ID just to make the command pass; inspect the new active revision and
 fork or reconcile deliberately.
 
-`--approve` records explicit intent. The shipped source-checkout CLI requires
+`--approve` records explicit intent. The CLI requires
 a browser-approved session for deploy, promote, and rollback, and uses the
 saved session when one exists; it rejects raw organization keys for those
 commands before network access. Direct REST

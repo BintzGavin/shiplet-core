@@ -57,10 +57,10 @@ The CLI does not yet expose feedback list, reply, or status commands. You do
 not need a custom MCP server for this workflow.
 
 For automated feedback processing, use documented REST operations with a
-least-privilege key from a secret store, or optional MCP where permitted.
+least-privilege key from a secret store, or supported MCP.
 The examples below use MCP and retain the same scopes and project access checks.
 
-## Read feedback through optional MCP
+## Read feedback through MCP
 
 ```js
 async () =>
@@ -71,7 +71,7 @@ async () =>
   });
 ```
 
-## Reply through optional MCP
+## Reply through MCP
 
 ```js
 async () =>
@@ -82,7 +82,7 @@ async () =>
   });
 ```
 
-## Update status through optional MCP
+## Update status through MCP
 
 ```js
 async () =>

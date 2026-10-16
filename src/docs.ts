@@ -11,24 +11,24 @@ interface DocsPage {
 
 // prettier-ignore
 const DOCS_PUBLIC_CONTENT_SHA256: Record<string, string> = {
-  "cli": "d89f77ca209eb69c93d3726e1963de1178924cd2988624a763d2c65b5da39cf5",
+  "cli": "09fce96ca3a01879250dc723f5f82940666ece438b49db04b8536dd970961558",
   "self-hosting": "03dd91928c89a6911867c9c4f4625aa4455306c420af821408540ffb7eac1f38",
   "browser-capture": "1b6542d6a598b88c6dacda840930f1ff5095d9c0952778bb3a26672603a61643",
-  "introduction": "f37b8ab22fc93bf60e564466039fd36967f31cf4a7b8c81dd4ed8522fd923b71",
+  "introduction": "04360e14d9c10a3cce48907eebea6b53d1647ad094353e5e22d57193ced2c2e1",
   "why-shiplet":
     "a34409ae0097659bc90a6d30c9ae63733565e418412175f3871993a452735db4",
   "quickstart":
-    "9f1e90690cd17c5aa174a3a3974a380c0d40eeeeb3836fd2d4388a117def18a1",
+    "447ea3b2f09dcb48ea11813b612b697332cd4717c2fcc6c3a26e0815e3393120",
   "access-control":
     "79149325c91406a2390f14cd814e9a1eae1d3eac6010ac6181040518fa75967a",
   "publishing":
-    "b4cb00aa429cbce36985044bd69a797e7561afe3a03c83730a3d621c4ed8d451",
+    "0d94977a77ce4a701644a65f43eeec8002f4a141a3cdbf11d591b366a1c52c90",
   "extensions":
     "c834eef088f4ab55ed628fe95cc4b169445c7ca3f77732e8717e5c048fc70d13",
   "review-feedback":
-    "0797d9ed7960a999b829724045b81faf3350e5f796f99a2e36b184a5c2a0b73d",
+    "56b2b5ef78e69b80e9cf8e28252c3ed7e88ff6955d214ed3d839a22ebd3be78f",
   "code-mode-mcp":
-    "1a914fc601029735d1a7dad000e9a2d348663b2879934dcd59e3446ae3f7a8f5",
+    "262b9c534331c1d7bc76a4e2b8708e18f8f54fb79dbcbff960ef96e6c889624a",
   "api-keys":
     "9fb78882f2041ecf900e128ad19c53131617c987bcb347f084d46c871d2ed83a",
   "api-surface":
@@ -67,7 +67,12 @@ const DOCS_PAGES: DocsPage[] = [
 <h2>Customize the review experience</h2>
 <p>The built-in toolbar works for ordinary reviews. Shiplet can attach a custom widget and workflow when a team needs different controls or statuses. Those customizations belong to the review experience, so they do not become part of the work being reviewed. Read <a href="/docs/extensions">The review layer</a> for the boundary.</p>
 <h2>Automation</h2>
-<p>The CLI is the recommended route for local and agent workflows. It runs without a custom MCP server. <a href="/docs/cli">Install the CLI</a> and approve a browser session. <a href="/docs/code-mode-mcp">Code Mode MCP</a> is optional. CI can use a narrowly scoped organization API key with documented REST operations. The <a href="/openapi.json">OpenAPI document</a> is the machine-readable contract for documented public REST operations.</p>
+<ul>
+  <li><strong><a href="/docs/cli">CLI</a>:</strong> run <code>npx shiplet-cli --help</code>, then approve a browser session to prepare artifacts and manage revisions from your terminal or agent.</li>
+  <li><strong><a href="/docs/code-mode-mcp">Code Mode MCP</a>:</strong> connect an MCP client for API discovery, publishing, and feedback automation. Browser OAuth and supported agent registration are available.</li>
+  <li><strong><a href="/docs/api-keys">REST API</a>:</strong> use a narrowly scoped organization API key from a secret store for CI and unattended workflows.</li>
+</ul>
+<p>The <a href="/openapi.json">OpenAPI document</a> is the machine-readable contract for documented public REST operations.</p>
 <p><strong>Next:</strong> <a href="/docs/quickstart">prepare your first review artifact</a>.</p>`,
   },
   {
@@ -148,22 +153,21 @@ const DOCS_PAGES: DocsPage[] = [
       "Upload an artifact and open its review link in a few minutes.",
     group: "Start",
     body: `
-<p>The CLI is the recommended route for local and agent workflows. It runs without a custom MCP server. Use Node.js 22.12.0 or newer.</p>
+<p>Prepare your first review from your terminal or agent. Use Node.js 22.12.0 or newer; no source checkout, global install, or npm account is required.</p>
 <h2>1. Run the CLI</h2>
-<pre><code>npx --package=https://github.com/BintzGavin/shiplet-core/releases/download/cli-v0.1.2/shiplet-cli-0.1.2.tgz shiplet --help
-npm install -g https://github.com/BintzGavin/shiplet-core/releases/download/cli-v0.1.2/shiplet-cli-0.1.2.tgz</code></pre>
-<p>The unscoped <code>npx shiplet</code> is an unrelated project. The shiplet-cli npm release is pending; use the GitHub tarball. See <a href="/docs/cli">CLI setup</a>.</p>
+<pre><code>npx shiplet-cli --help</code></pre>
+<p>Use <code>npx shiplet-cli</code> for Shiplet; <code>npx shiplet</code> is an unrelated project. See <a href="/docs/cli">CLI setup</a> for global installation and the full command reference.</p>
 <h2>2. Prepare your build</h2>
-<pre><code>shiplet prepare ./dist --name "Review build" --subdomain review-build --visibility organization --dry-run --json</code></pre>
+<pre><code>npx shiplet-cli prepare ./dist --name "Review build" --subdomain review-build --visibility organization --dry-run --json</code></pre>
 <p>Replace <code>./dist</code> with your file or static build folder. Check the dry-run output, then rerun without <code>--dry-run</code>. Approve the browser session on the same computer. The CLI preserves folder paths and returns the review URL. Organization visibility is the safe default. View access does not grant edit access.</p>
-<p>Use <code>shiplet login</code>, <code>shiplet whoami</code>, and <code>shiplet logout</code> to manage the session. Later commands reuse it for two hours by default.</p>
+<p>Use <code>npx shiplet-cli login</code>, <code>npx shiplet-cli whoami</code>, and <code>npx shiplet-cli logout</code> to manage the session. Later commands reuse it for two hours by default.</p>
 <h2>3. Review and collect feedback</h2>
 <p>Open the returned review URL and leave a harmless comment. Find the ticket in <a href="/feedback">Feedback</a>. Reply and update status in the browser; the CLI does not expose feedback commands yet.</p>
 <p>Read <a href="/docs/review-feedback">Review feedback</a> for ticket work and <a href="/docs/access-control">Access control</a> before sharing the link.</p>
 <h2>Browser alternative</h2>
 <p><a href="/">Open the Shiplet app</a> and sign in when asked. A first-time user receives a default workspace and returns to the Prepare page. Keep <strong>Upload files</strong> selected to choose supported static files, name the artifact, choose its review subdomain, and select who can see it. Choose <strong>URL</strong> for an existing public preview.</p>
 <h2>Working with an agent</h2>
-<p>Give your agent the <a href="/docs/cli">CLI guide</a>, let it check the artifact with <code>shiplet prepare --dry-run</code>, then approve publishing in your browser. <a href="/docs/code-mode-mcp">Code Mode MCP</a> is optional for API discovery or operations beyond the CLI command set.</p>
+<p>Give your agent the <a href="/docs/cli">CLI guide</a>, let it check the artifact with <code>npx shiplet-cli prepare --dry-run</code>, then approve publishing in your browser. <a href="/docs/code-mode-mcp">Code Mode MCP</a> is also supported for clients that use MCP, including API discovery and feedback automation. Follow its connection guide to use browser OAuth or supported agent registration.</p>
 <h2>Troubleshooting</h2>
 <table class="docs-table" tabindex="0"><thead><tr><th>Problem</th><th>Safe recovery</th></tr></thead><tbody>
   <tr><td>A file is rejected</td><td>Remove the unsupported or oversized file and prepare again.</td></tr>
@@ -211,7 +215,7 @@ npm install -g https://github.com/BintzGavin/shiplet-core/releases/download/cli-
 <p>The artifact is the work being reviewed. Shiplet supplies the review link and trusted controls around it.</p>
 <h2>Prepare with the CLI</h2>
 <p><a href="/docs/cli">Install the CLI</a>, then inspect your file or build folder. No custom MCP server is required.</p>
-<pre><code>shiplet prepare ./dist --name "Campaign prototype" --subdomain campaign-prototype --visibility organization --dry-run --json</code></pre>
+<pre><code>npx shiplet-cli prepare ./dist --name "Campaign prototype" --subdomain campaign-prototype --visibility organization --dry-run --json</code></pre>
 <p>Remove <code>--dry-run</code> to publish and approve the browser session when prompted. Open the returned review URL. The CLI encodes assets and preserves folder paths for you.</p>
 <h2>Uploaded files</h2>
 <p>Direct REST clients send base64-encoded <code>assets</code>. The browser Prepare page accepts supported files directly. Shiplet serves <code>index.html</code> when present and creates a file review page when it is absent.</p>
@@ -257,7 +261,7 @@ npm install -g https://github.com/BintzGavin/shiplet-core/releases/download/cli-
     body: `
 <p>Shiplet stores contextual feedback as tickets attached to one review link. A ticket includes its comment, page location, status, reviewer identity, and optional screenshot context.</p>
 <h2>After publishing with the CLI</h2>
-<p><a href="/docs/cli">Prepare the artifact with the CLI</a>, then open its review URL. Read, reply, and update status in the browser. The CLI does not yet expose feedback list, reply, or status commands. No custom MCP server is required for this workflow. For automated feedback processing, use documented REST operations with a least-privilege key from a secret store, or optional MCP where permitted.</p>
+<p><a href="/docs/cli">Prepare the artifact with the CLI</a>, then open its review URL. Read, reply, and update status in the browser. The CLI does not yet expose feedback list, reply, or status commands. No custom MCP server is required for this workflow. For automated feedback processing, use documented REST operations with a least-privilege key from a secret store, or supported MCP.</p>
 <h2>Review in the browser</h2>
 <ol><li>Open the review link.</li><li>Choose the page or a visible element.</li><li>Leave a comment and submit it through the trusted toolbar.</li><li>Reply, update status, mention a collaborator, or watch the Shiplet from its detail page.</li></ol>
 <p>Use <a href="/feedback">Feedback</a> for the global review queue and <a href="/inbox">Inbox</a> for notifications. If live updates stop, reload the trusted review host; persisted feedback remains available.</p>
@@ -271,12 +275,15 @@ npm install -g https://github.com/BintzGavin/shiplet-core/releases/download/cli-
     description: "Authorize a local CLI command in your browser with a short-lived session.",
     group: "Automation",
     body: `
-<p>The CLI is the recommended route for local and agent workflows. It runs without a custom MCP server. It opens your browser so you can approve a session without copying credentials.</p>
+<p>Run the CLI from your terminal or agent with <code>npx shiplet-cli</code>. It opens your browser so you can approve a session without copying credentials.</p>
 <h2>Install and run</h2>
-<p>Use Node.js 22.12.0 or newer. The unscoped npm package <code>shiplet</code> belongs to an unrelated project. Do not use <code>npx shiplet</code> for this product. The intended package is <code>shiplet-cli</code>; registry publication is pending. Use the versioned GitHub release without a source checkout.</p>
-<pre><code>npx --package=https://github.com/BintzGavin/shiplet-core/releases/download/cli-v0.1.2/shiplet-cli-0.1.2.tgz shiplet --help
-npm install -g https://github.com/BintzGavin/shiplet-core/releases/download/cli-v0.1.2/shiplet-cli-0.1.2.tgz
-shiplet prepare ./dist --name "Review build" --subdomain review-build --visibility organization --dry-run --json</code></pre>
+<p>Use Node.js 22.12.0 or newer. The public npm package needs no source checkout or npm account.</p>
+<pre><code>npx shiplet-cli --help
+npx shiplet-cli prepare ./dist --name "Review build" --subdomain review-build --visibility organization --dry-run --json</code></pre>
+<p>The unscoped npm package <code>shiplet</code> belongs to an unrelated project. Use <code>npx shiplet-cli</code>, not <code>npx shiplet</code>, for this product.</p>
+<p>All commands below also work with <code>npx shiplet-cli</code> in place of <code>shiplet</code>. To use the shorter <code>shiplet</code> commands, install globally:</p>
+<pre><code>npm install -g shiplet-cli
+shiplet --help</code></pre>
 <p>Replace <code>./dist</code> with your artifact folder and choose an available subdomain. Add <code>--dry-run</code> to inspect the artifact before publishing; a dry run does not authenticate.</p>
 <h2>Approve a session</h2>
 <ol><li>Run <code>shiplet login</code>, or any network command without an API key, to use browser authorization.</li><li>Sign in to Shiplet if asked. Check the account shown on the approval page.</li><li>Select <strong>Authorize CLI</strong> only if you started the command.</li><li>Select <strong>Return to CLI</strong> on the approval page to complete the local callback.</li><li>Return to your terminal or agent for the result. You can close the browser window.</li></ol>
@@ -284,7 +291,7 @@ shiplet prepare ./dist --name "Review build" --subdomain review-build --visibili
 <p>Run <code>shiplet whoami</code> to see the account, origin, and expiry, and <code>shiplet logout</code> to revoke the session on Shiplet immediately and delete it locally. To approve every command separately instead, pass <code>--no-session-cache</code> or set <code>SHIPLET_CLI_SESSION_CACHE=0</code>.</p>
 <p>Your existing access still applies. A saved session can also deploy, promote, and roll back while it lasts, and each of those commands still requires <code>--approve</code>. Keep the lifetime short and log out when you finish.</p>
 <h2>If authorization stops</h2>
-<p>For an expired request, canceled approval, or mismatched callback, run the command again and use the new browser window. Run the CLI and browser on the same computer so the browser can reach the local callback. For a remote or headless agent, use a narrowly scoped organization API key from a secret store for supported commands, or optional <a href="/docs/code-mode-mcp">MCP</a>.</p>
+<p>For an expired request, canceled approval, or mismatched callback, run the command again and use the new browser window. Run the CLI and browser on the same computer so the browser can reach the local callback. For a remote or headless agent, use a narrowly scoped organization API key from a secret store for supported commands, or supported <a href="/docs/code-mode-mcp">MCP</a>.</p>
 <h2>Other authentication routes</h2>
 <ul><li><strong>Human review:</strong> <a href="/auth/login">sign in in the browser</a>.</li><li><strong>MCP clients:</strong> use <a href="/docs/code-mode-mcp">Code Mode MCP</a> with browser OAuth or supported agent registration.</li><li><strong>CI and unattended jobs:</strong> use narrowly scoped <a href="/docs/api-keys">organization API keys</a> from a secret store.</li></ul>`,
   },
@@ -295,7 +302,7 @@ shiplet prepare ./dist --name "Review build" --subdomain review-build --visibili
       "Connect an agent, then prepare artifacts and work with feedback.",
     group: "Automation",
     body: `
-<p>The CLI is the recommended route for local and agent workflows. It runs without a custom MCP server. Start with <a href="/docs/cli">CLI setup</a>. MCP is an optional alternative when your organization permits custom MCP servers and you need API discovery or operations beyond the CLI command set.</p>
+<p>Code Mode MCP is a supported way to connect an agent to Shiplet. For terminal workflows, use the <a href="/docs/cli">CLI</a> with <code>npx shiplet-cli</code>.</p>
 <p>Shiplet MCP lets an agent discover the supported API and call it through code. Interactive clients authenticate in the browser. A registered external agent can request access to one Shiplet organization when the environment enables agent registration.</p>
 <h2>Endpoint</h2>
 <pre><code>https://shiplet.cc/api/mcp</code></pre>

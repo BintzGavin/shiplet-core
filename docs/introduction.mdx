@@ -51,11 +51,15 @@ experience, so they do not become part of the work being reviewed. Read
 
 ## Automation
 
-The CLI is the recommended route for local and agent workflows. It runs without
-a custom MCP server. [Install the CLI](/docs/cli) and approve a browser session.
-[Code Mode MCP](/docs/code-mode-mcp) is optional. CI can use a narrowly scoped
-organization API key from a secret store with documented REST operations. The
-[OpenAPI document](https://shiplet.cc/openapi.json) is the machine-readable
+- **[CLI](/docs/cli):** run `npx shiplet-cli --help`, then approve a browser
+  session to prepare artifacts and manage revisions from your terminal or agent.
+- **[Code Mode MCP](/docs/code-mode-mcp):** connect an MCP client for API
+  discovery, publishing, and feedback automation. Browser OAuth and supported
+  agent registration are available.
+- **[REST API](/docs/api-keys):** use a narrowly scoped organization API key
+  from a secret store for CI and unattended workflows.
+
+The [OpenAPI document](https://shiplet.cc/openapi.json) is the machine-readable
 contract for documented public REST operations.
 
 ## Next action

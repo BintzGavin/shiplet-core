@@ -16,7 +16,7 @@ tickets.
 - **[Collect feedback](https://shiplet.cc/docs/review-feedback):** leave
   contextual comments and work through review tickets.
 - **[Automate with an agent](https://shiplet.cc/docs/cli):** connect
-  through the installable CLI, with Code Mode MCP as an optional alternative.
+  through the installable CLI, with Code Mode MCP also supported.
 - **[Manage access](https://shiplet.cc/docs/access-control):** choose who can
   view or edit each Shiplet.
 - **[Connect a website](https://shiplet.cc/docs/embed):** attach the
@@ -50,14 +50,14 @@ For local and agent workflows, start with the [CLI guide](https://shiplet.cc/doc
 No source checkout or custom MCP server is required:
 
 ```bash
-npx --package=https://github.com/BintzGavin/shiplet-core/releases/download/cli-v0.1.2/shiplet-cli-0.1.2.tgz shiplet --help
+npx shiplet-cli --help
 ```
 
-The unscoped npm package `shiplet` belongs to an unrelated project. Publication
-of `shiplet-cli` is pending; use the versioned GitHub tarball above.
+The public `shiplet-cli` package requires no npm account to install.
+The unscoped npm package `shiplet` belongs to an unrelated project.
 Browser approval creates a reusable session for two hours by default. Use
-`shiplet whoami` to inspect it and `shiplet logout` to revoke it.
-[Code Mode MCP](https://shiplet.cc/docs/code-mode-mcp) remains optional for API
+`npx shiplet-cli whoami` to inspect it and `npx shiplet-cli logout` to revoke it.
+[Code Mode MCP](https://shiplet.cc/docs/code-mode-mcp) is also supported for API
 discovery and operations beyond the CLI, including feedback automation. Its
 endpoint is `https://shiplet.cc/api/mcp`.
 
