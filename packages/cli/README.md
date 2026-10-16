@@ -3,20 +3,19 @@
 Prepare static artifacts for review and manage portable drafts, revisions,
 deployments, and exports. Requires Node.js 22.12.0 or newer.
 
-The unscoped npm package `shiplet` belongs to an unrelated project. Do not use
-`npx shiplet` to run this CLI. The intended registry name is
-`shiplet-cli`; registry publication is pending.
-
-Run the versioned GitHub release without a source checkout:
+Run the public package without a source checkout or npm account:
 
 ```sh
-npx --package=https://github.com/BintzGavin/shiplet-core/releases/download/cli-v0.1.2/shiplet-cli-0.1.2.tgz shiplet --help
+npx shiplet-cli --help
 ```
 
-Or install that same tarball once:
+The unscoped npm package `shiplet` belongs to an unrelated project.
+Use `npx shiplet-cli` for this CLI.
+
+Or install globally to use the `shiplet` command:
 
 ```sh
-npm install -g https://github.com/BintzGavin/shiplet-core/releases/download/cli-v0.1.2/shiplet-cli-0.1.2.tgz
+npm install -g shiplet-cli
 shiplet prepare ./dist --name "Review build" --subdomain review-build --visibility organization --dry-run --json
 ```
 
@@ -29,7 +28,7 @@ browser must run on the same computer. Credentials are never printed.
 Draft writes require the expected `--version`; activation requires
 `--expected-active` and `--approve`. Packaging does not change these checks.
 The CLI has no feedback list/reply/status commands: use the review link or
-[Feedback](https://shiplet.cc/feedback), with MCP or REST as optional automation.
+[Feedback](https://shiplet.cc/feedback), with MCP and REST also supported for automation.
 
 See the [CLI guide](https://shiplet.cc/docs/cli) for all commands, session storage,
 scope restrictions, and trusted `--api-url` overrides.

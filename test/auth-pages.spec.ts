@@ -58,7 +58,7 @@ describe("authentication page experience", () => {
     expect(await response.text()).toBe("Missing WorkOS authorization code");
   });
 
-  it("recommends the installable CLI and distinguishes the occupied npm name", async () => {
+  it("lists the npm CLI before MCP while documenting both supported routes", async () => {
     const home = await (await request("/")).text();
     expect(home).toContain('href="/auth/login"');
     expect(home).toContain('href="/docs/cli">Working with an agent? Start with the CLI');
@@ -66,18 +66,32 @@ describe("authentication page experience", () => {
       const response = await request(path);
       expect(response.status).toBe(200);
       const guide = await response.text();
-      expect(guide).toContain("CLI is the recommended");
+      expect(guide).toContain('href="/docs/cli"');
+      expect(guide).toContain('href="/docs/code-mode-mcp"');
+      expect(guide.indexOf('href="/docs/cli"')).toBeLessThan(guide.indexOf('href="/docs/code-mode-mcp"'));
       expect(guide).not.toContain("MCP is the preferred");
     }
     const cli = await (await request("/docs/cli")).text();
-    expect(cli).toContain("npx --package=https://github.com/BintzGavin/shiplet-core/releases/download/cli-v0.1.2/shiplet-cli-0.1.2.tgz shiplet --help");
+    expect(cli).toContain("npx shiplet-cli --help");
     expect(cli).toContain("unrelated project");
     expect(cli).toContain("shiplet-cli");
     expect(cli).not.toContain("@bintzgavin/shiplet");
-    expect(cli).toContain("registry publication is pending");
+    expect(cli).not.toContain("registry publication is pending");
+    expect(cli).toContain("npm install -g shiplet-cli");
     expect(cli).toContain("shiplet login");
     expect(cli).toContain("two hours");
     expect(cli).toContain("--no-session-cache");
-    expect(await (await request("/llms.txt")).text()).toContain("CLI is the recommended");
+    const quickstart = await (await request("/docs/quickstart")).text();
+    expect(quickstart).toContain("npx shiplet-cli prepare ./dist");
+    expect(quickstart).not.toContain("npm install -g");
+    expect(quickstart).toContain("Code Mode MCP</a> is also supported");
+    const mcp = await (await request("/docs/code-mode-mcp")).text();
+    expect(mcp).toContain("https://shiplet.cc/api/mcp");
+    expect(mcp).toContain("search");
+    expect(mcp).toContain("execute");
+    const discovery = await (await request("/llms.txt")).text();
+    expect(discovery).toContain("npx shiplet-cli --help");
+    expect(discovery).not.toContain("publication is pending");
+    expect(discovery.indexOf("Agent setup (CLI)")).toBeLessThan(discovery.indexOf("Code Mode MCP:"));
   });
 });
