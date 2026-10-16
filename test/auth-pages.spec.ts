@@ -58,22 +58,24 @@ describe("authentication page experience", () => {
     expect(await response.text()).toBe("Missing WorkOS authorization code");
   });
 
-  it("recommends MCP to agents while retaining CLI browser authorization", async () => {
+  it("recommends the installable CLI and distinguishes the occupied npm name", async () => {
     const home = await (await request("/")).text();
     expect(home).toContain('href="/auth/login"');
-    expect(home).toContain('href="/docs/code-mode-mcp">Working with an agent? Start with MCP');
-    const cli = await request("/docs/cli");
-    expect(cli.status).toBe(200);
-    const html = await cli.text();
-    expect(html).toContain("alternative for local command-line workflows");
-    expect(html).toContain("source checkout");
-    expect(html).toContain("npm run shiplet -- prepare");
-    expect(html).toContain('href="/docs/code-mode-mcp"');
+    expect(home).toContain('href="/docs/cli">Working with an agent? Start with the CLI');
     for (const path of ["/docs", "/docs/quickstart", "/docs/cli", "/docs/code-mode-mcp"]) {
-      const guide = await (await request(path)).text();
-      expect(guide).toContain("preferred route for agent work");
-      expect(guide).not.toContain("CLI is the recommended");
+      const response = await request(path);
+      expect(response.status).toBe(200);
+      const guide = await response.text();
+      expect(guide).toContain("CLI is the recommended");
+      expect(guide).not.toContain("MCP is the preferred");
     }
-    expect(await (await request("/llms.txt")).text()).toContain("Code Mode MCP is the preferred route for agent work");
+    const cli = await (await request("/docs/cli")).text();
+    expect(cli).toContain("npx --package=https://github.com/BintzGavin/shiplet-core/releases/download/cli-v0.1.0/bintzgavin-shiplet-0.1.0.tgz shiplet --help");
+    expect(cli).toContain("unrelated project");
+    expect(cli).toContain("registry publication is pending");
+    expect(cli).toContain("shiplet login");
+    expect(cli).toContain("two hours");
+    expect(cli).toContain("--no-session-cache");
+    expect(await (await request("/llms.txt")).text()).toContain("CLI is the recommended");
   });
 });

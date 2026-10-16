@@ -187,11 +187,11 @@ Add a trusted review layer to builds, files, and live URLs for contextual feedba
 - Collect in-context review feedback directly on artifacts.
 - Keep the artifact separate from Shiplet's trusted review layer.
 - Customize the review layer with a sandboxed widget when the built-in toolbar does not fit the team's process.
-- Hand review artifacts and feedback to agents through Code Mode MCP or documented REST operations.
+- Prepare artifacts with the installable CLI; use the browser, scoped REST, or optional MCP for feedback.
 
 ## Machine-readable resources
 
-- Agent integration (preferred MCP route): ${absoluteSiteUrl(baseUrl, "/docs/code-mode-mcp")}
+- Agent setup (CLI): ${absoluteSiteUrl(baseUrl, "/docs/cli")}
 - Website: ${absoluteSiteUrl(baseUrl, "/")}
 - Documentation: ${absoluteSiteUrl(baseUrl, "/docs")}
 - Why Shiplet: ${absoluteSiteUrl(baseUrl, "/docs/why-shiplet")}
@@ -204,7 +204,7 @@ Add a trusted review layer to builds, files, and live URLs for contextual feedba
 
 ## Access model
 
-Code Mode MCP is the preferred route for agent work. Connect an MCP client and approve access in the browser. The CLI is an alternative for local command-line workflows: run commands from a Shiplet source checkout and approve a session in your browser. One approval is reused for two hours by default, up to an 8 hour maximum, until it expires or shiplet logout revokes it. Deploy, promote, and rollback also require --approve on each command. The CLI and browser must run on the same computer; there is no public npm package. Use scoped organization API keys for unattended CI.
+The CLI is the recommended route for local and agent workflows. It runs without a custom MCP server. Install and run the versioned release: npx --package=https://github.com/BintzGavin/shiplet-core/releases/download/cli-v0.1.0/bintzgavin-shiplet-0.1.0.tgz shiplet --help. The unscoped npm package shiplet belongs to an unrelated project; @bintzgavin/shiplet registry publication is pending. No source checkout is required. Browser-approved CLI sessions last two hours by default and are stored in a keyring or user-only file. Use shiplet whoami and shiplet logout to inspect or revoke the session. Sessions have an 8 hour maximum; deploy, promote, and rollback still require --approve on each command. The CLI and browser must run on the same computer. Feedback commands are not yet in the CLI: use the browser, scoped REST, or optional Code Mode MCP. Use scoped organization API keys from a secret store for unattended CI.
 
 Public discovery files describe Shiplet. Preparing review artifacts, organization management, API access, and MCP execution require authenticated access or an organization API token.
 `;

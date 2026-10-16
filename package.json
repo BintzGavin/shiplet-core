@@ -11,6 +11,8 @@
 		"audit:licenses": "node scripts/platform-client-license-audit.mjs",
 		"audit:security": "npm audit --audit-level=high",
 		"build": "npm run generate:public && wrangler deploy --dry-run && npm run build:support-workers",
+		"build:cli": "node scripts/build-cli-package.mjs",
+		"test:cli-package": "node --test scripts/cli-package.test.mjs",
 		"build:platform-client": "node scripts/build-platform-client.mjs",
 		"build:support-workers": "wrangler deploy --dry-run --config workers/cloudflare-control-plane/wrangler.jsonc && wrangler deploy --dry-run --config workers/managed-runtime-gateway/wrangler.jsonc && wrangler deploy --dry-run --config workers/deny-egress/wrangler.jsonc",
 		"cf-typegen": "wrangler types",
