@@ -1192,10 +1192,10 @@ describe("Shiplet", () => {
       const html = await response.text();
 
       expect(response.status).toBe(200);
-      expect(html).toContain("Open the Prepare page");
-      expect(html).toContain("Choose the work to review");
-      expect(html).toContain("Open the review link");
-      expect(html).toContain("Connect with MCP");
+      expect(html).toContain("1. Run the CLI");
+      expect(html).toContain("2. Prepare your build");
+      expect(html).toContain("3. Review and collect feedback");
+      expect(html).toContain("Code Mode MCP</a> is optional");
       expect(html).toContain('href="/docs/review-feedback"');
       expect(html).not.toContain('href="/docs/packages-revisions"');
       expect(html).not.toContain('href="/docs/deployment"');
@@ -1216,9 +1216,9 @@ describe("Shiplet", () => {
       expect(quickstartHtml).toContain("supported static files");
       expect(quickstartHtml).not.toContain("source-checkout CLI");
       expect(quickstartHtml.indexOf("safe default")).toBeLessThan(
-        quickstartHtml.indexOf("Open the review link"),
+        quickstartHtml.indexOf("3. Review and collect feedback"),
       );
-      expect(quickstartHtml).toContain("Connect with MCP");
+      expect(quickstartHtml).toContain("Code Mode MCP</a> is optional");
 
       const introduction = await requestHelper("/docs");
       const introductionHtml = await introduction.text();
@@ -1251,7 +1251,7 @@ describe("Shiplet", () => {
     it("Given a technical owner, When MCP and widget guidance is read, Then automation stays on the review product boundary", async () => {
       const cliGuide = await requestHelper("/docs/cli");
       expect(cliGuide.status).toBe(200);
-      expect(await cliGuide.text()).toContain("alternative for local command-line workflows");
+      expect(await cliGuide.text()).toContain("CLI is the recommended");
 
       const publicMcpHtml = await (
         await requestHelper("/docs/code-mode-mcp")

@@ -19805,7 +19805,7 @@ app.get("/", async (c) => {
 						<a class="link-btn" href="/auth/login">Prepare a review</a>
 						<a class="btn btn-secondary" href="/play">Try the sandbox</a>
 						<a class="auth-docs-link" href="/docs/why-shiplet">Docs</a>
-						<div class="auth-agent-entry"><a href="/docs/code-mode-mcp">Working with an agent? Start with MCP</a><p>Connect your agent through Code Mode MCP and approve access in your browser.</p></div>
+						<div class="auth-agent-entry"><a href="/docs/cli">Working with an agent? Start with the CLI</a><p>Run the installable CLI and approve access in your browser. No custom MCP server is required.</p></div>
 					</div>
 				</div>`,
         {

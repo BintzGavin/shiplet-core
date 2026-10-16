@@ -1,0 +1,17 @@
+{
+  "name": "@bintzgavin/shiplet",
+  "version": "0.1.0",
+  "description": "Prepare review artifacts and manage Shiplet revisions from your terminal.",
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/BintzGavin/shiplet-core.git",
+    "directory": "packages/cli"
+  },
+  "homepage": "https://shiplet.cc/docs/cli",
+  "bin": { "shiplet": "lib/shiplet.cjs" },
+  "files": ["lib/*.cjs", "LICENSE", "README.md"],
+  "engines": { "node": ">=22.12.0" },
+  "dependencies": { "acorn": "8.17.0" },
+  "publishConfig": { "access": "public", "registry": "https://registry.npmjs.org" }
+}

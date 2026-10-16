@@ -49,7 +49,18 @@ Shiplet detail view to stop watching. Inbox items can be marked read without
 changing the underlying feedback status. A denied mention, watch, notification,
 or presence request does not widen access and does not discard persisted events.
 
-## Read feedback through MCP
+## After publishing with the CLI
+
+[Prepare the artifact with the CLI](/docs/cli), then open its returned review
+URL. Read, reply, and update status in the browser using the steps above.
+The CLI does not yet expose feedback list, reply, or status commands. You do
+not need a custom MCP server for this workflow.
+
+For automated feedback processing, use documented REST operations with a
+least-privilege key from a secret store, or optional MCP where permitted.
+The examples below use MCP and retain the same scopes and project access checks.
+
+## Read feedback through optional MCP
 
 ```js
 async () =>
@@ -60,7 +71,7 @@ async () =>
   });
 ```
 
-## Reply through MCP
+## Reply through optional MCP
 
 ```js
 async () =>
@@ -71,7 +82,7 @@ async () =>
   });
 ```
 
-## Update status through MCP
+## Update status through optional MCP
 
 ```js
 async () =>

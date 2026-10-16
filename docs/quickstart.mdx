@@ -3,19 +3,51 @@ title: "Quickstart"
 description: "Upload an artifact and open its review link in a few minutes."
 ---
 
-The fastest path starts in the browser.
+The CLI is the recommended route for local and agent workflows. It runs without
+a custom MCP server. Use Node.js 22.12.0 or newer.
 
-## 1. Open the Prepare page
+## 1. Run the CLI
+
+```bash
+npx --package=https://github.com/BintzGavin/shiplet-core/releases/download/cli-v0.1.0/bintzgavin-shiplet-0.1.0.tgz shiplet --help
+npm install -g https://github.com/BintzGavin/shiplet-core/releases/download/cli-v0.1.0/bintzgavin-shiplet-0.1.0.tgz
+```
+
+The unscoped `npx shiplet` is an unrelated project. The scoped npm release is
+pending; the GitHub tarball is the installable route. See [CLI setup](/docs/cli).
+
+## 2. Prepare your build
+
+```bash
+shiplet prepare ./dist --name "Review build" --subdomain review-build --visibility organization --dry-run --json
+```
+
+Replace `./dist` with your file or static build folder. Check the dry-run output,
+then rerun without `--dry-run`. Approve the browser session on the same computer.
+The CLI preserves folder paths, defaults to organization visibility, and returns
+the review URL. `shiplet login`, `shiplet whoami`, and `shiplet logout` manage the
+session; later commands reuse it for two hours by default.
+
+## 3. Review and collect feedback
+
+Open the returned review URL and leave a harmless comment. Find the ticket in
+[Feedback](https://shiplet.cc/feedback). Feedback replies and status changes are
+available in the browser; the CLI does not expose those commands yet.
+
+## Browser alternative
+
+Use this path if you cannot install or run Node.js.
+
+### Open the Prepare page
 
 [Open the Shiplet app](https://shiplet.cc/). Sign in when asked. Shiplet creates
 a default workspace for a first-time user and returns to the Prepare page.
 
-## 2. Choose the work to review
+### Choose the work to review
 
 Keep **Upload files** selected, then choose one or more supported files: static
 HTML, CSS, JavaScript, images, video, audio, PDFs, source code, structured data,
-documents, archives, or GIS data. Use [Code Mode MCP](/docs/code-mode-mcp) or
-direct REST when an automated build needs to preserve folder paths. Choose
+documents, archives, or GIS data. Use the CLI to preserve folder paths. Choose
 **URL** when the artifact already has a public preview origin.
 
 Shiplet renders common browser media directly. It shows readable text for UTF-8
@@ -34,7 +66,7 @@ can see the review:
 View access does not grant edit access. Confirm the visibility, then select
 **Prepare for review**.
 
-## 3. Open the review link
+### Open the review link
 
 Shiplet places the artifact inside a sandboxed frame and shows trusted review
 controls around it. Leave a harmless comment, then open the Shiplet detail page
@@ -45,23 +77,11 @@ Read [Access control](/docs/access-control) before sharing the link.
 
 ## Working with an agent
 
-Start with [Code Mode MCP](/docs/code-mode-mcp), the preferred route for agent work.
-Connect your MCP client and approve access in your browser.
-
-### Connect with MCP
-
-Connect an MCP client to:
-
-```txt
-https://shiplet.cc/api/mcp
-```
-
-The first protected action opens AuthKit in the browser. After approval, the
-agent can discover the supported API and prepare artifacts through Shiplet's
-two core tools. [Code Mode MCP](/docs/code-mode-mcp) includes a complete setup
-example.
-
-For local command-line workflows, [CLI authentication](/docs/cli) is also available.
+Give your agent the [CLI guide](/docs/cli), let it check the artifact with
+`shiplet prepare --dry-run`, then approve publishing in your browser.
+A custom MCP server is not required. [Code Mode MCP](/docs/code-mode-mcp) is
+optional when your organization permits it and your agent needs API discovery
+or feedback operations beyond the CLI command set.
 
 ## Troubleshooting
 

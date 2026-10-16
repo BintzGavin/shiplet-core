@@ -7,9 +7,21 @@ Shiplet prepares work after a build and before review. The artifact is the work
 being reviewed. Shiplet supplies the review link and trusted controls around
 it.
 
+## Prepare with the CLI
+
+[Install the CLI](/docs/cli), then inspect your file or build folder:
+
+```bash
+shiplet prepare ./dist --name "Campaign prototype" --subdomain campaign-prototype --visibility organization --dry-run --json
+```
+
+Remove `--dry-run` to publish and approve the browser session when prompted.
+Open the returned review URL. The CLI encodes the assets and preserves folder
+paths for you; no custom MCP server is required.
+
 ## Uploaded files
 
-Agents, CI jobs, and local scripts send files as base64-encoded `assets`. The
+Direct REST clients send files as base64-encoded `assets`. The
 browser Prepare page accepts supported files directly.
 
 The `subdomain` becomes the review URL. For example,

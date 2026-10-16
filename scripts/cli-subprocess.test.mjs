@@ -9,6 +9,7 @@ import { test } from "node:test";
 import { promisify } from "node:util";
 
 const execFileAsync = promisify(execFile);
+const cliPath = path.resolve(process.argv[2] || "src/cli/shiplet.cjs");
 
 function base64Url(buffer) {
   return Buffer.from(buffer)
@@ -82,7 +83,6 @@ test("the shipped CLI binary completes deploy through browser PKCE without print
     `#!${process.execPath}\nconst u=new URL(process.argv[2]);fetch(u).then(()=>fetch(u.searchParams.get("redirect_uri")+"?code=shiplet_cli_code_"+"a".repeat(64)+"&state="+encodeURIComponent(u.searchParams.get("state"))));\n`,
   );
   await chmod(launcherPath, 0o700);
-  const cliPath = path.resolve("src/cli/shiplet.cjs");
   const { stdout, stderr } = await execFileAsync(
     process.execPath,
     [
@@ -177,7 +177,6 @@ test("the shipped CLI reuses one browser approval across commands, including dep
     `#!${process.execPath}\nconst u=new URL(process.argv[2]);fetch(u).then(()=>fetch(u.searchParams.get("redirect_uri")+"?code=shiplet_cli_code_"+"a".repeat(64)+"&state="+encodeURIComponent(u.searchParams.get("state"))));\n`,
   );
   await chmod(launcherPath, 0o700);
-  const cliPath = path.resolve("src/cli/shiplet.cjs");
   const env = { PATH: directory, SHIPLET_CLI_SESSION_STORE: "file", SHIPLET_CONFIG_DIR: configDir };
   const apiUrl = `http://127.0.0.1:${port}`;
   const run = (args) => execFileAsync(process.execPath, [cliPath, ...args, "--api-url", apiUrl], { env, timeout: 15_000 });
