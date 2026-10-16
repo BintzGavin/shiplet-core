@@ -41,7 +41,7 @@ test("the distributable installs in isolation and runs the real CLI, including b
 	assert.match(prepared.stdout, /packed-cli-review/);
 	assert.match(prepared.stdout, /index.html/);
 	await assert.rejects(run(["not-a-command"]), (error) => error.code === 1 && /Unknown command/.test(error.stderr));
-	const auth = await exec(process.execPath, [path.join(root, "scripts/cli-subprocess.test.mjs"), path.join(installed, "lib/shiplet.cjs")], options);
+	const auth = await exec(process.execPath, ["--test-reporter=tap", path.join(root, "scripts/cli-subprocess.test.mjs"), path.join(installed, "lib/shiplet.cjs")], options);
 	assert.match(auth.stdout, /# fail 0/);
 	assert.match(auth.stdout, /# tests 2/);
 });

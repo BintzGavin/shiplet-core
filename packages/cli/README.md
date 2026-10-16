@@ -10,13 +10,13 @@ The unscoped npm package `shiplet` belongs to an unrelated project. Do not use
 Run the versioned GitHub release without a source checkout:
 
 ```sh
-npx --package=https://github.com/BintzGavin/shiplet-core/releases/download/cli-v0.1.0/bintzgavin-shiplet-0.1.0.tgz shiplet --help
+npx --package=https://github.com/BintzGavin/shiplet-core/releases/download/cli-v0.1.1/bintzgavin-shiplet-0.1.1.tgz shiplet --help
 ```
 
 Or install that same tarball once:
 
 ```sh
-npm install -g https://github.com/BintzGavin/shiplet-core/releases/download/cli-v0.1.0/bintzgavin-shiplet-0.1.0.tgz
+npm install -g https://github.com/BintzGavin/shiplet-core/releases/download/cli-v0.1.1/bintzgavin-shiplet-0.1.1.tgz
 shiplet prepare ./dist --name "Review build" --subdomain review-build --visibility organization --dry-run --json
 ```
 

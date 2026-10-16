@@ -25,8 +25,8 @@ flowchart LR
 3. Build into a fresh directory outside the repository:
 
    ```sh
-   node scripts/build-cli-package.mjs /tmp/shiplet-cli-release-0.1.0
-   npm pack /tmp/shiplet-cli-release-0.1.0/package --pack-destination /tmp/shiplet-cli-release-0.1.0 --ignore-scripts
+   node scripts/build-cli-package.mjs /tmp/shiplet-cli-release-0.1.1
+   npm pack /tmp/shiplet-cli-release-0.1.1/package --pack-destination /tmp/shiplet-cli-release-0.1.1 --ignore-scripts
    ```
 
 4. Review the packed file list. Publish an immutable `cli-v<version>` tag at the

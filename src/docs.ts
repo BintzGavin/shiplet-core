@@ -11,14 +11,14 @@ interface DocsPage {
 
 // prettier-ignore
 const DOCS_PUBLIC_CONTENT_SHA256: Record<string, string> = {
-  "cli": "d891602f4d1e81caea2e1d23b5f9704bf1e41ecc674770080a85b23e314a00a5",
+  "cli": "d4651f64cad6f27d10fa890e8003c6d4741c34ffdd2cf3a7f562e310285f8314",
   "self-hosting": "03dd91928c89a6911867c9c4f4625aa4455306c420af821408540ffb7eac1f38",
   "browser-capture": "1b6542d6a598b88c6dacda840930f1ff5095d9c0952778bb3a26672603a61643",
   "introduction": "f37b8ab22fc93bf60e564466039fd36967f31cf4a7b8c81dd4ed8522fd923b71",
   "why-shiplet":
     "a34409ae0097659bc90a6d30c9ae63733565e418412175f3871993a452735db4",
   "quickstart":
-    "aa4ecb4646e059cc278f5fe7f3a4366959a15a206491dde020e0d9f0c004490e",
+    "5e854ddd45304ebcc1cde3f6fe048de153a9f9bea8502fcbd45039e5fc544464",
   "access-control":
     "79149325c91406a2390f14cd814e9a1eae1d3eac6010ac6181040518fa75967a",
   "publishing":
@@ -150,8 +150,8 @@ const DOCS_PAGES: DocsPage[] = [
     body: `
 <p>The CLI is the recommended route for local and agent workflows. It runs without a custom MCP server. Use Node.js 22.12.0 or newer.</p>
 <h2>1. Run the CLI</h2>
-<pre><code>npx --package=https://github.com/BintzGavin/shiplet-core/releases/download/cli-v0.1.0/bintzgavin-shiplet-0.1.0.tgz shiplet --help
-npm install -g https://github.com/BintzGavin/shiplet-core/releases/download/cli-v0.1.0/bintzgavin-shiplet-0.1.0.tgz</code></pre>
+<pre><code>npx --package=https://github.com/BintzGavin/shiplet-core/releases/download/cli-v0.1.1/bintzgavin-shiplet-0.1.1.tgz shiplet --help
+npm install -g https://github.com/BintzGavin/shiplet-core/releases/download/cli-v0.1.1/bintzgavin-shiplet-0.1.1.tgz</code></pre>
 <p>The unscoped <code>npx shiplet</code> is an unrelated project. The scoped npm release is pending; use the GitHub tarball. See <a href="/docs/cli">CLI setup</a>.</p>
 <h2>2. Prepare your build</h2>
 <pre><code>shiplet prepare ./dist --name "Review build" --subdomain review-build --visibility organization --dry-run --json</code></pre>
@@ -274,8 +274,8 @@ npm install -g https://github.com/BintzGavin/shiplet-core/releases/download/cli-
 <p>The CLI is the recommended route for local and agent workflows. It runs without a custom MCP server. It opens your browser so you can approve a session without copying credentials.</p>
 <h2>Install and run</h2>
 <p>Use Node.js 22.12.0 or newer. The unscoped npm package <code>shiplet</code> belongs to an unrelated project. Do not use <code>npx shiplet</code> for this product. The intended package is <code>@bintzgavin/shiplet</code>; registry publication is pending. Use the versioned GitHub release without a source checkout.</p>
-<pre><code>npx --package=https://github.com/BintzGavin/shiplet-core/releases/download/cli-v0.1.0/bintzgavin-shiplet-0.1.0.tgz shiplet --help
-npm install -g https://github.com/BintzGavin/shiplet-core/releases/download/cli-v0.1.0/bintzgavin-shiplet-0.1.0.tgz
+<pre><code>npx --package=https://github.com/BintzGavin/shiplet-core/releases/download/cli-v0.1.1/bintzgavin-shiplet-0.1.1.tgz shiplet --help
+npm install -g https://github.com/BintzGavin/shiplet-core/releases/download/cli-v0.1.1/bintzgavin-shiplet-0.1.1.tgz
 shiplet prepare ./dist --name "Review build" --subdomain review-build --visibility organization --dry-run --json</code></pre>
 <p>Replace <code>./dist</code> with your artifact folder and choose an available subdomain. Add <code>--dry-run</code> to inspect the artifact before publishing; a dry run does not authenticate.</p>
 <h2>Approve a session</h2>
