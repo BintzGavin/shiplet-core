@@ -25,8 +25,8 @@ flowchart LR
 3. Build into a fresh directory outside the repository:
 
    ```sh
-   node scripts/build-cli-package.mjs /tmp/shiplet-cli-release-0.1.1
-   npm pack /tmp/shiplet-cli-release-0.1.1/package --pack-destination /tmp/shiplet-cli-release-0.1.1 --ignore-scripts
+   node scripts/build-cli-package.mjs /tmp/shiplet-cli-release-0.1.2
+   npm pack /tmp/shiplet-cli-release-0.1.2/package --pack-destination /tmp/shiplet-cli-release-0.1.2 --ignore-scripts
    ```
 
 4. Review the packed file list. Publish an immutable `cli-v<version>` tag at the
@@ -40,15 +40,17 @@ flowchart LR
 As checked on 2026-10-16, the unscoped `shiplet@0.2.2` is maintained by
 `pilaniaanand` and points to `anandpilania/shiplet`. That is another product.
 Plain `npx shiplet` cannot mean this CLI without an authorized ownership transfer.
-Never publish over another project's name or represent the URL/scoped command
+Never publish over another project's name or represent the URL command
 as equivalent to plain `npx shiplet`.
 
-The intended alternative is `@bintzgavin/shiplet`. A registry 404 is evidence of
-non-publication, not proof of scope ownership. The maintainer must authenticate
-to an npm account that owns this scope (or explicitly choose another scope),
-then publish the exact reviewed tarball. `npm whoami` is sufficient to inspect
-account identity; never inspect npm configuration or credential values. Complete
-browser login/2FA privately. Do not paste credentials into agent chat.
+The public package name is `shiplet-cli`; users will run `npx shiplet-cli`.
+A registry 404 is evidence of non-publication, not a guarantee npm will accept
+publication. The maintainer must authenticate to npm, confirm the name remains
+available (or that their account is an owner if already published), then publish
+the exact reviewed tarball. `npm whoami` is sufficient to inspect public account
+identity; never inspect npm configuration or credential values. Complete browser
+login/2FA privately. Consumers need no npm account or publisher credentials.
+Do not paste credentials into agent chat.
 
 After the first publication, configure npm trusted publishing for:
 
@@ -63,6 +65,6 @@ appropriate. The GitHub release job compares an existing tarball byte-for-byte b
 allowing npm publication; it never overwrites an existing release.
 For subsequent releases, trigger the manual workflow on the tag with npm enabled.
 
-Verify `npx @bintzgavin/shiplet@<version> --help` from a clean project/cache, then
-change public docs to the shorter scoped command and remove the pending notice.
+Verify `npx shiplet-cli@<version> --help` from a clean project/cache, then
+change public docs to the shorter registry command and remove the pending notice.
 Production website deployment belongs to the separate `shiplet-ops` release flow.

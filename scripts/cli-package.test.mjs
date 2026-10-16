@@ -27,14 +27,15 @@ test("the distributable installs in isolation and runs the real CLI, including b
 	assert.ok(packed.files.find((file) => file.path === "lib/shiplet.cjs").mode & 0o111);
 	await writeFile(path.join(directory, "package.json"), '{"private":true}');
 	await exec("npm", ["install", path.join(directory, packed.filename), "--ignore-scripts", "--no-audit", "--no-fund", ...npmFlags], options);
-	const installed = path.join(directory, "node_modules/@bintzgavin/shiplet");
+	const installed = path.join(directory, "node_modules/shiplet-cli");
 	const manifest = JSON.parse(await readFile(path.join(installed, "package.json"), "utf8"));
+	assert.equal(manifest.name, "shiplet-cli");
 	assert.deepEqual(manifest.dependencies, { acorn: "8.17.0" });
 	assert.equal(manifest.bin.shiplet, "lib/shiplet.cjs");
 	assert.equal(manifest.scripts, undefined, "consumers need no install hooks");
 	const run = (args) => exec(path.join(directory, "node_modules/.bin/shiplet"), args, options);
 	assert.match((await run(["--help"])).stdout, /Shiplet CLI/);
-	const npx = await exec("npm", ["exec", "--offline", ...npmFlags, "--", "shiplet", "--help"], options);
+	const npx = await exec("npm", ["exec", "--offline", ...npmFlags, "--", "shiplet-cli", "--help"], options);
 	assert.match(npx.stdout, /shiplet login/);
 	await writeFile(path.join(directory, "index.html"), "<!doctype html><h1>Packed CLI review</h1>");
 	const prepared = await run(["prepare", "index.html", "--name", "Packed CLI review", "--subdomain", "packed-cli-review", "--dry-run", "--json"]);

@@ -5,18 +5,18 @@ deployments, and exports. Requires Node.js 22.12.0 or newer.
 
 The unscoped npm package `shiplet` belongs to an unrelated project. Do not use
 `npx shiplet` to run this CLI. The intended registry name is
-`@bintzgavin/shiplet`; registry publication is pending.
+`shiplet-cli`; registry publication is pending.
 
 Run the versioned GitHub release without a source checkout:
 
 ```sh
-npx --package=https://github.com/BintzGavin/shiplet-core/releases/download/cli-v0.1.1/bintzgavin-shiplet-0.1.1.tgz shiplet --help
+npx --package=https://github.com/BintzGavin/shiplet-core/releases/download/cli-v0.1.2/shiplet-cli-0.1.2.tgz shiplet --help
 ```
 
 Or install that same tarball once:
 
 ```sh
-npm install -g https://github.com/BintzGavin/shiplet-core/releases/download/cli-v0.1.1/bintzgavin-shiplet-0.1.1.tgz
+npm install -g https://github.com/BintzGavin/shiplet-core/releases/download/cli-v0.1.2/shiplet-cli-0.1.2.tgz
 shiplet prepare ./dist --name "Review build" --subdomain review-build --visibility organization --dry-run --json
 ```
 
