@@ -50,11 +50,11 @@ For local and agent workflows, start with the [CLI guide](https://shiplet.cc/doc
 No source checkout or custom MCP server is required:
 
 ```bash
-npx --package=https://github.com/BintzGavin/shiplet-core/releases/download/cli-v0.1.1/bintzgavin-shiplet-0.1.1.tgz shiplet --help
+npx --package=https://github.com/BintzGavin/shiplet-core/releases/download/cli-v0.1.2/shiplet-cli-0.1.2.tgz shiplet --help
 ```
 
 The unscoped npm package `shiplet` belongs to an unrelated project. Publication
-of `@bintzgavin/shiplet` is pending; use the versioned GitHub tarball above.
+of `shiplet-cli` is pending; use the versioned GitHub tarball above.
 Browser approval creates a reusable session for two hours by default. Use
 `shiplet whoami` to inspect it and `shiplet logout` to revoke it.
 [Code Mode MCP](https://shiplet.cc/docs/code-mode-mcp) remains optional for API

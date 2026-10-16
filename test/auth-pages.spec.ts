@@ -70,8 +70,10 @@ describe("authentication page experience", () => {
       expect(guide).not.toContain("MCP is the preferred");
     }
     const cli = await (await request("/docs/cli")).text();
-    expect(cli).toContain("npx --package=https://github.com/BintzGavin/shiplet-core/releases/download/cli-v0.1.1/bintzgavin-shiplet-0.1.1.tgz shiplet --help");
+    expect(cli).toContain("npx --package=https://github.com/BintzGavin/shiplet-core/releases/download/cli-v0.1.2/shiplet-cli-0.1.2.tgz shiplet --help");
     expect(cli).toContain("unrelated project");
+    expect(cli).toContain("shiplet-cli");
+    expect(cli).not.toContain("@bintzgavin/shiplet");
     expect(cli).toContain("registry publication is pending");
     expect(cli).toContain("shiplet login");
     expect(cli).toContain("two hours");
