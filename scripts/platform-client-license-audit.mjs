@@ -7,6 +7,7 @@ import { fileURLToPath } from "node:url";
 import react from "@vitejs/plugin-react";
 import { build } from "vite";
 
+import { createPluginAppBuildConfig } from "./build-plugin-app.mjs";
 import { createPlatformClientBuildConfig } from "./platform-client-build-config.mjs";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -19,6 +20,17 @@ const expectedBundlePackages = new Set([
 	"react-dom",
 	"scheduler",
 	"zustand",
+]);
+// src/generated-plugin-app.ts (the ChatGPT MCP App) is audited separately so a
+// dependency added to one bundle cannot hide behind the other's inventory.
+const expectedPluginAppPackages = new Set([
+	"@modelcontextprotocol/ext-apps",
+	"@modelcontextprotocol/sdk",
+	"@openai/mcp-extensions",
+	"react",
+	"react-dom",
+	"scheduler",
+	"zod",
 ]);
 const allowedLicenses = new Set([
 	"0BSD",
@@ -49,14 +61,15 @@ function packageNameFromModule(id) {
 }
 
 const observedBundlePackages = new Set();
-const inventoryPlugin = () => ({
+const observedPluginAppPackages = new Set();
+const inventoryPlugin = (observed = observedBundlePackages) => ({
 	name: "shiplet-platform-license-inventory",
 	generateBundle(_options, bundle) {
 		for (const chunk of Object.values(bundle)) {
 			if (chunk.type !== "chunk") continue;
 			for (const id of Object.keys(chunk.modules)) {
 				const packageName = packageNameFromModule(id);
-				if (packageName) observedBundlePackages.add(packageName);
+				if (packageName) observed.add(packageName);
 			}
 		}
 	},
@@ -84,6 +97,20 @@ assert.deepEqual(
 	"generated browser dependency inventory changed; update notices deliberately",
 );
 
+{
+	const config = createPluginAppBuildConfig({
+		plugins: [inventoryPlugin(observedPluginAppPackages)],
+	});
+	config.build.write = false;
+	await build(config);
+}
+
+assert.deepEqual(
+	[...observedPluginAppPackages].sort(),
+	[...expectedPluginAppPackages].sort(),
+	"generated plugin app dependency inventory changed; update notices deliberately",
+);
+
 const lock = JSON.parse(await readFile(path.join(root, "package-lock.json"), "utf8"));
 for (const [packagePath, metadata] of Object.entries(lock.packages ?? {})) {
 	if (!packagePath) continue;
@@ -100,7 +127,10 @@ for (const [packagePath, metadata] of Object.entries(lock.packages ?? {})) {
 }
 
 const notices = await readFile(path.join(root, "THIRD_PARTY_NOTICES.md"), "utf8");
-for (const packageName of expectedBundlePackages) {
+for (const packageName of new Set([
+	...expectedBundlePackages,
+	...expectedPluginAppPackages,
+])) {
 	const metadata = lock.packages?.[`node_modules/${packageName}`];
 	assert.ok(metadata?.version, `missing lock metadata for ${packageName}`);
 	assert.match(
@@ -111,5 +141,5 @@ for (const packageName of expectedBundlePackages) {
 }
 
 process.stdout.write(
-	`Verified ${Object.keys(lock.packages ?? {}).length - 1} dependency licenses and ${observedBundlePackages.size} bundled browser packages.\n`,
+	`Verified ${Object.keys(lock.packages ?? {}).length - 1} dependency licenses, ${observedBundlePackages.size} bundled browser packages, and ${observedPluginAppPackages.size} bundled plugin app packages.\n`,
 );

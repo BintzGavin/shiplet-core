@@ -1,5 +1,6 @@
 import { createRemoteJWKSet, jwtVerify } from "jose";
 import type { Env } from "./env";
+import { PLUGIN_MCP_PATH } from "./plugin-contract";
 import { absoluteSiteUrl, normalizeAppUrl } from "./seo";
 import {
 	upsertUser,
@@ -44,12 +45,22 @@ const jwksByIssuer = new Map<
 	ReturnType<typeof createRemoteJWKSet>
 >();
 
-export function mcpResourceUrl(appUrl?: string) {
-	return absoluteSiteUrl(appUrl, "/api/mcp");
+/*
+ * Every MCP resource on this origin is addressed by its path. Omitting the
+ * path keeps the original Code Mode MCP resource (`/api/mcp`) and its root
+ * protected-resource metadata document exactly as they were.
+ */
+export function mcpResourceUrl(appUrl?: string, resourcePath?: string) {
+	return absoluteSiteUrl(appUrl, resourcePath ?? "/api/mcp");
 }
 
-export function mcpResourceMetadataUrl(appUrl?: string) {
-	return absoluteSiteUrl(appUrl, "/.well-known/oauth-protected-resource");
+export function mcpResourceMetadataUrl(appUrl?: string, resourcePath?: string) {
+	return absoluteSiteUrl(
+		appUrl,
+		resourcePath === undefined
+			? "/.well-known/oauth-protected-resource"
+			: `/.well-known/oauth-protected-resource${resourcePath}`,
+	);
 }
 
 export function workOSAuthKitIssuer(env: Env) {
@@ -63,16 +74,19 @@ export function workOSAuthKitIssuer(env: Env) {
 	});
 }
 
-export function mcpOAuthChallenge(appUrl?: string) {
+export function mcpOAuthChallenge(appUrl?: string, resourcePath?: string) {
 	return [
 		'Bearer error="unauthorized"',
 		'error_description="Authorization needed"',
-		`resource_metadata="${mcpResourceMetadataUrl(appUrl)}"`,
+		`resource_metadata="${mcpResourceMetadataUrl(appUrl, resourcePath)}"`,
 		`scope="${MCP_OAUTH_SCOPES.join(" ")}"`,
 	].join(", ");
 }
 
-export function mcpAuthorizationRequiredResponse(appUrl?: string) {
+export function mcpAuthorizationRequiredResponse(
+	appUrl?: string,
+	resourcePath?: string,
+) {
 	return new Response(
 		JSON.stringify({
 			error: "authorization_required",
@@ -82,7 +96,7 @@ export function mcpAuthorizationRequiredResponse(appUrl?: string) {
 			status: 401,
 			headers: {
 				"content-type": "application/json; charset=utf-8",
-				"www-authenticate": mcpOAuthChallenge(appUrl),
+				"www-authenticate": mcpOAuthChallenge(appUrl, resourcePath),
 			},
 		},
 	);
@@ -101,7 +115,34 @@ export function mcpProtectedResourceMetadata(env: Env, appUrl?: string) {
 }
 
 export function mcpProtectedResourceMetadataResponse(env: Env, appUrl?: string) {
-	return new Response(JSON.stringify(mcpProtectedResourceMetadata(env, appUrl)), {
+	return protectedResourceMetadataResponse(
+		mcpProtectedResourceMetadata(env, appUrl),
+	);
+}
+
+export function pluginMcpProtectedResourceMetadata(env: Env, appUrl?: string) {
+	const baseUrl = normalizeAppUrl(appUrl);
+	return {
+		resource: mcpResourceUrl(baseUrl, PLUGIN_MCP_PATH),
+		authorization_servers: [workOSAuthKitIssuer(env)],
+		bearer_methods_supported: ["header"],
+		scopes_supported: [...MCP_OAUTH_SCOPES],
+		resource_documentation: absoluteSiteUrl(baseUrl, "/docs/chatgpt-plugin"),
+		resource_name: "Shiplet",
+	};
+}
+
+export function pluginMcpProtectedResourceMetadataResponse(
+	env: Env,
+	appUrl?: string,
+) {
+	return protectedResourceMetadataResponse(
+		pluginMcpProtectedResourceMetadata(env, appUrl),
+	);
+}
+
+function protectedResourceMetadataResponse(metadata: unknown) {
+	return new Response(JSON.stringify(metadata), {
 		headers: {
 			"cache-control": "public, max-age=300",
 			"content-type": "application/json; charset=utf-8",
@@ -213,6 +254,7 @@ export async function authenticateMcpOAuthUser(
 	env: Env,
 	request: Request,
 	appUrl?: string,
+	resourcePath?: string,
 ) {
 	const token = bearerToken(request.headers.get("authorization"));
 	if (!token) return null;
@@ -225,7 +267,7 @@ export async function authenticateMcpOAuthUser(
 	try {
 		const { payload } = await jwtVerify(token, jwksForIssuer(issuer), {
 			issuer,
-			audience: mcpResourceUrl(appUrl),
+			audience: mcpResourceUrl(appUrl, resourcePath),
 		});
 
 		const userId = typeof payload.sub === "string" ? payload.sub : "";
@@ -234,7 +276,7 @@ export async function authenticateMcpOAuthUser(
 		const workosUser = await getWorkOSUser(env, userId);
 		return resolveVerifiedWorkOSUser(env.DB, workosUser);
 	} catch {
-		throw mcpAuthorizationRequiredResponse(appUrl);
+		throw mcpAuthorizationRequiredResponse(appUrl, resourcePath);
 	}
 }
 
@@ -244,12 +286,16 @@ export async function authenticateMcpOAuthPrincipal(
 	options: {
 		appUrl?: string;
 		requiredPermissions?: readonly string[];
+		resourcePath?: string;
 	} = {},
 ): Promise<AuthenticatedMcpAgentPrincipal | null> {
 	const token = bearerToken(request.headers.get("authorization"));
 	if (!token) return null;
 	if (token.length > MAX_MCP_OAUTH_TOKEN_BYTES) {
-		throw mcpAuthorizationRequiredResponse(options.appUrl);
+		throw mcpAuthorizationRequiredResponse(
+			options.appUrl,
+			options.resourcePath,
+		);
 	}
 
 	try {
@@ -290,7 +336,7 @@ export async function authenticateMcpOAuthPrincipal(
 		const issuer = workOSAuthKitIssuer(env);
 		const { payload } = await jwtVerify(token, jwksForIssuer(issuer), {
 			issuer,
-			audience: mcpResourceUrl(options.appUrl),
+			audience: mcpResourceUrl(options.appUrl, options.resourcePath),
 		});
 		if (isAgentRegistrationPayload(payload)) {
 			const claims = parseVerifiedAgentRegistrationClaims(
@@ -314,7 +360,10 @@ export async function authenticateMcpOAuthPrincipal(
 			authenticatedProviderSubjectId: workosUser.id,
 		});
 	} catch {
-		throw mcpAuthorizationRequiredResponse(options.appUrl);
+		throw mcpAuthorizationRequiredResponse(
+			options.appUrl,
+			options.resourcePath,
+		);
 	}
 }
 

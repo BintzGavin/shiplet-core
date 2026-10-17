@@ -48,6 +48,9 @@ export type Env = GeneratedEnv & {
 	SHIPLET_EMAIL_NOTIFICATIONS?: string;
 	POSTHOG_KEY?: string;
 	POSTHOG_HOST?: string;
+	// Optional: OpenAI plugin domain-verification token served at
+	// /.well-known/openai-apps-challenge. Configure as a secret, never in Wrangler files.
+	OPENAI_APPS_CHALLENGE_TOKEN?: string;
 	WORKERS_DEV_SUBDOMAIN?: string;
 	CLOUDFLARE_ZONE_ID?: string; // For custom hostname operations
 	FALLBACK_ORIGIN?: string;

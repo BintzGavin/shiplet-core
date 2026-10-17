@@ -42,6 +42,7 @@
         "pages": [
           "docs/cli",
           "docs/code-mode-mcp",
+          "docs/chatgpt-plugin",
           "docs/api-keys",
           "docs/api-surface"
         ]
