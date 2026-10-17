@@ -31,7 +31,7 @@ providers behind narrow kernel adapters.
 | Managed isolated runtime | Exact package/revision and attested per-invocation limits when binding exists | Sibling packages/state, platform credentials/shared bindings, unmediated egress |
 | Customer Worker | Customer-owned target bindings/public configuration and short-lived assertions if configured | WorkOS, Shiplet OAuth vault, shared D1/R2/DO, organization-wide or sibling authority |
 | Deployment orchestrator | Encrypted grant reference and exact target/revision/deployment plan | Credential plaintext in logs/responses/package code; authority outside selected account/target |
-| CLI browser session | Exact Shiplet origin, revision/deployment scopes, ten-minute maximum, process memory, automatic revoke | Pasted keys, cross-origin bearer use, replayable code, unbounded/background session |
+| CLI browser session | Exact Shiplet origin and account, revision/deployment scopes, explicit `--approve` for deployment effects; reusable sessions: 8 hour server maximum, OS keychain or user-only file, revocable through logout; command sessions: ten-minute maximum, process memory, automatic revoke | Pasted keys, cross-origin bearer use, replayable code, unbounded/background session |
 
 ## Principal abuse cases and controls
 
@@ -84,8 +84,10 @@ providers behind narrow kernel adapters.
   blob Worker while denying connections, frames, forms, objects, script
   attributes, evaluated code, and trusted-origin script authority. The Worker
   bootstrap removes supported-browser network, nested-worker, realtime,
-  notification, and cross-context IPC globals. Message, byte, node, binding,
-  pending-operation, startup, heartbeat, and lifetime budgets fail closed.
+  notification, and cross-context IPC globals. Per-minute message and byte
+  rates, node, binding, pending-operation, startup, and heartbeat budgets fail
+  closed. There is no wall-clock lifetime cap, so a widget can stay open for a
+  whole review; heartbeat replies do not spend the message budget.
   Because CSP does not provide a general self-navigation control, keeping
   arbitrary package JavaScript outside every browsing context is the primary
   navigation boundary.

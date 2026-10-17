@@ -12,6 +12,7 @@ import {
 } from "../plugin-contract";
 import type { ShipletHost } from "./host";
 import {
+	buildFeedbackModelContext,
 	checkPublishSize,
 	feedbackListArguments,
 	parseDeepLink,
@@ -62,6 +63,8 @@ export class ShipletController {
 	private deepLinked = false;
 	private sawToolInput = false;
 	private attachedSent: string | null = null;
+	private suppressedContextKey: string | null = null;
+	private contextGeneration = 0;
 	private attachChain: Promise<void> = Promise.resolve();
 	private host: ShipletHost | null = null;
 
@@ -173,7 +176,10 @@ export class ShipletController {
 	handleModelContextCleared() {
 		// Respect the removal: do not re-attach the thread that is still open.
 		// Opening a different thread attaches that one as usual.
-		this.attachedSent = this.openDetailData()?.feedback.id ?? null;
+		const route = this.state.route;
+		this.suppressedContextKey = route.kind === "detail" ? detailKey(route.shipletId, route.feedbackId) : null;
+		this.attachedSent = null;
+		this.contextGeneration += 1;
 		this.dispatch({ type: "attached", feedbackId: null });
 	}
 
@@ -258,24 +264,31 @@ export class ShipletController {
 		}
 	}
 
-	async loadFeedback(shipletId: string, filter: FeedbackFilter) {
+	async loadFeedback(shipletId: string, filter: FeedbackFilter, cursor?: string) {
 		const key = feedbackListKey(shipletId, filter);
 		const token = this.nextToken();
 		this.dispatch({ type: "feedback-request", key, token });
 		try {
 			const result = parseViewResult(
-				await this.call(PLUGIN_TOOL.listFeedback, feedbackListArguments(shipletId, filter)),
+				await this.call(PLUGIN_TOOL.listFeedback, { ...feedbackListArguments(shipletId, filter), ...(cursor ? { cursor } : {}) }),
 			);
 			if (result?.view !== "feedback") throw new Error("Shiplet sent an unexpected response.");
 			this.dispatch({
 				type: "feedback-resolve",
 				key,
 				token,
-				data: { shiplet: result.shiplet, feedback: result.feedback },
+				data: { shiplet: result.shiplet, feedback: result.feedback, nextCursor: result.nextCursor ?? null },
+				append: Boolean(cursor),
 			});
 		} catch (error) {
 			this.dispatch({ type: "feedback-fail", key, token, message: toolErrorMessage(error) });
 		}
+	}
+
+	async loadMoreFeedback(shipletId: string) {
+		const slot = this.state.feedbackList;
+		if (slot.key !== feedbackListKey(shipletId, this.state.filter) || slot.status === "loading" || !slot.data?.nextCursor) return;
+		await this.loadFeedback(shipletId, this.state.filter, slot.data.nextCursor);
 	}
 
 	async loadDetail(shipletId: string, feedbackId: string) {
@@ -474,26 +487,42 @@ export class ShipletController {
 	private syncModelContext() {
 		const host = this.host;
 		if (!host || this.hostView.connection !== "connected") return;
-		const open = this.openDetailData();
-		const wanted = open?.feedback.id ?? null;
+		let open = this.openDetailData();
+		const key = open ? detailKey(open.feedback.shipletId, open.feedback.id) : null;
+		const route = this.state.route;
+		const routeKey = route.kind === "detail" ? detailKey(route.shipletId, route.feedbackId) : null;
+		if (routeKey !== this.suppressedContextKey) this.suppressedContextKey = null;
+		if (routeKey && routeKey === this.suppressedContextKey) return;
+		// Share confirmed state, not an optimistic status that may be rolled back.
+		const mutation = this.state.statusMutation;
+		if (open && mutation?.pending && mutation.feedbackId === open.feedback.id) {
+			open = { ...open, feedback: { ...open.feedback, status: mutation.previous } };
+		}
+		const snapshot = open;
+		const wanted = snapshot ? JSON.stringify(buildFeedbackModelContext(snapshot.feedback, snapshot.shiplet)) : null;
 		if (wanted === this.attachedSent) return;
 		const previous = this.attachedSent;
+		const generation = ++this.contextGeneration;
 		this.attachedSent = wanted;
 		this.attachChain = this.attachChain
 			.then(async () => {
-				if (open) {
-					const acknowledged = await host.attachFeedback(open);
-					if (this.attachedSent === open.feedback.id) {
-						this.dispatch({ type: "attached", feedbackId: acknowledged ? open.feedback.id : null });
+				if (generation !== this.contextGeneration) return;
+				if (snapshot) {
+					const acknowledged = await host.attachFeedback(snapshot);
+					if (generation === this.contextGeneration) {
+						this.dispatch({ type: "attached", feedbackId: acknowledged ? snapshot.feedback.id : null });
+					} else if (key === this.suppressedContextKey) {
+						// Removal can arrive while the host is acknowledging an update.
+						await host.clearAttachedFeedback();
 					}
 				} else if (previous) {
 					await host.clearAttachedFeedback();
-					if (this.attachedSent === null) this.dispatch({ type: "attached", feedbackId: null });
+					if (generation === this.contextGeneration) this.dispatch({ type: "attached", feedbackId: null });
 				}
 			})
 			.catch(() => {
 				// Context sharing is best-effort; the thread still works without it.
-				if (this.attachedSent === wanted) this.attachedSent = previous;
+				if (generation === this.contextGeneration) this.attachedSent = previous;
 			});
 	}
 

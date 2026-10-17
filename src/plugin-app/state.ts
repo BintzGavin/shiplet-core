@@ -24,6 +24,7 @@ export type Slot<T> = {
 export type FeedbackListData = {
 	shiplet: ShipletRef;
 	feedback: PluginFeedbackSummary[];
+	nextCursor?: string | null;
 };
 
 export type DetailData = {
@@ -62,7 +63,7 @@ export type Action =
 	| { type: "shiplets-resolve"; token: number; data: PluginShiplet[] }
 	| { type: "shiplets-fail"; token: number; message: string }
 	| { type: "feedback-request"; key: string; token: number }
-	| { type: "feedback-resolve"; key: string; token: number; data: FeedbackListData }
+	| { type: "feedback-resolve"; key: string; token: number; data: FeedbackListData; append?: boolean }
 	| { type: "feedback-fail"; key: string; token: number; message: string }
 	| { type: "detail-request"; key: string; token: number }
 	| { type: "detail-resolve"; key: string; token: number; data: DetailData }
@@ -188,6 +189,7 @@ export function reduce(state: AppState, action: Action): AppState {
 						feedbackList: readySlot(feedbackListKey(result.shiplet.id, "open"), {
 							shiplet: result.shiplet,
 							feedback: result.feedback,
+							nextCursor: result.nextCursor ?? null,
 						}),
 						knownShiplets: remember(state, [result.shiplet]),
 					};
@@ -249,7 +251,11 @@ export function reduce(state: AppState, action: Action): AppState {
 			if (!accepts(state.feedbackList, action.key, action.token)) return state;
 			return {
 				...state,
-				feedbackList: readySlot(action.key, action.data),
+				feedbackList: readySlot(action.key, action.append && state.feedbackList.data
+					? { ...action.data, feedback: [...new Map([
+						...state.feedbackList.data.feedback, ...action.data.feedback,
+					].map(item => [item.id, item])).values()] }
+					: action.data),
 				knownShiplets: remember(state, [action.data.shiplet]),
 			};
 		case "feedback-fail":

@@ -373,7 +373,7 @@ function VisibilityBadge({ visibility }: { visibility: PluginVisibility }) {
 	return <span className="sl-badge">{VISIBILITY_LABELS[visibility]}</span>;
 }
 
-function ShowAll({ total, hostView }: { total: number; hostView: HostView }) {
+function ShowAll({ total, hostView, hasMore = false }: { total: number; hostView: HostView; hasMore?: boolean }) {
 	const controller = useController();
 	const expand = useAction();
 	if (!hostView.canFullscreen) return null;
@@ -385,7 +385,7 @@ function ShowAll({ total, hostView }: { total: number; hostView: HostView }) {
 				disabled={expand.pending}
 				onClick={() => void expand.run(() => controller.requestFullscreen())}
 			>
-				Show all {total} in fullscreen
+				{hasMore ? "Show more feedback" : `Show all ${total}`} in fullscreen
 			</button>
 			{expand.outcome && !expand.outcome.ok ? (
 				<p className="sl-inline-error text-small">{expand.outcome.message}</p>
@@ -652,11 +652,18 @@ function FeedbackListPane({
 							/>
 						))}
 					</ul>
-					{items && capped.length < items.length ? (
-						<ShowAll total={items.length} hostView={hostView} />
-					) : null}
 				</>
 			)}
+			{matches && items && inline && hostView.canFullscreen && (items.length > INLINE_LIMIT || slot.data?.nextCursor) ? (
+				<ShowAll total={items.length} hasMore={Boolean(slot.data?.nextCursor)} hostView={hostView} />
+			) : null}
+			{matches && slot.data?.nextCursor && (!inline || !hostView.canFullscreen) ? (
+				<button type="button" className="btn btn-ghost cursor-interaction"
+					disabled={slot.status === "loading"} aria-busy={slot.status === "loading"}
+					onClick={() => void controller.loadMoreFeedback(shipletId)}>
+					Load more feedback
+				</button>
+			) : null}
 		</div>
 	);
 }
@@ -841,7 +848,7 @@ function FeedbackDetail({
 						{feedback.replies.map((reply) => (
 							<li key={reply.id} className="sl-reply">
 								<p className="text-small text-muted">
-									<strong className="sl-reply-author">{reply.authorName ?? "You"}</strong>
+									<strong className="sl-reply-author">{reply.authorName ?? "Reviewer"}</strong>
 									{reply.createdAt ? ` · ${relativeTime(reply.createdAt)}` : ""}
 								</p>
 								<p className="sl-reply-body">{reply.comment}</p>

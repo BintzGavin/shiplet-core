@@ -1911,7 +1911,8 @@ export async function createReviewCapabilityToken(input: {
 		viewer: {
 			id: normalizeString(input.viewer.id, 160),
 			email: normalizeString(input.viewer.email, 320),
-			name: normalizeString(input.viewer.name, 240) || input.viewer.email,
+			// No email fallback: this name is shown to co-viewers in presence.
+			name: normalizeString(input.viewer.name, 240),
 			avatarPreset: normalizeOptionalString(input.viewer.avatarPreset, 240),
 			avatarDataUrl: normalizeOptionalString(input.viewer.avatarDataUrl, 750_000),
 		},
@@ -1991,7 +1992,7 @@ export async function verifyReviewCapabilityToken(
 			viewer: {
 				id: viewerId,
 				email: viewerEmail,
-				name: normalizeString(viewer.name, 240) || viewerEmail,
+				name: normalizeString(viewer.name, 240),
 				avatarPreset: normalizeOptionalString(viewer.avatarPreset, 240) || null,
 				avatarDataUrl:
 					normalizeOptionalString(viewer.avatarDataUrl, 750_000) || null,

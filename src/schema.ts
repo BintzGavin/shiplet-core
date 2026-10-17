@@ -111,6 +111,7 @@ export async function ensureSchema(db: D1Database) {
 						approved_on TEXT,
 						exchanged_on TEXT,
 						exchange_marker TEXT UNIQUE,
+						session_ttl_seconds INTEGER,
 						created_on TEXT NOT NULL
 					)`,
 				),
@@ -608,6 +609,10 @@ export async function ensureSchema(db: D1Database) {
 	await addColumnIfMissing(db, "cli_authorization_requests", {
 		name: "exchange_marker",
 		ddl: "exchange_marker TEXT",
+	});
+	await addColumnIfMissing(db, "cli_authorization_requests", {
+		name: "session_ttl_seconds",
+		ddl: "session_ttl_seconds INTEGER",
 	});
 	await addColumnIfMissing(db, "cli_sessions", {
 		name: "authorization_request_id",

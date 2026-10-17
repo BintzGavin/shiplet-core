@@ -15,8 +15,8 @@ tickets.
   artifact and open its review link.
 - **[Collect feedback](https://shiplet.cc/docs/review-feedback):** leave
   contextual comments and work through review tickets.
-- **[Automate with an agent](https://shiplet.cc/docs/code-mode-mcp):** connect
-  through Code Mode MCP, the preferred route for agent work.
+- **[Automate with an agent](https://shiplet.cc/docs/cli):** connect
+  through the installable CLI, with Code Mode MCP also supported.
 - **[Manage access](https://shiplet.cc/docs/access-control):** choose who can
   view or edit each Shiplet.
 - **[Connect a website](https://shiplet.cc/docs/embed):** attach the
@@ -46,22 +46,20 @@ The fastest path starts in the browser:
 4. Open the review link, leave a comment, and find the resulting ticket in the
    Shiplet detail page or Feedback view.
 
-For agent-driven work, use [Code Mode MCP](https://shiplet.cc/docs/code-mode-mcp),
-the preferred route. Connect an MCP client to:
+For local and agent workflows, start with the [CLI guide](https://shiplet.cc/docs/cli).
+No source checkout or custom MCP server is required:
 
-```text
-https://shiplet.cc/api/mcp
+```bash
+npx shiplet-cli --help
 ```
 
-The first protected action opens browser authentication. The
-[Code Mode MCP guide](https://shiplet.cc/docs/code-mode-mcp) includes a complete
-client example. The [OpenAPI document](https://shiplet.cc/openapi.json) is the
-machine-readable contract for supported direct REST operations.
-
-For local command-line workflows, [CLI authentication](https://shiplet.cc/docs/cli)
-is also available. Run a command from a source checkout and approve it in your
-browser. The session stays in memory for up to ten minutes and is revoked when
-the command finishes. No public npm package or separate login command is available.
+The public `shiplet-cli` package requires no npm account to install.
+The unscoped npm package `shiplet` belongs to an unrelated project.
+Browser approval creates a reusable session for two hours by default. Use
+`npx shiplet-cli whoami` to inspect it and `npx shiplet-cli logout` to revoke it.
+[Code Mode MCP](https://shiplet.cc/docs/code-mode-mcp) is also supported for API
+discovery and operations beyond the CLI, including feedback automation. Its
+endpoint is `https://shiplet.cc/api/mcp`.
 
 ## Run the source locally
 

@@ -450,6 +450,7 @@ import {
 import {
   approveCliAuthorizationRequest,
   createCliAuthorizationRequest,
+  describeCliSession,
   exchangeCliAuthorizationCode,
   revokeCliSession,
 } from "./cli-session";
@@ -788,7 +789,7 @@ app.use("*", async (c, next) => {
     <section class="form-container auth-card auth-decision" aria-labelledby="auth-title">
       <span class="success-card-label">${cli ? "CLI access" : "Account access"}</span>
       <h1 id="auth-title">${title}</h1>
-      <p role="alert">${escapeAuthHtml(message)}</p>
+      <div class="banner banner-error" role="alert">${escapeAuthHtml(message)}</div>
       <p>${cli ? "Run your CLI command again to start a new authorization request. Approve it only if you started the command." : "Open your original invitation or return to Shiplet to start sign-in again."}</p>
       <a class="btn btn-primary" href="/">Go to Shiplet</a>
       ${cli ? '<a class="auth-docs-link" href="/docs/cli">CLI authentication guide</a>' : ""}
@@ -881,7 +882,8 @@ const KERNEL_SCHEMA_EPOCH_MARKER = "kernel";
 // Any change to ensureKernelSchemas must explicitly bump this durable epoch.
 // test/kernel-schema-epoch.spec.ts pins the schema digest to this value.
 // 2: organization and team invite link tables.
-const CURRENT_KERNEL_SCHEMA_EPOCH = 2;
+// 3: cli_authorization_requests.session_ttl_seconds for reusable CLI sessions.
+const CURRENT_KERNEL_SCHEMA_EPOCH = 3;
 
 async function readKernelSchemaEpoch(db: D1Database): Promise<number | null> {
   const table = await db
@@ -4289,7 +4291,7 @@ async function issueReviewCapabilityToken(
     viewer: {
       id: user.id,
       email: user.email,
-      name: reviewPresenceUserName(user),
+      name: reviewerDisplayName(user),
       avatarPreset: user.avatar_preset || null,
       avatarDataUrl: user.avatar_data_url || null,
     },
@@ -5464,11 +5466,20 @@ function parseReviewBooleanFilter(params: URLSearchParams, name: string) {
   throw new Response(`Invalid ${name} filter`, { status: 400 });
 }
 
-function reviewPresenceUserName(user: ShipletUser) {
-  const parts = [user.first_name, user.last_name]
+// A reviewer's own name, or "" when they have not set one. Use this for
+// anything other viewers can see: presence reaches anonymous viewers of
+// public Shiplets.
+function reviewerDisplayName(user: ShipletUser) {
+  return [user.first_name, user.last_name]
     .map((part) => normalizeOptionalString(part))
-    .filter(Boolean);
-  return parts.join(" ") || user.email;
+    .filter(Boolean)
+    .join(" ");
+}
+
+// Falls back to the email address, so only use it where the caller may
+// already see that email, such as organization member mention lists.
+function reviewerLabel(user: ShipletUser) {
+  return reviewerDisplayName(user) || user.email;
 }
 
 async function listTrustedReviewMentionCandidates(
@@ -5501,7 +5512,7 @@ async function listTrustedReviewMentionCandidates(
     hydrated.push({
       id: mentionUser.id,
       email: mentionUser.email,
-      name: reviewPresenceUserName(mentionUser),
+      name: reviewerLabel(mentionUser),
       avatar_preset: mentionUser.avatar_preset || null,
       avatar_data_url: mentionUser.avatar_data_url || null,
       organization_role: mentionUser.organization_role,
@@ -5606,7 +5617,7 @@ async function listModernReviewMentionCandidates(
 		 WHERE organization_memberships.organization_id = ?`,
 	).bind(...bindings).all<{ id: string; email: string; first_name: string | null; last_name: string | null }>();
 	const candidates: ModernReviewMentionCandidate[] = (rows.results || []).map((candidate) => {
-		const label = reviewPresenceUserName(candidate as ShipletUser);
+		const label = reviewerLabel(candidate as ShipletUser);
 		return { id: candidate.id, label, _sortLabel: modernMentionSortLabel(label), _search: `${candidate.email} ${label}`.normalize("NFKC").toLocaleLowerCase() };
 	}).filter((candidate) => candidate._search.includes(query)).sort((left, right) =>
 		left._sortLabel < right._sortLabel ? -1 : left._sortLabel > right._sortLabel ? 1 : left.id < right.id ? -1 : left.id > right.id ? 1 : 0,
@@ -5637,11 +5648,25 @@ function reviewClientUser(user: ShipletUser | null) {
   return {
     id: user.id,
     email: user.email,
-    name: reviewPresenceUserName(user),
+    name: reviewerLabel(user),
     avatarPreset: user.avatar_preset || null,
     avatarDataUrl: user.avatar_data_url || null,
     kind: "user",
   };
+}
+
+// The presence object trusts x-shiplet-presence-* headers as the platform's
+// statement of who joined, so any the client sent are dropped first.
+function withoutClientPresenceHeaders(request: Request) {
+  const headers = new Headers(request.headers);
+  const clientPresenceHeaders: string[] = [];
+  headers.forEach((_value, headerName) => {
+    if (headerName.startsWith("x-shiplet-presence-")) {
+      clientPresenceHeaders.push(headerName);
+    }
+  });
+  for (const headerName of clientPresenceHeaders) headers.delete(headerName);
+  return headers;
 }
 
 function reviewPresenceRequest(
@@ -5649,13 +5674,14 @@ function reviewPresenceRequest(
   project: Project,
   user: ShipletUser | null,
 ) {
-  const headers = new Headers(request.headers);
+  const headers = withoutClientPresenceHeaders(request);
   headers.set("x-shiplet-presence-project-id", project.id);
   headers.set("x-shiplet-presence-project-name", project.name);
   if (user) {
+    // Co-viewers see only the display name and avatar, never the email.
     headers.set("x-shiplet-presence-user-id", user.id);
-    headers.set("x-shiplet-presence-user-email", user.email);
-    headers.set("x-shiplet-presence-user-name", reviewPresenceUserName(user));
+    const name = reviewerDisplayName(user);
+    if (name) headers.set("x-shiplet-presence-user-name", name);
     if (user.avatar_preset) {
       headers.set(
         "x-shiplet-presence-avatar-preset",
@@ -10533,17 +10559,20 @@ async function executeCodeModeRequest(
       feedbackListMatch[1],
       ["feedback:read"],
     );
-    return {
-      feedback: await listReviewFeedback(env.DB, project.id, {
-        pageUrl: stringQuery(request.query?.pageUrl),
-        status: stringQuery(request.query?.status),
-        includeClosed: request.query?.includeClosed === true,
-        limit:
-          typeof request.query?.limit === "number"
-            ? request.query.limit
-            : undefined,
-      }),
-    };
+    return listReviewFeedbackPage(env.DB, project.id, {
+      pageUrl: stringQuery(request.query?.pageUrl),
+      status: stringQuery(request.query?.status),
+      state: request.query?.includeClosed === true ? "all" : "open",
+      cursor: stringQuery(request.query?.cursor),
+      cursorActor: context.kind === "token"
+        ? `agent:${context.token.id}`
+        : `user:${codeModeSubject(context)?.id}`,
+      limit:
+        typeof request.query?.limit === "number"
+          ? request.query.limit
+          : undefined,
+      maxLimit: 250,
+    });
   }
 
   if (feedbackListMatch && request.method === "POST") {
@@ -12196,6 +12225,16 @@ app.get("/.well-known/oauth-authorization-server", (c) =>
 
 app.get("/auth.md", (c) => proxyWorkOSAgentAuthGuide(c.env));
 
+function formatCliSessionDuration(seconds: number) {
+  const hours = Math.floor(seconds / 3600);
+  const minutes = Math.round((seconds % 3600) / 60);
+  const parts = [
+    hours ? `${hours} hour${hours === 1 ? "" : "s"}` : "",
+    minutes ? `${minutes} minute${minutes === 1 ? "" : "s"}` : "",
+  ].filter(Boolean);
+  return parts.join(" ") || "a few minutes";
+}
+
 app.get("/cli/authorize", async (c) => {
   try {
     const user = await getCurrentUser(c.req.raw, c.env);
@@ -12212,18 +12251,23 @@ app.get("/cli/authorize", async (c) => {
       state: url.searchParams.get("state"),
       codeChallenge: url.searchParams.get("code_challenge"),
       method: url.searchParams.get("code_challenge_method"),
+      sessionTtl: url.searchParams.get("session_ttl"),
     });
     if (!authorization) return c.text("Invalid CLI authorization request", 400);
+    const sessionTerms = authorization.sessionTtlSeconds === null
+      ? `<li>Perform deployment actions only when explicitly approved.</li>
+          <li>Use a session for up to ten minutes, revoked when the command finishes.</li>`
+      : `<li>Deploy, promote, and roll back when a command explicitly asks with <code>--approve</code>, for as long as this session lasts.</li>
+          <li>Keep this session on this computer for up to ${escapeAuthHtml(formatCliSessionDuration(authorization.sessionTtlSeconds))}. Run <code>shiplet logout</code> to end it sooner.</li>`;
     const body = renderPage(`<div class="auth-stage auth-stage-compact">
       <section class="form-container auth-card auth-decision" aria-labelledby="cli-auth-title">
-        <span class="auth-recommendation">CLI access</span>
+        <span class="success-card-label">CLI access</span>
         <h1 id="cli-auth-title">Authorize Shiplet CLI</h1>
         <p>Your local CLI is waiting for permission to work with Shiplet.</p>
         <div class="auth-account"><span>Authorizing as</span><strong>${escapeAuthHtml(user.email)}</strong></div>
         <ul class="auth-permissions">
           <li>Read and edit Shiplet revisions using your existing access.</li>
-          <li>Perform deployment actions only when explicitly approved.</li>
-          <li>Use a session for up to ten minutes, revoked when the command finishes.</li>
+          ${sessionTerms}
         </ul>
         <p>Only continue if you started this command. Then return to your terminal or agent.</p>
         <form method="post" action="/cli/authorize/complete">
@@ -12288,11 +12332,11 @@ app.post("/cli/authorize/complete", async (c) => {
     // Finish in a new document so the user can follow a normal link instead.
     const body = renderPage(`<div class="auth-stage auth-stage-compact">
       <section class="form-container auth-card auth-decision" aria-labelledby="cli-handoff-title">
-        <span class="auth-recommendation">CLI access approved</span>
+        <span class="success-card-label">CLI access approved</span>
         <h1 id="cli-handoff-title">Authorization approved</h1>
         <p>One more step: return to your local CLI to finish connecting.</p>
         <a id="cli-return-link" class="btn btn-primary" href="${escapeAuthHtml(callback.toString())}" rel="noreferrer">Return to CLI</a>
-        <p>If the CLI has stopped, run your command again to start a new authorization request.</p>
+        <p>When your CLI receives the approval, this tab confirms the handoff and you can close it. If your browser says the page can't be reached, the CLI has stopped waiting: run your command again to start a new authorization request.</p>
         <a class="auth-docs-link" href="/docs/cli">CLI authentication guide</a>
       </section>
     </div>`, {
@@ -12355,6 +12399,20 @@ app.post("/api/cli/session/exchange", async (c) => {
     return c.text("Failed to exchange CLI authorization", 500, {
       "cache-control": "no-store",
     });
+  }
+});
+
+app.get("/api/cli/session", async (c) => {
+  try {
+    const session = await describeCliSession(c.env.DB, c.req.raw);
+    if (!session) {
+      return c.text("CLI session unavailable", 401, { "cache-control": "no-store" });
+    }
+    const response = json(session, 200);
+    response.headers.set("cache-control", "no-store");
+    return response;
+  } catch {
+    return c.text("Failed to read CLI session", 500, { "cache-control": "no-store" });
   }
 });
 
@@ -19959,7 +20017,7 @@ app.get("/", async (c) => {
 						<a class="link-btn" href="/auth/login">Prepare a review</a>
 						<a class="btn btn-secondary" href="/play">Try the sandbox</a>
 						<a class="auth-docs-link" href="/docs/why-shiplet">Docs</a>
-						<div class="auth-agent-entry"><a href="/docs/code-mode-mcp">Working with an agent? Start with MCP</a><p>Connect your agent through Code Mode MCP and approve access in your browser.</p></div>
+						<div class="auth-agent-entry"><a href="/docs/cli">Working with an agent? Start with the CLI</a><p>Run the installable CLI and approve access in your browser. No custom MCP server is required.</p></div>
 					</div>
 				</div>`,
         {
@@ -22572,7 +22630,11 @@ app.get("/api/projects/:projectId/review-presence/ws", async (c) => {
 
     if (isSandboxProjectId(projectId)) {
       const stub = c.env.SHIPLET_ROOT.getByName(projectId);
-      return stub.fetch(c.req.raw);
+      return stub.fetch(
+        new Request(c.req.raw, {
+          headers: withoutClientPresenceHeaders(c.req.raw),
+        }),
+      );
     }
 
     const project = await requireReviewProject(c);

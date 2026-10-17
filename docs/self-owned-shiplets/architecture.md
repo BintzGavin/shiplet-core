@@ -153,10 +153,14 @@ it has no Window, parent, channel nonce, MessagePort, credential, or capability.
 The renderer accepts only bounded declarative text, attribute, property, and
 event-binding messages. Review operations are limited to the declared widget
 operations and still traverse the revision/source/nonce-bound trusted-human
-confirmation channel. Message count and byte budgets, binding and pending
-operation caps, startup and lifetime limits, and a heartbeat watchdog terminate
+confirmation channel. Per-minute message count and byte rates, binding and
+pending operation caps, a startup limit, and a heartbeat watchdog terminate
 malformed, flooding, or non-yielding package code without disabling trusted
-review controls. Every terminal state closes the Worker and channel, clears
+review controls. The watchdog stops a Worker after two consecutive on-time
+heartbeat misses (about three seconds of non-yielding code); a deadline that
+fires late because the page itself was frozen, asleep, or busy is not counted.
+Heartbeat replies do not spend the message budget, and there is no wall-clock
+lifetime limit. Every terminal state closes the Worker and channel, clears
 pending/binding state, makes package UI inert, and exposes a trusted restart
 action. Its exact source/origin/nonce/Shiplet/revision-bound request asks the
 trusted parent to reload the no-store renderer, so the nonce, Worker, channel,
@@ -230,7 +234,8 @@ New tables are additive:
   reconciliation, exact resource ownership, claim custody, and failures.
 - `cli_authorization_requests`, `cli_sessions`, and append-only
   `cli_session_audit_events` for actor-bound loopback PKCE, random one-use
-  exchange ownership, scoped short-lived sessions, and explicit revocation.
+  exchange ownership, scoped command and reusable sessions, and explicit
+  revocation.
 
 OAuth material lives behind an established platform secret-store binding and
 is referenced only by an opaque `credential_ref`. Plaintext tokens and their
@@ -436,15 +441,32 @@ discovery, and tenant routes with the version Wrangler reports at 100% traffic.
 
 ## CLI browser session contract
 
-The shipped CLI uses an ephemeral browser authorization when no established
-session is injected. It listens only on `127.0.0.1` at `/callback`, creates
-high-entropy state and S256 PKCE, opens the trusted Shiplet consent page, and
-exchanges the actor-bound one-use code for a ten-minute session held only in
-process memory. The server uses a random per-attempt compare-and-set marker so
-same-millisecond exchanges cannot both win. The client pins bearer use to the
-exact configured Shiplet origin, never prints it, and revokes the exact session
-once the command completes. Authorization request, approval, exchange, and
-revocation append credential-free immutable audit rows.
+The shipped CLI uses browser authorization when no established session is
+injected. It listens only on `127.0.0.1` at `/callback`, creates high-entropy
+state and S256 PKCE, opens the trusted Shiplet consent page, and exchanges the
+actor-bound one-use code for a session. The server uses a random per-attempt
+compare-and-set marker so same-millisecond exchanges cannot both win. The
+client pins bearer use to the exact configured Shiplet origin and never prints
+it. Authorization request, approval, exchange, and revocation append
+credential-free immutable audit rows.
+
+The authorization request's optional `session_ttl` selects the session kind,
+and the consent page states which one the human is approving:
+
+- **Reusable session** (`session_ttl` present): the server clamps the lifetime
+  to 5 minutes through 8 hours (CLI default 2 hours) and grants
+  `revision:read`, `revision:write`, `deployment:write`, `session:read`, and
+  `session:revoke`. Deploy, promote, and rollback still require the CLI's
+  explicit `--approve` and the kernel's approval rules. The CLI stores it per exact origin with the approved
+  account in the OS keychain or a user-only `0600` file, confirms it through
+  `GET /api/cli/session` before each reuse, forgets it on expiry, revocation,
+  account mismatch, or a 401, and revokes it through `shiplet logout`.
+- **Command session** (`session_ttl` absent): ten minutes, held only in process
+  memory, with the same scopes, and revoked when the command completes. Every
+  command uses one under `--no-session-cache` or `SHIPLET_CLI_SESSION_CACHE=0`.
+
+Every request rechecks the session row, so revocation and expiry take effect on
+the next request.
 
 ## Isolation, egress, limits, and secrets
 

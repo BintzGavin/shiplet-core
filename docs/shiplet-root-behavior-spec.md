@@ -69,6 +69,14 @@ Shiplet behavior only through host-mediated operations routed to the selected
   not written to SQLite.
 - Origin, Shiplet access, and capability checks occur in the trusted platform
   Worker before the WebSocket reaches the object.
+- Co-viewers, including anonymous viewers of public or unlisted Shiplets,
+  see a viewer's page, cursor, and viewport, identified only by id, kind,
+  display name, avatar, and cursor color. Presence never carries an email
+  address, and never uses one as a name: a signed-in reviewer without a
+  display name appears as "Reviewer".
+- A signed-in reviewer's presence name comes from the platform, not the
+  client. The platform Worker drops client-sent `x-shiplet-presence-*`
+  headers before setting its own.
 - Hibernation and reconnects cannot change durable review-layer state.
 
 ## Code Mode boundary

@@ -94,6 +94,8 @@ export type FeedbackListResult = {
 	view: "feedback";
 	shiplet: Pick<PluginShiplet, "id" | "name" | "reviewUrl">;
 	feedback: PluginFeedbackSummary[];
+	/** Continue with the same filters; null means the list is complete. */
+	nextCursor?: string | null;
 };
 
 /** structuredContent of get_feedback. */

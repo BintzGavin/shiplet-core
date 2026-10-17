@@ -1,0 +1,87 @@
+name: Release CLI
+
+on:
+  push:
+    tags: ['cli-v*']
+  workflow_dispatch:
+    inputs:
+      publish_npm:
+        description: Publish to npm after configuring the trusted publisher (run on a cli-v tag)
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-cli-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  package:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '24'
+          cache: npm
+      - name: Require a matching version tag
+        env:
+          RELEASE_REF: ${{ github.ref }}
+        run: |
+          node --input-type=module -e 'import fs from "node:fs"; const p = JSON.parse(fs.readFileSync("packages/cli/package.json")); if (process.env.RELEASE_REF !== `refs/tags/cli-v${p.version}`) throw new Error("Select the matching cli-v version tag");'
+      - run: npm ci
+      - run: npm run generate:public
+      - run: npm run verify
+      - run: npm run test:cli-package
+      - run: npm run build:cli
+      - run: npm pack ./dist/cli/package --pack-destination ./dist/cli --ignore-scripts
+      - uses: actions/upload-artifact@v4
+        with:
+          name: cli-package
+          path: dist/cli/*.tgz
+          if-no-files-found: error
+
+  github-release:
+    needs: package
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: cli-package
+          path: package
+      - name: Publish the verified tarball without replacing an existing release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            mkdir published
+            gh release download "$RELEASE_TAG" --pattern '*.tgz' --dir published
+            cmp package/*.tgz published/*.tgz
+          else
+            gh release create "$RELEASE_TAG" package/*.tgz --verify-tag --title "Shiplet CLI $RELEASE_TAG" --generate-notes
+          fi
+
+  npm:
+    if: github.event_name == 'workflow_dispatch' && inputs.publish_npm
+    needs: [package, github-release]
+    runs-on: ubuntu-latest
+    environment: npm
+    permissions:
+      id-token: write
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '24'
+      - uses: actions/download-artifact@v4
+        with:
+          name: cli-package
+          path: package
+      - run: npm publish package/*.tgz --access public --provenance

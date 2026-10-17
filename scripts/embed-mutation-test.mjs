@@ -40,6 +40,43 @@ const mutations = [
     from: 'else notifyEmbedView();',
     to: 'else setPanelOpen(true);',
   },
+  {
+    name: "review preferences are shared between actors on one device",
+    file: "src/trusted-review-host.ts",
+    from: 'reviewContext.actor.kind + ":" + reviewContext.actor.id + ":" + reviewContext.projectId;',
+    to: 'reviewContext.actor.kind + ":" + reviewContext.projectId;',
+  },
+  {
+    name: "clean review links keep access tokens and credentials",
+    file: "src/trusted-review-host.ts",
+    from: '"access_token", "authorization_code", "claim", "claim_url", "code", "credential", "id_token"',
+    to: '"authorization_code", "claim", "claim_url", "code", "id_token"',
+  },
+  {
+    name: "direct submissions drop the explicitly selected mention recipients",
+    file: "src/trusted-review-host.ts",
+    from: "mentions: selectedMentions(mentionSelect).map((mention) => ({ userId: mention.userId })),",
+    to: "mentions: [],",
+  },
+  {
+    name: "a late mention search response replaces a newer query",
+    file: "src/trusted-review-host.ts",
+    from: "if (generation !== mentionSearchGeneration) return;",
+    to: "if (false) return;",
+    expectedOccurrences: 3,
+  },
+  {
+    name: "copy request proposals are admitted while copy requests are disabled",
+    file: "src/trusted-review-host.ts",
+    from: 'copyText: reviewPreferences.copyRequestsEnabled ? String(copyRequestChange.value || "").trim() : "",',
+    to: 'copyText: String(copyRequestChange.value || "").trim(),',
+  },
+  {
+    name: "completed submissions keep the rich draft, attachments, and strokes",
+    file: "src/trusted-review-host.ts",
+    from: '\t\ttry { attachmentDrafts.clear(); } catch {}\n\t\tcopyRequestChange.value = "";\n\t\tannotationStrokes = [];\n',
+    to: "",
+  },
 
   {
     name: "account recovery silently reuses the current login",

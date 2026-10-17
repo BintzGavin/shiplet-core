@@ -22,6 +22,9 @@ const VALID_COMMANDS = new Set([
 	"promote",
 	"rollback",
 	"eject",
+	"login",
+	"logout",
+	"whoami",
 ]);
 const VALID_VISIBILITIES = new Set([
 	"private",
@@ -133,6 +136,10 @@ const FORBIDDEN_PACKAGE_ROOTS = new Set([
 	"state",
 ]);
 const APPROVAL_COMMANDS = new Set(["deploy", "promote", "rollback"]);
+const DEFAULT_SESSION_TTL_SECONDS = 2 * 60 * 60;
+const MIN_SESSION_TTL_SECONDS = 5 * 60;
+const MAX_SESSION_TTL_SECONDS = 8 * 60 * 60;
+const SESSION_COMMANDS = new Set(["login", "logout", "whoami"]);
 const ALLOWED_STATIC_ASSET_EXTENSIONS = new Set([
 	"3gp",
 	"7z",
@@ -395,6 +402,9 @@ Usage:
   shiplet promote <draft-id> --expected-active <revision-id> [--target <target-id> ...] --approve
   shiplet rollback <shiplet-id> --revision <revision-id> --expected-active <revision-id> --approve
   shiplet eject <shiplet-id> <path>
+  shiplet login [--session-ttl <duration>]
+  shiplet whoami
+  shiplet logout
 
 Commands:
   publish   Prepare and upload a file or static folder to Shiplet for review.
@@ -408,11 +418,20 @@ Commands:
   promote   Atomically activate a validated draft.
   rollback  Atomically reactivate a prior known-good revision.
   eject     Export and materialize a kernel-authority-free portable package.
+  login     Approve a reusable CLI session in your browser (default 2 hours).
+  whoami    Show the saved CLI session's account, origin, and expiry.
+  logout    Revoke the saved CLI session on Shiplet and delete it locally.
 
 Configuration:
   SHIPLET_API_URL   Optional API base URL. Can be replaced by --api-url.
   SHIPLET_API_KEY   Optional least-privilege organization key injected by a secret store.
-  Authentication    Interactive commands use Shiplet's established OAuth/session path.
+  SHIPLET_CLI_SESSION_TTL    Reusable session lifetime, such as 2h or 90m (max 8h).
+  SHIPLET_CLI_SESSION_CACHE  Set to 0 to approve every command separately.
+  SHIPLET_CLI_SESSION_STORE  auto (keychain, else file), keychain, or file.
+  SHIPLET_CONFIG_DIR         Absolute directory for the file store.
+  Authentication    One browser approval creates a reusable session for this API origin,
+                    kept in the OS keychain or a user-only file. Deploy, promote, and
+                    rollback use it too, and still require --approve.
                     Never place key material in source, package content, shell history, or logs.
 
 Flags:
@@ -425,6 +444,8 @@ Flags:
   --approve             Confirm a deploy, promote, or rollback side effect.
   --target <id>         Exact deployment target ID.
   --idempotency-key <id> Reusable deploy/promote/rollback retry key.
+  --session-ttl <duration> Lifetime of a new reusable session, such as 2h or 90m.
+  --no-session-cache    Approve this command alone; do not read or save a session.
   --draft <id>          Exact mutable draft selected for pull.
   --revision <id>       Exact revision selected for rollback.
   --from-revision <id>  Exact source revision selected for a fork.
@@ -476,6 +497,8 @@ function parseArguments(argv) {
 		expectedActive: "",
 		version: "",
 		idempotencyKey: "",
+		sessionTtl: "",
+		noSessionCache: false,
 		providedFlags: new Set(),
 	};
 
@@ -505,6 +528,11 @@ function parseArguments(argv) {
 			options.providedFlags.add("--force");
 			continue;
 		}
+		if (arg === "--no-session-cache") {
+			options.noSessionCache = true;
+			options.providedFlags.add("--no-session-cache");
+			continue;
+		}
 		if (arg.startsWith("--")) {
 			const equalsIndex = arg.indexOf("=");
 			const flag = equalsIndex === -1 ? arg : arg.slice(0, equalsIndex);
@@ -527,6 +555,7 @@ function parseArguments(argv) {
 			else if (flag === "--expected-active") options.expectedActive = value;
 			else if (flag === "--version") options.version = value;
 			else if (flag === "--idempotency-key") options.idempotencyKey = value;
+			else if (flag === "--session-ttl") options.sessionTtl = value;
 			else throw new CliError(`Unknown flag "${flag}".`);
 			continue;
 		}
@@ -549,6 +578,9 @@ function parseArguments(argv) {
 		throw new CliError(
 			`Invalid visibility "${options.visibility}". Use private, organization, unlisted, or public.`,
 		);
+	}
+	if (SESSION_COMMANDS.has(command) && options.positionals.length > 0) {
+		throw new CliError(`shiplet ${command} takes no arguments.`);
 	}
 	assertApplicableFlags(options);
 	if (APPROVAL_COMMANDS.has(command) && !options.approve) {
@@ -573,6 +605,15 @@ function assertApplicableFlags(options) {
 		"--expected-active": new Set(["promote", "rollback"]),
 		"--version": new Set(["validate", "push", "diff"]),
 		"--idempotency-key": APPROVAL_COMMANDS,
+		"--session-ttl": new Set(
+			[...VALID_COMMANDS].filter((name) => name !== "logout" && name !== "whoami"),
+		),
+		"--no-session-cache": new Set(
+			[...VALID_COMMANDS].filter((name) => !SESSION_COMMANDS.has(name)),
+		),
+		"--token": new Set(
+			[...VALID_COMMANDS].filter((name) => !SESSION_COMMANDS.has(name)),
+		),
 	};
 	for (const flag of options.providedFlags) {
 		const allowed = allowedCommands[flag];
@@ -629,6 +670,43 @@ function endpointFromOptions(options, env) {
 
 function apiKeyFromOptions(options, env) {
 	return String(options.token || env.SHIPLET_API_KEY || "").trim();
+}
+
+// Reusable session lifetime. The server clamps to the same 5 minute to
+// 8 hour bounds; rejecting here keeps a typo from silently changing it.
+function parseSessionTtl(value) {
+	if (value === undefined || value === null || value === "") {
+		return DEFAULT_SESSION_TTL_SECONDS;
+	}
+	const match = String(value)
+		.trim()
+		.match(/^(?:(\d{1,2})h)?(?:(\d{1,3})m)?(?:(\d{1,5})s?)?$/);
+	if (!match || (!match[1] && !match[2] && !match[3])) {
+		throw new CliError(
+			'Session lifetime must look like "2h", "90m", "1h30m", or a number of seconds.',
+		);
+	}
+	const seconds =
+		Number(match[1] || 0) * 3600 +
+		Number(match[2] || 0) * 60 +
+		Number(match[3] || 0);
+	if (seconds < MIN_SESSION_TTL_SECONDS || seconds > MAX_SESSION_TTL_SECONDS) {
+		throw new CliError("Session lifetime must be between 5 minutes and 8 hours.");
+	}
+	return seconds;
+}
+
+function sessionTtlFromOptions(options, env) {
+	return parseSessionTtl(options.sessionTtl || env.SHIPLET_CLI_SESSION_TTL);
+}
+
+// What a session bootstrap needs to decide between a cached session and a
+// single-command approval.
+function sessionBootstrapOptions(options, env) {
+	return {
+		sessionCache: !options.noSessionCache,
+		sessionTtlSeconds: sessionTtlFromOptions(options, env),
+	};
 }
 
 function humanNameFromPath(artifactPath) {
@@ -2267,6 +2345,7 @@ async function requestKernel(options, request) {
 			apiUrl: options.apiUrl || request.env.SHIPLET_API_URL || DEFAULT_API_URL,
 			fetch: request.fetch,
 			stdout: request.stdout,
+			...sessionBootstrapOptions(options, request.env),
 		});
 		ownsSession = true;
 	}
@@ -3398,6 +3477,7 @@ async function runCli({
 	fetch: fetchImpl = globalThis.fetch,
 	sessionFetch,
 	sessionBootstrap,
+	sessionCache,
 	stdout = process.stdout,
 	stderr = process.stderr,
 } = {}) {
@@ -3406,6 +3486,14 @@ async function runCli({
 		if (options.help) {
 			stdout.write(helpText());
 			return 0;
+		}
+		if (SESSION_COMMANDS.has(options.command)) {
+			return await runSessionCommand(options, {
+				env,
+				fetch: fetchImpl,
+				sessionCache,
+				stdout,
+			});
 		}
 		if (options.command !== "publish" && options.command !== "prepare") {
 			await runRevisionCommand(options, {
@@ -3437,6 +3525,7 @@ async function runCli({
 							apiUrl: options.apiUrl || env.SHIPLET_API_URL || DEFAULT_API_URL,
 							fetch: fetchImpl,
 							stdout,
+							...sessionBootstrapOptions(options, env),
 						})
 					: fetchImpl;
 		let result;
@@ -3477,9 +3566,95 @@ async function runCli({
 	}
 }
 
+function formatExpiry(expiresOn) {
+	const minutes = Math.max(0, Math.round((Date.parse(expiresOn) - Date.now()) / 60_000));
+	const remaining =
+		minutes >= 60
+			? `${Math.floor(minutes / 60)}h ${minutes % 60}m`
+			: `${minutes}m`;
+	return `${expiresOn} (in ${remaining})`;
+}
+
+async function runSessionCommand(options, runtime) {
+	const { sessionCache } = runtime;
+	if (!sessionCache) {
+		throw new CliError(
+			`shiplet ${options.command} needs the reusable session store, which this integration does not provide.`,
+		);
+	}
+	if (typeof runtime.fetch !== "function") {
+		throw new CliError("This Node runtime does not provide fetch.");
+	}
+	const apiUrl = normalizeApiUrl(options.apiUrl || runtime.env.SHIPLET_API_URL);
+	const write = (value, text) => {
+		if (options.json) writeJson(runtime.stdout, value);
+		else runtime.stdout.write(text);
+	};
+	let result;
+	try {
+		if (options.command === "login") {
+			result = await sessionCache.login({
+				apiUrl,
+				fetch: runtime.fetch,
+				stdout: runtime.stdout,
+				sessionTtlSeconds: sessionTtlFromOptions(options, runtime.env),
+			});
+		} else if (options.command === "whoami") {
+			result = await sessionCache.status({
+				apiUrl,
+				fetch: runtime.fetch,
+				stdout: runtime.stdout,
+			});
+		} else {
+			result = await sessionCache.logout({ apiUrl, fetch: runtime.fetch });
+		}
+	} catch (error) {
+		if (error instanceof CliError) throw error;
+		throw new CliError(error instanceof Error ? error.message : String(error));
+	}
+	if (options.command === "logout") {
+		const lines = {
+			none: `No saved Shiplet CLI session for ${apiUrl}.\n`,
+			revoked: `Revoked the Shiplet CLI session for ${apiUrl} and deleted it from this computer.\n`,
+			"already-ended": `The Shiplet CLI session for ${apiUrl} had already ended. Deleted it from this computer.\n`,
+			unconfirmed: `Deleted the Shiplet CLI session from this computer, but Shiplet did not confirm revocation. It expires at ${result.expiresOn}.\n`,
+		};
+		write({ ok: result.revocation !== "unconfirmed", ...result }, lines[result.revocation]);
+		return result.revocation === "unconfirmed" ? 1 : 0;
+	}
+	if (!result) {
+		write(
+			{ ok: false, origin: apiUrl, signedIn: false },
+			`Not signed in to ${apiUrl}. Run shiplet login, or any command, to approve a session.\n`,
+		);
+		return 1;
+	}
+	const summary = {
+		ok: true,
+		signedIn: true,
+		origin: result.origin,
+		account: result.account,
+		expiresOn: result.expiresOn,
+		storage: result.storage,
+		...(options.command === "login" ? { reused: result.reused } : {}),
+	};
+	const heading =
+		options.command === "login" && !result.reused
+			? "Signed in to Shiplet CLI."
+			: options.command === "login"
+				? "Already signed in to Shiplet CLI."
+				: "Shiplet CLI session";
+	write(
+		summary,
+		`${heading}\n  Account: ${sanitizeOutputText(result.account.email)}\n  Origin:  ${result.origin}\n  Expires: ${formatExpiry(result.expiresOn)}\n  Stored:  ${sanitizeOutputText(result.storage)}\n`,
+	);
+	return 0;
+}
+
 module.exports = {
 	runCli,
 	parseArguments,
+	parseSessionTtl,
 	collectArtifactFiles,
 	buildPublishPayload,
 	publishReviewArtifact,
@@ -3488,8 +3663,9 @@ module.exports = {
 };
 
 if (require.main === module) {
-	const { createBrowserSessionFetch } = require("./browser-session.cjs");
-	runCli({ sessionBootstrap: createBrowserSessionFetch }).then((exitCode) => {
+	const { createSessionCache } = require("./session-cache.cjs");
+	const sessionCache = createSessionCache();
+	runCli({ sessionBootstrap: sessionCache.bootstrap, sessionCache }).then((exitCode) => {
 		process.exitCode = exitCode;
 	});
 }

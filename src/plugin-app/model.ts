@@ -421,6 +421,7 @@ export function parseViewResult(value: unknown): ViewResult | null {
 						view: "feedback",
 						shiplet,
 						feedback: compact(value.feedback, parseFeedbackSummary),
+						nextCursor: str(value.nextCursor) && value.nextCursor ? value.nextCursor : null,
 					}
 				: null;
 		}

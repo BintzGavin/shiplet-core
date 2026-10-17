@@ -12,12 +12,14 @@ import app, { schemaInitializationTest } from "../src/index";
 // Pin the two together: when this digest changes, bump
 // CURRENT_KERNEL_SCHEMA_EPOCH in src/index.ts and update both values here.
 const PINNED_KERNEL_SCHEMA = {
-  epoch: 2,
-  digest: "fe68895f27cb6263350dc5f418b944f7f555475d001c54eed597190cc367ff8c",
+  epoch: 3,
+  digest: "f81f433fa732b49074d665b29ddd723f9b50d79c26cd1948aa6341f307820b47",
 };
 
 // Releases up to v0.1.43 recorded epoch 1 before the invite link tables existed.
 const EPOCH_BEFORE_INVITE_LINKS = 1;
+// Releases before reusable CLI sessions recorded epoch 2.
+const EPOCH_BEFORE_REUSABLE_CLI_SESSIONS = 2;
 const EPOCH_TABLE = "shiplet_kernel_schema_epoch";
 
 function db() {
@@ -108,5 +110,24 @@ describe("kernel schema epoch", () => {
       epoch: schemaInitializationTest.currentEpoch,
       digest: await kernelSchemaDigest(),
     }).toEqual(PINNED_KERNEL_SCHEMA);
+  });
+
+  // Runs last: re-adding the column changes the stored table SQL, and with it
+  // the digest the pin above fingerprints.
+  it("adds the reusable CLI session lifetime column on a database that recorded the epoch from before it", async () => {
+    await request("/health");
+    await recordEpoch(EPOCH_BEFORE_REUSABLE_CLI_SESSIONS);
+    await db().prepare(
+      "ALTER TABLE cli_authorization_requests DROP COLUMN session_ttl_seconds",
+    ).run();
+
+    expect((await request(`/join/${"C".repeat(32)}`)).status).toBe(404);
+
+    const columns = await db().prepare(
+      "PRAGMA table_info(cli_authorization_requests)",
+    ).all<{ name: string }>();
+    expect(columns.results.map((column) => column.name)).toContain(
+      "session_ttl_seconds",
+    );
   });
 });

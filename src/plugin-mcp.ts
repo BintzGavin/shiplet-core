@@ -463,7 +463,7 @@ export function createPluginMcpServer(options: PluginMcpServerOptions) {
 			{
 				title: "List feedback",
 				description:
-					"List review feedback left on one Shiplet, newest first, with each item's ID, title, status, author name, page URL, and reply count. By default only unresolved feedback is returned (everything except Done and Dropped); set include_closed to include resolved items, or filter by an exact status or page URL. Returns at most `limit` items (default 25, maximum 100). Read-only.",
+					"List review feedback left on one Shiplet, newest first, with each item's ID, title, status, author name, page URL, and reply count. By default only unresolved feedback is returned (everything except Done and Dropped); set include_closed to include resolved items, or filter by an exact status or page URL. Returns at most `limit` items (default 25, maximum 100). If nextCursor is returned, call again with cursor and the same filters for the next page. Read-only.",
 				inputSchema: z.object({
 					shiplet_id: idSchema.describe("Shiplet ID from list_shiplets."),
 					status: z
@@ -481,6 +481,7 @@ export function createPluginMcpServer(options: PluginMcpServerOptions) {
 						.describe(
 							"Only return feedback left on this exact page URL (http or https).",
 						),
+					cursor: z.string().min(1).max(4096).optional().describe("nextCursor from the previous page; keep the same filters."),
 					limit: z
 						.number()
 						.int()
@@ -491,13 +492,14 @@ export function createPluginMcpServer(options: PluginMcpServerOptions) {
 				}),
 				annotations: READ_ONLY,
 			},
-			async ({ shiplet_id, status, include_closed, page_url, limit }) =>
+			async ({ shiplet_id, status, include_closed, page_url, limit, cursor }) =>
 				guard(feedbackMessages, async () => {
 					if (page_url !== undefined) assertHttpUrl(page_url, "page_url");
 					const query: Record<string, string | number | boolean> = { limit };
 					if (status) query.status = status;
 					if (include_closed) query.includeClosed = true;
 					if (page_url) query.pageUrl = page_url;
+					if (cursor) query.cursor = cursor;
 					const response = await rest({
 						method: "GET",
 						path: `/api/projects/${shiplet_id}/review-feedback`,
@@ -520,6 +522,7 @@ export function createPluginMcpServer(options: PluginMcpServerOptions) {
 						view: "feedback",
 						shiplet,
 						feedback,
+						nextCursor: isRecord(response) ? str(response.nextCursor) : null,
 					};
 					return ok(feedbackListText(shiplet.name, feedback), result);
 				}),

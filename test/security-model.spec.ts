@@ -1762,6 +1762,38 @@ describe("artifact and app security model", () => {
     ).resolves.toMatchObject({ ok: false, reason: "invalid_signature" });
   });
 
+  it("Given a reviewer without a display name, When a review capability is issued and verified, Then its viewer name is empty instead of the email", async () => {
+    const secret = "test-review-capability-secret";
+    const token = await createReviewCapabilityToken({
+      secret,
+      projectId: "project_a",
+      viewer: { id: "user_1", email: "unnamed@example.com", name: "" },
+      scopes: ["presence:join"],
+      expiresInSeconds: 60,
+    });
+    const payload = JSON.parse(
+      atob(
+        token
+          .slice("shiplet_review_cap_v1.".length)
+          .split(".")[0]!
+          .replace(/-/g, "+")
+          .replace(/_/g, "/"),
+      ),
+    ) as { viewer: { email: string; name: string } };
+    expect(payload.viewer.email).toBe("unnamed@example.com");
+    expect(payload.viewer.name).toBe("");
+
+    const verified = await verifyReviewCapabilityToken(token, {
+      secret,
+      projectId: "project_a",
+      requiredScopes: ["presence:join"],
+    });
+    expect(verified).toMatchObject({
+      ok: true,
+      capability: { viewer: { email: "unnamed@example.com", name: "" } },
+    });
+  });
+
   it("serves the trusted review host without serializing signing authority", async () => {
     await withCustomDomain("shiplet.cc", async () => {
       await withAppUrl("https://shiplet.cc", async () => {

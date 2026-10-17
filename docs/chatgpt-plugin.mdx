@@ -77,6 +77,23 @@ After [self-hosting Shiplet](/docs/self-hosting), the plugin is served at
    `OPENAI_APPS_CHALLENGE_TOKEN` Worker secret. Shiplet serves it as plain text
    at `/.well-known/openai-apps-challenge`.
 
+## Build an installable package
+
+The remote endpoint serves the tools and UI. To distribute its connection as a
+portable plugin ZIP, use Node.js 22.12.0 or newer and install the `zip` command,
+then run this from the source checkout:
+
+```sh
+npm run package:chatgpt-plugin -- --origin https://your-shiplet.example --out /tmp/shiplet-plugin.zip
+```
+
+Use your deployed app's HTTPS origin. The output contains only root `plugin.json`
+and `mcp.json` manifests; it does not bundle application source or credentials.
+Choose a new output filename for each build: existing files are not overwritten.
+The command does not deploy, register, or submit the plugin. Follow OpenAI's
+[packaging guide](https://developers.openai.com/plugins/build/plugins) to test and
+distribute the ZIP. Authentication and UI entrypoints are supplied by the server.
+
 ## Next action
 
 Connect the endpoint in ChatGPT developer mode, then ask ChatGPT to list your

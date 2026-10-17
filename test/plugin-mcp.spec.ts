@@ -732,6 +732,24 @@ describe("ChatGPT plugin MCP endpoint", () => {
 		expect(invalidStatus.isError).toBe(true);
 	});
 
+	it("continues feedback pages without omissions and rejects a cursor for a different query", async () => {
+		const token = oauthToken(uniqueEmail("plugin-pages"));
+		const shiplet = await publish(token, "Paged Feedback");
+		const ids = [];
+		for (let i = 0; i < 3; i++) ids.push(await createFeedback(token, shiplet.id, `Synthetic item ${i}`));
+		const first = (await callTool(token, PLUGIN_TOOL.listFeedback, { shiplet_id: shiplet.id, limit: 2 })).structuredContent as FeedbackListResult;
+		expect(first.feedback).toHaveLength(2);
+		expect(first.nextCursor).toEqual(expect.any(String));
+		const second = (await callTool(token, PLUGIN_TOOL.listFeedback, { shiplet_id: shiplet.id, limit: 2, cursor: first.nextCursor })).structuredContent as FeedbackListResult;
+		expect(second.nextCursor).toBeNull();
+		expect([...first.feedback, ...second.feedback].map(item => item.id).sort()).toEqual(ids.sort());
+		const changed = await callTool(token, PLUGIN_TOOL.listFeedback, { shiplet_id: shiplet.id, status: "Done", cursor: first.nextCursor });
+		expect(changed.isError).toBe(true);
+		const other = await publish(token, "Other Paged Feedback");
+		const wrongShiplet = await callTool(token, PLUGIN_TOOL.listFeedback, { shiplet_id: other.id, cursor: first.nextCursor });
+		expect(wrongShiplet.isError).toBe(true);
+	});
+
 	it("denies another user's Shiplet feedback without returning data", async () => {
 		const ownerToken = oauthToken(uniqueEmail("plugin-victim"));
 		const intruderToken = oauthToken(uniqueEmail("plugin-intruder"));
