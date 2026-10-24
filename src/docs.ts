@@ -11,7 +11,7 @@ interface DocsPage {
 
 // prettier-ignore
 const DOCS_PUBLIC_CONTENT_SHA256: Record<string, string> = {
-  "cli": "09fce96ca3a01879250dc723f5f82940666ece438b49db04b8536dd970961558",
+  "cli": "95c76e56d7dcac4d2982a4bcf152205d884cb4a1262aaf71dde55d6d967b972f",
   "self-hosting": "03dd91928c89a6911867c9c4f4625aa4455306c420af821408540ffb7eac1f38",
   "browser-capture": "1b6542d6a598b88c6dacda840930f1ff5095d9c0952778bb3a26672603a61643",
   "introduction": "04360e14d9c10a3cce48907eebea6b53d1647ad094353e5e22d57193ced2c2e1",
@@ -291,6 +291,7 @@ npx shiplet-cli prepare ./dist --name "Review build" --subdomain review-build --
 <pre><code>npm install -g shiplet-cli
 shiplet --help</code></pre>
 <p>Replace <code>./dist</code> with your artifact folder and choose an available subdomain. Add <code>--dry-run</code> to inspect the artifact before publishing; a dry run does not authenticate.</p>
+<p>Shiplet publishes into your only workspace automatically. If your account belongs to more than one, add <code>--organization org_123</code> with the workspace ID, or set <code>SHIPLET_ORGANIZATION_ID</code>; the flag wins when both are set. Workspace IDs start with <code>org_</code>. If you name neither, the error lists each of your workspaces by name and ID, and a dry run shows the workspace a command will use.</p>
 <h2>Approve a session</h2>
 <ol><li>Run <code>shiplet login</code>, or any network command without an API key, to use browser authorization.</li><li>Sign in to Shiplet if asked. Check the account shown on the approval page.</li><li>Select <strong>Authorize CLI</strong> only if you started the command.</li><li>Select <strong>Return to CLI</strong> on the approval page to complete the local callback.</li><li>Return to your terminal or agent for the result. You can close the browser window.</li></ol>
 <p>One approval creates a session that later commands reuse for two hours by default. Set another length with <code>--session-ttl</code> or <code>SHIPLET_CLI_SESSION_TTL</code>, from 5 minutes to 8 hours; Shiplet enforces the 8 hour maximum. The session is bound to the exact Shiplet origin and the approved account, and is kept in the macOS Keychain, the Linux Secret Service keyring, or otherwise a user-only <code>0600</code> file under <code>~/.config/shiplet</code>. It is never printed. No pasted credential is required.</p>

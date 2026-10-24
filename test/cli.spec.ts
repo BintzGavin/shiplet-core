@@ -916,6 +916,319 @@ describe("Shiplet CLI", () => {
 		expect(stderr.value()).not.toContain("shiplet_cli_fixture");
 	});
 
+	describe("workspace selection when publishing", () => {
+		const reviewResponse = () =>
+			new Response(
+				JSON.stringify({
+					ok: true,
+					reviewUrl: "https://workspace-review.shiplet.cc",
+					project: { id: "project_W" },
+				}),
+				{ status: 201, headers: { "content-type": "application/json" } },
+			);
+
+		async function prepareArtifact(
+			extraArgv: string[],
+			{
+				env = {},
+				respond = reviewResponse,
+				auth = "session",
+			}: {
+				env?: Record<string, string | undefined>;
+				respond?: () => Response;
+				auth?: "session" | "key";
+			} = {},
+		) {
+			const artifactDir = await makeTempDir();
+			await writeFile(
+				path.join(artifactDir, "index.html"),
+				"<h1>Workspace review</h1>",
+			);
+			const stdout = createWritable();
+			const stderr = createWritable();
+			const network = vi.fn(
+				async (_url: string | URL | Request, _init?: RequestInit) => respond(),
+			);
+			const exitCode = await cli.runCli({
+				argv: [
+					"prepare",
+					artifactDir,
+					"--name",
+					"Workspace review",
+					"--subdomain",
+					"workspace-review",
+					...(auth === "key" ? ["--token", "shiplet_cli_fixture"] : []),
+					...extraArgv,
+				],
+				env,
+				fetch: (auth === "key" ? network : vi.fn()) as unknown as typeof fetch,
+				sessionFetch:
+					auth === "session" ? (network as unknown as typeof fetch) : undefined,
+				stdout,
+				stderr,
+			});
+			return {
+				exitCode,
+				stdout: stdout.value(),
+				stderr: stderr.value(),
+				network,
+				sentBodies: network.mock.calls.map(
+					([, init]) =>
+						JSON.parse(String(init?.body)) as Record<string, unknown>,
+				),
+			};
+		}
+
+		it.each(["session", "key"] as const)(
+			"Given --organization with a %s credential, when prepare publishes, then the chosen workspace is sent as organization_id",
+			async (auth) => {
+				const result = await prepareArtifact(
+					["--organization", "org_design_team"],
+					{ auth },
+				);
+
+				expect(result.exitCode, result.stderr).toBe(0);
+				expect(result.network).toHaveBeenCalledOnce();
+				expect(result.sentBodies[0]).toMatchObject({
+					name: "Workspace review",
+					subdomain: "workspace-review",
+					organization_id: "org_design_team",
+				});
+				expect(result.stdout).toContain("Prepared Workspace review for review");
+			},
+		);
+
+		it("Given only SHIPLET_ORGANIZATION_ID, when prepare publishes, then that workspace is sent", async () => {
+			const result = await prepareArtifact([], {
+				env: { SHIPLET_ORGANIZATION_ID: "org_research" },
+			});
+
+			expect(result.exitCode, result.stderr).toBe(0);
+			expect(result.sentBodies[0].organization_id).toBe("org_research");
+		});
+
+		it("Given both --organization and SHIPLET_ORGANIZATION_ID, when prepare publishes, then the flag wins", async () => {
+			const result = await prepareArtifact(
+				["--organization=org_design_team"],
+				{ env: { SHIPLET_ORGANIZATION_ID: "org_research" } },
+			);
+
+			expect(result.exitCode, result.stderr).toBe(0);
+			expect(result.sentBodies[0].organization_id).toBe("org_design_team");
+		});
+
+		it("Given no workspace is chosen, when prepare publishes, then organization_id is omitted so Shiplet can pick an only workspace", async () => {
+			const result = await prepareArtifact([], {
+				env: { SHIPLET_ORGANIZATION_ID: "" },
+			});
+
+			expect(result.exitCode, result.stderr).toBe(0);
+			expect(result.sentBodies[0]).not.toHaveProperty("organization_id");
+		});
+
+		it.each<[string, string[]]>([
+			["a workspace name", ["--organization", "Design Team"]],
+			["a slug without the org_ prefix", ["--organization", "design-team"]],
+			["another kind of ID", ["--organization", "project_123"]],
+			["an empty org_ suffix", ["--organization", "org_"]],
+			["a path", ["--organization", "org_a/../b"]],
+			["a dry run with a workspace name", ["--organization", "Design Team", "--dry-run"]],
+		])(
+			"Given %s as the workspace, when prepare runs, then it is rejected before any network request",
+			async (_label, argv) => {
+				const result = await prepareArtifact(argv);
+
+				expect(result.exitCode).toBe(1);
+				expect(result.network).not.toHaveBeenCalled();
+				expect(result.stdout).toBe("");
+				expect(result.stderr).toContain("--organization");
+				expect(result.stderr).toContain("org_");
+			},
+		);
+
+		it("Given SHIPLET_ORGANIZATION_ID holds something other than a workspace ID, when prepare runs, then it is rejected without echoing the value", async () => {
+			const result = await prepareArtifact([], {
+				env: { SHIPLET_ORGANIZATION_ID: "shiplet_org_fixture-sensitive-marker" },
+			});
+
+			expect(result.exitCode).toBe(1);
+			expect(result.network).not.toHaveBeenCalled();
+			expect(result.stdout).toBe("");
+			expect(result.stderr).toContain("SHIPLET_ORGANIZATION_ID");
+			expect(result.stderr).toContain("org_");
+			expect(result.stderr).not.toContain("fixture-sensitive-marker");
+		});
+
+		it("Given a dry run, when the output is printed, then it names the chosen workspace without a network request", async () => {
+			const json = await prepareArtifact([
+				"--organization",
+				"org_design_team",
+				"--dry-run",
+				"--json",
+			]);
+			expect(json.exitCode, json.stderr).toBe(0);
+			expect(json.network).not.toHaveBeenCalled();
+			expect(JSON.parse(json.stdout)).toMatchObject({
+				dryRun: true,
+				organizationId: "org_design_team",
+			});
+
+			const human = await prepareArtifact(["--dry-run"], {
+				env: { SHIPLET_ORGANIZATION_ID: "org_research" },
+			});
+			expect(human.exitCode, human.stderr).toBe(0);
+			expect(human.stdout).toContain("Workspace: org_research");
+
+			const unsetJson = await prepareArtifact(["--dry-run", "--json"]);
+			expect(JSON.parse(unsetJson.stdout).organizationId).toBeNull();
+			const unsetHuman = await prepareArtifact(["--dry-run"]);
+			expect(unsetHuman.stdout).toContain("Workspace: not set");
+			expect(unsetHuman.stdout).toContain("--organization <id>");
+			expect(unsetHuman.network).not.toHaveBeenCalled();
+		});
+
+		it("Given an account in several workspaces, when Shiplet asks for organization_id, then the CLI explains how to choose one and exits nonzero", async () => {
+			const result = await prepareArtifact(
+				["--api-url", "https://cli.shiplet.test", "--json"],
+				{
+					respond: () =>
+						new Response("Missing required fields: organization_id", {
+							status: 400,
+							headers: { "content-type": "text/plain" },
+						}),
+				},
+			);
+
+			expect(result.exitCode).toBe(1);
+			expect(result.network).toHaveBeenCalledOnce();
+			expect(result.stdout).toBe("");
+			expect(result.stderr).toMatch(/more than one workspace/);
+			expect(result.stderr).toContain("--organization <id>");
+			expect(result.stderr).toContain("SHIPLET_ORGANIZATION_ID");
+			expect(result.stderr).toContain("https://cli.shiplet.test/workspace");
+		});
+
+		const organizationRequired = (organizations: unknown) => () =>
+			new Response(
+				JSON.stringify({
+					ok: false,
+					code: "organization_required",
+					error: "Missing required fields: organization_id",
+					organizations,
+				}),
+				{ status: 400, headers: { "content-type": "application/json" } },
+			);
+
+		it("Given Shiplet lists the caller's workspaces, when the publish names none, then each name and ID is printed under the hint", async () => {
+			const result = await prepareArtifact(["--json"], {
+				respond: organizationRequired([
+					{ id: "org_design", name: "Design Team" },
+					{ id: "org_research", name: "Research" },
+				]),
+			});
+
+			expect(result.exitCode).toBe(1);
+			expect(result.network).toHaveBeenCalledOnce();
+			expect(result.stdout).toBe("");
+			expect(result.stderr).toMatch(/more than one workspace/);
+			expect(result.stderr).toContain("--organization <id>");
+			expect(result.stderr).toContain("SHIPLET_ORGANIZATION_ID");
+			expect(result.stderr).toContain(
+				"\n  Design Team  org_design\n  Research  org_research\n",
+			);
+			expect(result.stderr).not.toContain("/workspace");
+			expect(result.stderr).not.toContain('"organizations"');
+		});
+
+		it("Given listed workspaces carry control characters or unusable IDs, when printed, then names are made printable and unusable entries are skipped", async () => {
+			const result = await prepareArtifact([], {
+				respond: organizationRequired([
+					{ id: "org_design", name: "\u001b[31mDesign\u001b[0m\nTeam" },
+					{ id: "org_mirror", name: "\u202eRorrim" },
+					{ id: "org_unnamed" },
+					{ id: "project_123", name: "Not a workspace" },
+					{ id: "org_bad id", name: "Spaced" },
+					"org_plain_string",
+				]),
+			});
+
+			expect(result.exitCode).toBe(1);
+			expect(result.stderr).toContain("\n  [31mDesign [0m Team  org_design\n");
+			expect(result.stderr).toContain("\n  Rorrim  org_mirror\n");
+			expect(result.stderr).toContain("\n  org_unnamed\n");
+			expect(result.stderr).not.toMatch(/[\u0000-\u0009\u000b-\u001f\u007f\u202e]/u);
+			expect(result.stderr).not.toContain("Not a workspace");
+			expect(result.stderr).not.toContain("Spaced");
+			expect(result.stderr).not.toContain("org_plain_string");
+		});
+
+		it("Given Shiplet lists no usable workspace, when the publish names none, then the Workspace page is the fallback", async () => {
+			const result = await prepareArtifact(["--api-url", "https://cli.shiplet.test"], {
+				respond: organizationRequired([{ id: "project_123", name: "Not a workspace" }]),
+			});
+
+			expect(result.exitCode).toBe(1);
+			expect(result.stderr).toMatch(/more than one workspace/);
+			expect(result.stderr).toContain("https://cli.shiplet.test/workspace");
+			expect(result.stderr).not.toContain("Not a workspace");
+		});
+
+		it("Given another 400, when prepare fails, then the server message is reported without workspace guidance", async () => {
+			const result = await prepareArtifact([], {
+				respond: () =>
+					new Response(
+						"Missing required fields: script_content or assets or external_url",
+						{ status: 400, headers: { "content-type": "text/plain" } },
+					),
+			});
+
+			expect(result.exitCode).toBe(1);
+			expect(result.stderr).toContain(
+				"Shiplet API returned 400: Missing required fields: script_content",
+			);
+			expect(result.stderr).not.toMatch(/workspace/i);
+		});
+
+		it("Given help is requested, when publish options are listed, then workspace selection is documented", async () => {
+			const stdout = createWritable();
+			const exitCode = await cli.runCli({
+				argv: ["--help"],
+				env: {},
+				stdout,
+				stderr: createWritable(),
+			});
+
+			expect(exitCode).toBe(0);
+			expect(stdout.value()).toContain("--organization <id>");
+			expect(stdout.value()).toContain("SHIPLET_ORGANIZATION_ID");
+		});
+
+		it("Given --organization on a command that does not create a Shiplet, when parsed, then it is rejected before network", async () => {
+			const network = vi.fn();
+			const stderr = createWritable();
+			const exitCode = await cli.runCli({
+				argv: [
+					"fork",
+					"project_A",
+					"--organization",
+					"org_design_team",
+					"--token",
+					"shiplet_cli_fixture",
+				],
+				env: {},
+				fetch: network as unknown as typeof fetch,
+				stdout: createWritable(),
+				stderr,
+			});
+
+			expect(exitCode).toBe(1);
+			expect(stderr.value()).toContain(
+				"--organization is not valid for shiplet fork",
+			);
+			expect(network).not.toHaveBeenCalled();
+		});
+	});
+
 	describe("canonical portable package parity", () => {
 		it("Given a required entrypoint is absent, when validate runs, then the package is rejected", async () => {
 			const packageFixture = cloneCompletePackage();
