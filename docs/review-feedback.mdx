@@ -43,9 +43,17 @@ press Escape, or scroll the artifact yourself. If the live channel is
 interrupted, reload the trusted review host; persisted feedback remains
 canonical.
 
-Mentions notify only collaborators who can already access the Shiplet. Watching
-a Shiplet subscribes the current account to its future review activity; use the
-Shiplet detail view to stop watching. Inbox items can be marked read without
+Only someone who can edit the Shiplet (its owner, an editor, or an
+organization admin) can invite through a mention: mentioning a workspace member
+who cannot open the Shiplet yet grants them reviewer access and notifies them.
+Other workspace members' mentions only notify collaborators who can already
+open the Shiplet, and mentions from people outside the workspace have no effect.
+A mention that has no effect does not reveal whether that person exists or
+belongs to the workspace, and mention suggestions offer only people the mention
+can reach.
+
+Watching a Shiplet subscribes the current account to its future review
+activity; use the Shiplet detail view to stop watching. Inbox items can be marked read without
 changing the underlying feedback status. A denied mention, watch, notification,
 or presence request does not widen access and does not discard persisted events.
 
