@@ -20,7 +20,7 @@ const DOCS_PUBLIC_CONTENT_SHA256: Record<string, string> = {
   "quickstart":
     "447ea3b2f09dcb48ea11813b612b697332cd4717c2fcc6c3a26e0815e3393120",
   "access-control":
-    "79149325c91406a2390f14cd814e9a1eae1d3eac6010ac6181040518fa75967a",
+    "0d2511e0d3ac096e7ce50dd919498fda5ee8be55cfe3ac904c5907810b8430db",
   "publishing":
     "0d94977a77ce4a701644a65f43eeec8002f4a141a3cdbf11d591b366a1c52c90",
   "extensions":
@@ -194,6 +194,8 @@ const DOCS_PAGES: DocsPage[] = [
 </tbody></table>
 <h2>People and teams</h2>
 <p>Organizations contain members and teams. A Shiplet can also grant access to an exact invited email address. Invitations become effective for the matching signed-in identity.</p>
+<p>Sharing a Shiplet by email grants that one Shiplet only. It does not make the person a member of the organization or of any team, so they cannot open the organization's other Shiplets, archive Shiplets, or invite anyone. Someone who is already a member receives the grant at once, without an invitation.</p>
+<p>Sign in first: a restricted Shiplet or its invitation opened while signed out starts a normal sign-in without naming the Shiplet or organization. After sign-in, the invitation is offered only to the exact invited email; accept it deliberately. Any other account sees the usual request-access screen.</p>
 <p>Open <strong>Account</strong> at <code>/account</code> to inspect or switch the signed-in identity. Open <strong>Workspace</strong> at <code>/workspace</code> to choose the active organization.</p>
 <h2>Invite links</h2>
 <p>Organization administrators create invite links in the <strong>Invite links</strong> section of <strong>Workspace</strong>. Each link targets the whole organization or exactly one team. It can allow a set number of uses or unlimited uses, expire after a number of days or never, and be reserved for specific email addresses. Administrators can copy the same link again later and revoke it at any time, and Shiplet records every link creation, join, and revocation in its audit history.</p>

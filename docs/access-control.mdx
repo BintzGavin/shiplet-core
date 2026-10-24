@@ -12,6 +12,13 @@ People sign in through WorkOS-backed AuthKit. Organizations contain members and
 teams; a Shiplet can also grant access to an individual exact email address.
 An email invitation becomes effective only for the matching signed-in identity.
 
+Sharing a Shiplet by email grants that one Shiplet only. It does not make the
+person a member of the organization or of any team, so they cannot open the
+organization's other Shiplets, archive Shiplets, or invite anyone. Sharing with
+someone who is already a member of the organization grants the Shiplet at once
+without sending an invitation, and sharing again with the same address and role
+changes nothing.
+
 ### Select an organization or switch identity
 
 Open **Account** from the header (`/account`) to inspect the signed-in identity.
@@ -27,9 +34,12 @@ settings. Team membership does not itself grant edit access to every Shiplet:
 grant that team the narrow
 viewer, editor, or owner role on the intended Shiplet.
 
-Invitation consent is exact-email. Open the invitation while signed in with the
-exact invited email, review the organization and team or Shiplet access being
-offered, and accept it deliberately. If the signed-in email does not match,
+Invitation consent is exact-email, and you sign in first. Opening a restricted
+Shiplet or its invitation while signed out starts a normal sign-in without
+naming the Shiplet or organization. After sign-in, Shiplet offers the
+invitation only when the signed-in email exactly matches the invited address:
+review the Shiplet access being offered and accept it deliberately. If the
+signed-in email does not match, you see the usual request-access screen instead;
 switch accounts or sign out and return with the invited identity; do not widen
 visibility or forward the invitation to bypass the mismatch.
 

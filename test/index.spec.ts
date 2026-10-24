@@ -18,7 +18,11 @@ import {
   validateReviewFeedbackPayload,
 } from "../src/review";
 import { ensureSchema } from "../src/schema";
-import { signInWithCode, signInWithMintedState } from "./helpers/auth-flow";
+import {
+  acceptOfferedInvitationConsent,
+  signInWithCode,
+  signInWithMintedState,
+} from "./helpers/auth-flow";
 import {
   absolutizeCssUrlsForSnapshot,
   clampExpandedBubbleFrame,
@@ -10048,7 +10052,20 @@ describe("Shiplet", () => {
             body.invitation.email,
           )}`, JSON.parse(atob(state)));
       expect(callback.status).toBe(302);
-      expect(callback.headers.get("location")).toBe(body.shipletUrl);
+      // The emailed token signs the invitee in; the team and Shiplet access
+      // wait for the consent step that sign-in offers.
+      const pendingAfterSignIn = await (env as unknown as TestEnv).DB.prepare(
+        `SELECT status FROM app_invitations WHERE id = ?`,
+      )
+        .bind(body.invitation.id)
+        .first<{ status: string }>();
+      expect(pendingAfterSignIn?.status).toBe("pending");
+      const { accepted } = await acceptOfferedInvitationConsent(
+        requestHelper,
+        callback,
+      );
+      expect(accepted.status).toBe(302);
+      expect(accepted.headers.get("location")).toBe(body.shipletUrl);
 
       const orgMembership = await (env as unknown as TestEnv).DB.prepare(
         `SELECT id FROM organization_memberships
@@ -10099,7 +10116,13 @@ describe("Shiplet", () => {
       const code = `test-code:${body.organization.id}:${encodeURIComponent("invited@example.com")}`;
       const callback = await signInWithMintedState(requestHelper, env, code, JSON.parse(atob(state)));
       expect(callback.status).toBe(302);
-      expect(callback.headers.get("location")).toBe(body.shipletUrl);
+      // Sign-in offers the invitation's consent step instead of accepting it.
+      const consentUrl = new URL(
+        callback.headers.get("location") || "",
+        "http://localhost",
+      );
+      expect(consentUrl.pathname).toBe("/auth/login");
+      expect(consentUrl.searchParams.get("consent")).toBeTruthy();
 
       const appInvitation = await (env as unknown as TestEnv).DB.prepare(
         `SELECT status, accepted_on
@@ -10473,13 +10496,18 @@ describe("Shiplet", () => {
         ).not.toContain(publishBody.project.id);
       }
 
-      const state = btoa(
-        JSON.stringify({
-          invitationToken: pendingInvitation!.workos_invitation_token,
-        }),
+      const callback = await signInWithMintedState(
+        requestHelper,
+        env,
+        `test-code::${encodeURIComponent(editorEmail)}`,
+        { returnTo: `/shiplets/${publishBody.project.id}` },
       );
-      const callback = await signInWithMintedState(requestHelper, env, `test-code::${encodeURIComponent(editorEmail)}`, JSON.parse(atob(state)));
       expect(callback.status).toBe(302);
+      const { accepted } = await acceptOfferedInvitationConsent(
+        requestHelper,
+        callback,
+      );
+      expect(accepted.status).toBe(302);
 
       const acceptedShare = await requestHelper(
         `/api/projects/${publishBody.project.id}/invitations`,

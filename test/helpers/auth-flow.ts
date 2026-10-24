@@ -91,3 +91,49 @@ export async function signInWithMintedState(
 		redirect: "manual",
 	});
 }
+
+/** The session cookies a sign-in callback set, as a Cookie header. */
+export function sessionCookieHeader(response: Response) {
+	return setCookiePairs(response)
+		.filter((pair) => /^(?:__Host-)?shiplet_(?:session|account_group)=./.test(pair))
+		.join("; ");
+}
+
+/**
+ * Follows a sign-in callback to the invitation consent it offered, then
+ * accepts it the way the signed-in browser does.
+ */
+export async function acceptOfferedInvitationConsent(
+	fetcher: AuthFetch,
+	callback: Response,
+	options: { origin?: string; headers?: Record<string, string> } = {},
+) {
+	const cookie = sessionCookieHeader(callback);
+	const consentUrl = new URL(
+		callback.headers.get("location") || "",
+		options.origin ?? "http://localhost",
+	);
+	if (consentUrl.pathname !== "/auth/login" || !consentUrl.searchParams.get("consent")) {
+		throw new Error(`Expected sign-in to offer invitation consent, got ${consentUrl}`);
+	}
+	const consentPath = `${consentUrl.pathname}${consentUrl.search}`;
+	const consentPage = await fetcher(
+		options.origin ? `${options.origin}${consentPath}` : consentPath,
+		{ headers: { cookie }, redirect: "manual" },
+	);
+	const html = await consentPage.text();
+	const consentToken = html.match(/name="consent_token" value="([^"]+)"/)?.[1];
+	if (!consentToken) throw new Error("Consent page did not offer an invitation");
+	const accepted = await fetcher(`${options.origin ?? ""}/auth/login`, {
+		method: "POST",
+		headers: {
+			cookie,
+			Origin: consentUrl.origin,
+			"Content-Type": "application/x-www-form-urlencoded",
+			...options.headers,
+		},
+		body: new URLSearchParams({ consent_token: consentToken }),
+		redirect: "manual",
+	});
+	return { cookie, consentToken, consentPage: html, accepted };
+}

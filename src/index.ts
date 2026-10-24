@@ -298,10 +298,11 @@ import {
   findPendingInvitationsByEmail,
   findPendingInvitationsByEmailAndOrganization,
   findPendingInvitationsByEmailAndProject,
-  findPendingInvitationsByProject,
   findPendingInvitationsByWorkOSInvitationId,
   findPendingInvitationsByWorkOSInvitationToken,
   getOrganizationMembership,
+  getShipletUserGrant,
+  getUserByEmail,
   getOrganizationById,
   getProjectById,
   getShipletAccessRequest,
@@ -1402,25 +1403,150 @@ function renderInvitationConsentPage(options: {
   project: Project;
   organizationName: string;
   consentToken: string;
-  signedIn: boolean;
+  joinsWorkspace: boolean;
 }) {
-  const action = options.signedIn
-    ? "Accept invitation and open Shiplet"
-    : "Sign in and accept invitation";
+  const offer = options.joinsWorkspace
+    ? `<p>You are choosing to join <strong>${escapeAuthHtml(options.organizationName)}</strong> and open this restricted Shiplet.</p>`
+    : `<p><strong>${escapeAuthHtml(options.organizationName)}</strong> invited you to open this restricted Shiplet. Accepting opens this Shiplet only, not the rest of the workspace.</p>`;
   return `<div class="auth-stage">
 	<div class="auth-scene" aria-hidden="true">${HARBOR_SCENE_SVG}</div>
 	<section class="form-container auth-card" aria-labelledby="invitation-consent-title">
 		<span class="success-card-label">Restricted Shiplet</span>
 		<h1 id="invitation-consent-title">Review ${escapeAuthHtml(options.project.name)}</h1>
-		<p>You are choosing to join <strong>${escapeAuthHtml(options.organizationName)}</strong> and open this restricted Shiplet.</p>
+		${offer}
 		<p>Continue only if you recognize this workspace. Shiplet will require the exact email address that was invited.</p>
 		<form method="post" action="/auth/login">
 			<input type="hidden" name="consent_token" value="${escapeAuthHtml(options.consentToken)}">
-			<button class="btn btn-primary" type="submit">${action}</button>
+			<button class="btn btn-primary" type="submit">Accept invitation and open Shiplet</button>
 			<a class="btn btn-secondary" href="/">Cancel</a>
 		</form>
 	</section>
 </div>`;
+}
+
+/** An email share opens one Shiplet; it never joins its workspace or a team. */
+function isShipletOnlyInvitation(invitation: AppInvitationRecord) {
+  return invitation.invite_type === "shiplet_user";
+}
+
+/**
+ * The pending invitation to this Shiplet that the signed-in person may accept:
+ * it must name their exact email and the Shiplet's own workspace.
+ */
+async function pendingInvitationForSignedInUser(
+  env: Env,
+  project: Project,
+  user: ShipletUser,
+  invitationId?: string | null,
+) {
+  const email = user.email.trim().toLowerCase();
+  const candidates = invitationId
+    ? await findPendingInvitationById(env.DB, invitationId)
+    : await findPendingInvitationsByEmailAndProject(env.DB, email, project.id);
+  return (
+    candidates.find(
+      (invitation) =>
+        invitation.project_id === project.id &&
+        invitation.organization_id === project.organization_id &&
+        invitation.email.trim().toLowerCase() === email,
+    ) || null
+  );
+}
+
+/**
+ * After sign-in, a person whose exact email has a pending invitation to the
+ * restricted Shiplet they asked for is offered its named consent step. Nobody
+ * else sees the Shiplet or workspace names here; they continue under the
+ * normal access rules.
+ */
+async function invitationConsentUrlForUser(
+  c: any,
+  user: ShipletUser,
+  returnTo: string,
+) {
+  const project = await projectFromAuthReturnTo(c.env, c.req.url, returnTo);
+  if (
+    !project ||
+    project.archived_on ||
+    !project.organization_id ||
+    project.visibility === "public" ||
+    project.visibility === "unlisted" ||
+    (await canViewProject(c.env.DB, project, user.id))
+  ) {
+    return null;
+  }
+  const invitation = await pendingInvitationForSignedInUser(
+    c.env,
+    project,
+    user,
+  );
+  if (!invitation) return null;
+  const consentToken = await createInvitationConsentToken(c.env, {
+    projectId: project.id,
+    invitationId: invitation.id,
+    returnTo,
+  });
+  const consentUrl = new URL("/auth/login", appBaseUrl(c.env, c.req.url));
+  consentUrl.searchParams.set("consent", consentToken);
+  return consentUrl.toString();
+}
+
+/** Whether a form response may redirect here under `form-action 'self'`. */
+function isSameOriginAsRequest(requestUrl: string, target: string) {
+  try {
+    return new URL(target, requestUrl).origin === new URL(requestUrl).origin;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Pages here are served with `form-action 'self'`, and browsers refuse a form
+ * submission that redirects to another origin. A form whose next stop is on
+ * another origin finishes in a new document that moves on by itself, with a
+ * link for browsers that do not follow the refresh.
+ */
+function formNavigationHandoffResponse(
+  c: any,
+  user: ShipletUser | null,
+  options: {
+    label: string;
+    title: string;
+    message: string;
+    href: string;
+    action: string;
+  },
+) {
+  const href = escapeAuthHtml(options.href);
+  const body = renderPage(
+    `<div class="auth-stage auth-stage-compact">
+      <meta http-equiv="refresh" content="0;url=${href}">
+      <section class="form-container auth-card auth-decision" aria-labelledby="form-handoff-title">
+        <span class="success-card-label">${escapeAuthHtml(options.label)}</span>
+        <h1 id="form-handoff-title">${escapeAuthHtml(options.title)}</h1>
+        <p>${escapeAuthHtml(options.message)}</p>
+        <a id="form-handoff-link" class="btn btn-primary" href="${href}" rel="noreferrer">${escapeAuthHtml(options.action)}</a>
+      </section>
+    </div>`,
+    {
+      nonce: kernelDocumentNonce(c),
+      user,
+      appUrl: appBaseUrl(c.env, c.req.url),
+      title: `${options.title} | Shiplet`,
+      canonicalPath: null,
+      indexing: "noindex",
+    },
+  );
+  return new Response(body, {
+    status: 200,
+    headers: {
+      "content-type": "text/html; charset=utf-8",
+      "cache-control": "no-store",
+      pragma: "no-cache",
+      "referrer-policy": "no-referrer",
+      "x-content-type-options": "nosniff",
+    },
+  });
 }
 
 async function invitationConsentPageResponse(c: any, consentToken: string) {
@@ -1443,13 +1569,33 @@ async function invitationConsentPageResponse(c: any, consentToken: string) {
   ) {
     return c.text("Invitation consent is invalid or expired", 400);
   }
-  const organization = project.organization_id
-    ? await getOrganizationById(c.env.DB, project.organization_id)
-    : null;
-  if (!organization) return c.text("Invitation workspace not found", 404);
 
+  // Consent is offered only after sign-in, so a signed-out visitor starts a
+  // normal sign-in and is offered consent again if their email is invited.
   const user = await getCurrentUser(c.req.raw, c.env);
-  if (user && (await canViewProject(c.env.DB, project, user.id))) {
+  if (!user) {
+    return workOSLoginRedirect(c, {
+      returnTo: consent.returnTo,
+      organizationId: await organizationIdForAuthReturn(
+        c.env,
+        c.req.url,
+        consent.returnTo,
+      ),
+    });
+  }
+  const invitation = (await canViewProject(c.env.DB, project, user.id))
+    ? null
+    : await pendingInvitationForSignedInUser(
+        c.env,
+        project,
+        user,
+        consent.invitationId,
+      );
+  const organization =
+    invitation && project.organization_id
+      ? await getOrganizationById(c.env.DB, project.organization_id)
+      : null;
+  if (!invitation || !organization) {
     return c.redirect(
       await resolvePostAuthReturnTo(c, consent.returnTo, user),
       302,
@@ -1462,7 +1608,7 @@ async function invitationConsentPageResponse(c: any, consentToken: string) {
         project,
         organizationName: organization.name,
         consentToken,
-        signedIn: Boolean(user),
+        joinsWorkspace: !isShipletOnlyInvitation(invitation),
       }),
       {
         nonce: kernelDocumentNonce(c),
@@ -6361,7 +6507,8 @@ async function reconcilePendingInvitationsForUser(
 
   for (const invitation of pendingInvitations) {
     const organizationMembershipId = `om_${invitation.organization_id}_${user.id}`;
-    if (invitation.organization_id) {
+    const shipletOnly = isShipletOnlyInvitation(invitation);
+    if (invitation.organization_id && !shipletOnly) {
       await ensureOrganizationMembershipRecord(env.DB, {
         id: organizationMembershipId,
         organization_id: invitation.organization_id,
@@ -6371,7 +6518,7 @@ async function reconcilePendingInvitationsForUser(
       });
     }
 
-    if (invitation.team_id) {
+    if (invitation.team_id && !shipletOnly) {
       await createTeamMembership(
         env.DB,
         invitation.team_id,
@@ -6491,7 +6638,9 @@ async function acceptInvitationConsentForUser(
     env,
     workosUser,
     {
-      organizationId: invitation.organization_id,
+      organizationId: isShipletOnlyInvitation(invitation)
+        ? undefined
+        : invitation.organization_id,
       pendingInvitations: [invitation],
     },
   );
@@ -12319,7 +12468,6 @@ async function workOSLoginRedirect(
     returnTo: string;
     invitationToken?: string | null;
     accountAction?: string;
-    consentToken?: string | null;
     organizationId?: string | null;
     prompt?: "login";
     retried?: boolean;
@@ -12329,7 +12477,6 @@ async function workOSLoginRedirect(
     returnTo: options.returnTo,
     invitationToken: options.invitationToken || undefined,
     accountAction: options.accountAction,
-    consentToken: options.consentToken || undefined,
     retried: options.retried || undefined,
   });
   c.header("set-cookie", cookie, { append: true });
@@ -12391,6 +12538,20 @@ app.get("/auth/login", async (c) => {
             requestedProject?.id === project.id
               ? returnTo
               : artifactPublicUrl(c.env, c.req.url, project);
+          // A Shiplet invitation is accepted only from its consent step, so
+          // the email link's token is not handed to AuthKit to accept early.
+          // Signed-out visitors sign in first and are offered consent after.
+          if (!(await getCurrentUser(c.req.raw, c.env))) {
+            return workOSLoginRedirect(c, {
+              returnTo: scopedReturnTo,
+              organizationId: await organizationIdForAuthReturn(
+                c.env,
+                c.req.url,
+                scopedReturnTo,
+              ),
+              retried,
+            });
+          }
           const signedConsent = await createInvitationConsentToken(c.env, {
             projectId: project.id,
             invitationId: invitation.id,
@@ -12410,22 +12571,6 @@ app.get("/auth/login", async (c) => {
       });
     }
 
-    const project = await projectFromAuthReturnTo(c.env, c.req.url, returnTo);
-    if (
-      project &&
-      !project.archived_on &&
-      project.visibility !== "public" &&
-      project.visibility !== "unlisted" &&
-      project.organization_id &&
-      (await findPendingInvitationsByProject(c.env.DB, project.id)).length > 0
-    ) {
-      const signedConsent = await createInvitationConsentToken(c.env, {
-        projectId: project.id,
-        returnTo,
-      });
-      return invitationConsentPageResponse(c, signedConsent);
-    }
-
     if (
       !accountAction &&
       !hasExplicitAuthorization(c.req.header("authorization")) &&
@@ -12433,7 +12578,11 @@ app.get("/auth/login", async (c) => {
     ) {
       const currentUser = await getCurrentUser(c.req.raw, c.env);
       if (currentUser) {
-        return c.redirect(await resolvePostAuthReturnTo(c, returnTo, currentUser), 302);
+        return c.redirect(
+          (await invitationConsentUrlForUser(c, currentUser, returnTo)) ||
+            (await resolvePostAuthReturnTo(c, returnTo, currentUser)),
+          302,
+        );
       }
     }
 
@@ -12503,20 +12652,34 @@ app.post("/auth/login", async (c) => {
         },
         consent,
       );
-      return c.redirect(
-        await resolvePostAuthReturnTo(c, consent.returnTo, currentUser),
-        302,
+      const destination = await resolvePostAuthReturnTo(
+        c,
+        consent.returnTo,
+        currentUser,
       );
+      if (isSameOriginAsRequest(c.req.url, destination)) {
+        return c.redirect(destination, 302);
+      }
+      return formNavigationHandoffResponse(c, currentUser, {
+        label: "Invitation accepted",
+        title: "Open Shiplet",
+        message: "Your access is ready.",
+        href: destination,
+        action: "Open Shiplet",
+      });
     }
 
-    return workOSLoginRedirect(c, {
-      returnTo: consent.returnTo,
-      consentToken,
-      organizationId: await organizationIdForAuthReturn(
-        c.env,
-        c.req.url,
-        consent.returnTo,
-      ),
+    // The session ended after consent was shown. Redirecting this form to
+    // AuthKit would be refused under form-action 'self', so sign-in restarts
+    // from a link and consent is offered again afterwards.
+    const signInUrl = new URL("/auth/login", appBaseUrl(c.env, c.req.url));
+    signInUrl.searchParams.set("return_to", consent.returnTo);
+    return formNavigationHandoffResponse(c, null, {
+      label: "Sign in",
+      title: "Sign in to continue",
+      message: "Your session ended. Sign in again to accept the invitation.",
+      href: signInUrl.toString(),
+      action: "Sign in",
     });
   } catch (error) {
     if (isResponse(error)) return error;
@@ -12644,6 +12807,9 @@ async function completeAuthCallback(c: any, verifiedState: Record<string, unknow
     }
 
     if (state.consentToken) {
+      // Sign-in no longer starts from a consent form, but a flow begun before
+      // that change may still return here. Consent is offered again below,
+      // now that the person is signed in.
       const verification = await verifyInvitationConsentToken(
         c.env,
         state.consentToken,
@@ -12652,21 +12818,24 @@ async function completeAuthCallback(c: any, verifiedState: Record<string, unknow
         return c.text("Invitation consent is invalid or expired", 400);
       }
       callbackReturnTo = verification.consent.returnTo;
-      const accepted = await acceptInvitationConsentForUser(
-        c.env,
-        c.req.url,
-        workosUser,
-        verification.consent,
-      );
-      user = accepted.user;
-    } else if (state.invitationToken) {
+    }
+
+    if (state.invitationToken) {
+      // Shiplet invitations wait for their signed-in consent step.
+      const pendingInvitations = (
+        await findPendingInvitationsForUser(c.env, {
+          invitationId,
+          invitationToken: state.invitationToken,
+          organizationId,
+          email: workosUser.email,
+        })
+      ).filter((invitation) => !invitation.project_id);
       const reconciliation = await reconcilePendingInvitationsForUser(
         c.env,
         workosUser,
         {
-          invitationId,
-          invitationToken: state.invitationToken,
           organizationId,
+          pendingInvitations,
         },
       );
       user = reconciliation.user;
@@ -12701,7 +12870,9 @@ async function completeAuthCallback(c: any, verifiedState: Record<string, unknow
     const accountGroupId = accountSwitchingEnabled
       ? getAccountGroupCookie(c.req.raw, c.env) || newId("acctgrp")
       : null;
-    const redirectTo = await resolvePostAuthReturnTo(c, callbackReturnTo, user);
+    const redirectTo =
+      (await invitationConsentUrlForUser(c, user, callbackReturnTo)) ||
+      (await resolvePostAuthReturnTo(c, callbackReturnTo, user));
 
     return createUserSessionResponse(c.env, user.id, redirectTo, {
       accountGroupId,
@@ -19850,9 +20021,10 @@ app.post("/api/bootstrap/reconcile-invitation", async (c) => {
         c.env,
         workosUser,
         {
-          organizationId:
-            workosInvitation.organizationId ||
-            pendingInvitation.organization_id,
+          organizationId: isShipletOnlyInvitation(pendingInvitation)
+            ? undefined
+            : workosInvitation.organizationId ||
+              pendingInvitation.organization_id,
           pendingInvitations: [pendingInvitation],
         },
       );
@@ -20286,6 +20458,13 @@ app.get("/shiplets/:projectId/access", async (c) => {
       }
       return c.redirect(`/shiplets/${encodeURIComponent(project.id)}`);
     }
+
+    const consentUrl = await invitationConsentUrlForUser(
+      c,
+      user,
+      returnTarget?.toString() || `/shiplets/${encodeURIComponent(project.id)}`,
+    );
+    if (consentUrl) return c.redirect(consentUrl, 302);
 
     const request = await getShipletAccessRequest(
       c.env.DB,
@@ -22289,6 +22468,76 @@ app.post("/api/projects/:projectId/invitations", async (c) => {
       return c.text("Missing required field: email", 400);
     }
 
+    // An email share opens this Shiplet only. It never makes the person a
+    // member of the workspace or of a team.
+    const existingUser = await getUserByEmail(c.env.DB, email);
+    const existingGrant = await getShipletUserGrant(c.env.DB, project.id, {
+      id: existingUser?.id || "",
+      email,
+    });
+    if (existingGrant) {
+      if (existingGrant.role !== role) {
+        return c.text(
+          "This email already has access to this Shiplet with a different role",
+          409,
+        );
+      }
+      const pendingInvitation = existingGrant.accepted_on
+        ? undefined
+        : (
+            await findPendingInvitationsByEmailAndProject(
+              c.env.DB,
+              email,
+              project.id,
+            )
+          )[0];
+      return json(
+        pendingInvitation
+          ? {
+              grant: existingGrant,
+              appInvitation: publicAppInvitation(pendingInvitation),
+            }
+          : { grant: existingGrant },
+        200,
+      );
+    }
+
+    // Workspace members already sign in to this workspace, so they receive
+    // the grant at once instead of an invitation.
+    if (
+      existingUser &&
+      (await getOrganizationMembership(
+        c.env.DB,
+        project.organization_id,
+        existingUser.id,
+      ))
+    ) {
+      const grant = await runAuditedKernelAdminAction({
+        db: c.env.DB,
+        organizationId: project.organization_id,
+        projectId: project.id,
+        actorId: user.id,
+        action: "shiplet_share.create",
+        targetKind: "user",
+        operation: () => {
+          const grantedOn = timestamps.now();
+          return createShipletGrant(c.env.DB, {
+            id: newId("grant"),
+            project_id: project.id,
+            organization_id: project.organization_id!,
+            target_type: "user",
+            target_id: existingUser.id,
+            email,
+            role,
+            invited_by_user_id: user.id,
+            created_on: grantedOn,
+            accepted_on: grantedOn,
+          });
+        },
+      });
+      return json({ grant }, 201);
+    }
+
     const { workosInvitation, appInvitation, grant } =
       await runAuditedKernelAdminAction({
         db: c.env.DB,
@@ -22298,10 +22547,10 @@ app.post("/api/projects/:projectId/invitations", async (c) => {
         action: "shiplet_share.create",
         targetKind: "user_invitation",
         operation: async () => {
+          // No organization: the invitation only lets the person sign in.
+          // Access comes from the Shiplet grant once they accept it.
           const workosInvitation = await sendWorkOSInvitation(c.env, {
             email,
-            organizationId: project.organization_id!,
-            roleSlug: "member",
             inviterUserId: user.id,
           });
           const appInvitation = await createAppInvitation(c.env.DB, {

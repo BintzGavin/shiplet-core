@@ -32,7 +32,7 @@ function recordFormPosts(page: Page, pathname: string) {
   return () => Promise.all(posts);
 }
 
-test("an invited reviewer's consent form is accepted with its browser-sent null Origin", async ({
+test("an invited reviewer signs in, accepts consent with its browser-sent null Origin, and lands on the Shiplet", async ({
   page,
   request,
 }) => {
@@ -56,101 +56,58 @@ test("an invited reviewer's consent form is accepted with its browser-sent null 
   );
   expect(invitation.status()).toBe(201);
 
-  await page.route("https://authkit.test/**", (route) =>
-    route.fulfill({
-      status: 200,
-      contentType: "text/html",
-      body: "<!doctype html><title>AuthKit stub</title><h1>AuthKit stub</h1>",
-    }),
-  );
-  const consentPosts = recordFormPosts(page, "/auth/login");
-  // Chrome abandons this POST when it refuses the redirect, so Playwright
-  // never sees its network-stage headers; read them from DevTools instead.
-  const cdp = await page.context().newCDPSession(page);
-  await cdp.send("Network.enable");
-  const sentHeaders = new Map<string, Record<string, string>>();
-  const sentUrls = new Map<string, string>();
-  cdp.on("Network.requestWillBeSent", (event) => {
-    sentUrls.set(event.requestId, `${event.request.method} ${event.request.url}`);
-  });
-  cdp.on("Network.requestWillBeSentExtraInfo", (event) => {
-    const headers: Record<string, string> = {};
-    for (const [name, value] of Object.entries(event.headers))
-      headers[name.toLowerCase()] = String(value);
-    sentHeaders.set(event.requestId, headers);
-  });
-  const networkPostHeaders = () =>
-    [...sentUrls.entries()]
-      .filter(([, line]) => line === "POST http://localhost:8787/auth/login")
-      .map(([requestId]) => sentHeaders.get(requestId) || {});
-
+  // Signed out, the restricted Shiplet starts an ordinary sign-in: the
+  // browser is sent straight to AuthKit, which is not reachable here, so the
+  // journey reads the AuthKit request the browser attempted.
   const shipletPath = `/shiplets/${project.id}`;
-  const consentPage = await page.goto(
-    `/auth/login?return_to=${encodeURIComponent(shipletPath)}`,
+  const authKitRequest = page.waitForRequest((request) =>
+    request.url().startsWith("https://authkit.test/"),
   );
-  expect(consentPage?.headers()["referrer-policy"]).toBe("no-referrer");
-  const submitted = page.waitForEvent("requestfinished", {
-    predicate: (request) =>
-      request.method() === "POST" &&
-      new URL(request.url()).pathname === "/auth/login",
-  }).catch(() => undefined);
-  const blocked = page.waitForEvent("requestfailed", {
-    predicate: (request) =>
-      request.method() === "POST" &&
-      new URL(request.url()).pathname === "/auth/login",
-  }).catch(() => undefined);
   await page
-    .getByRole("button", { name: "Sign in and accept invitation" })
-    .click();
-  await Promise.race([submitted, blocked]);
-  await expect(page.getByText("Control-plane origin required")).toHaveCount(0);
-  await expect(page.getByText("Invitation consent origin denied")).toHaveCount(
-    0,
-  );
-
-  // The browser condition behind the defect: the consent POST is a
-  // same-origin top-level navigation whose Origin is "null" because the
-  // consent page uses no-referrer.
-  const posts = await consentPosts();
-  expect(posts).toHaveLength(1);
-  const [post] = posts;
-  expect(post.headers.origin).toBe("null");
-  await expect.poll(() => networkPostHeaders().length).toBe(1);
-  const [sent] = networkPostHeaders();
-  expect(sent.origin).toBe("null");
-  expect(sent["sec-fetch-site"]).toBe("same-origin");
-  expect(sent["sec-fetch-mode"]).toBe("navigate");
-  expect(sent["sec-fetch-dest"]).toBe("document");
-
-  // Chrome stops following the server's cross-origin redirect to AuthKit
-  // under the page's `form-action 'self'` policy, so replay the exact request
-  // the browser sent to observe the server's answer, then finish sign-in.
-  const replay = await page.request.post("/auth/login", {
-    headers: {
-      "content-type": sent["content-type"],
-      origin: sent.origin,
-      "sec-fetch-site": sent["sec-fetch-site"],
-      "sec-fetch-mode": sent["sec-fetch-mode"],
-      "sec-fetch-dest": sent["sec-fetch-dest"],
-    },
-    data: post.body,
-    maxRedirects: 0,
-  });
-  expect(replay.status()).toBe(302);
-  const authorization = new URL(replay.headers().location || "");
-  expect(authorization.origin).toBe("https://authkit.test");
-  const state = authorization.searchParams.get("state");
+    .goto(`/auth/login?return_to=${encodeURIComponent(shipletPath)}`)
+    .catch(() => undefined);
+  const authorization = await authKitRequest;
+  const signInStart = await authorization.redirectedFrom()?.response();
+  expect(signInStart?.status()).toBe(302);
+  expect(new URL(signInStart!.url()).pathname).toBe("/auth/login");
+  const state = new URL(authorization.url()).searchParams.get("state");
   expect(state).toBeTruthy();
 
+  // AuthKit returns the invitee, who is offered the named consent step.
   const code = `test-code::${encodeURIComponent(invitee.email)}`;
-  const callback = await page.goto(
+  const consentPage = await page.goto(
     `/auth/callback?${new URLSearchParams({ code, state: state! })}`,
   );
-  expect(callback?.status()).toBeLessThan(400);
+  await expect(page).toHaveURL(/\/auth\/login\?consent=/);
+  expect(consentPage?.headers()["referrer-policy"]).toBe("no-referrer");
+  await expect(
+    page.getByRole("heading", { name: `Review ${project.name}` }),
+  ).toBeVisible();
+  await expect(page.getByText(organization.name)).toBeVisible();
+
+  const consentPosts = recordFormPosts(page, "/auth/login");
+  await page
+    .getByRole("button", { name: "Accept invitation and open Shiplet" })
+    .click();
   await expect(page).toHaveURL(
     new RegExp(`${shipletPath.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}(?:$|[/?#])`),
   );
   await expect(page.getByText("Control-plane origin required")).toHaveCount(0);
+  await expect(page.getByText("Invitation consent origin denied")).toHaveCount(
+    0,
+  );
+  await expect(page.getByText(project.name).first()).toBeVisible();
+
+  // The browser condition behind the original defect still holds: the
+  // consent POST is a same-origin top-level navigation whose Origin is
+  // "null" because the consent page uses no-referrer.
+  const posts = await consentPosts();
+  expect(posts).toHaveLength(1);
+  const [post] = posts;
+  expect(post.headers.origin).toBe("null");
+  expect(post.headers["sec-fetch-site"]).toBe("same-origin");
+  expect(post.headers["sec-fetch-mode"]).toBe("navigate");
+  expect(post.headers["sec-fetch-dest"]).toBe("document");
 });
 
 test("an editor can create and disconnect a website install from the setup page", async ({

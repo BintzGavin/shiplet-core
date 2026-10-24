@@ -6,9 +6,13 @@ import {
 import { describe, expect, it, vi } from "vitest";
 import app, { reviewCapabilitySecret } from "../src/index";
 import {
+  acceptOfferedInvitationConsent,
+  authCallbackUrl,
+  sessionCookieHeader,
   setCookiePairs,
   signInWithCode,
   signInWithMintedState,
+  startSignIn,
 } from "./helpers/auth-flow";
 import {
   createReviewCapabilityToken,
@@ -176,40 +180,65 @@ async function bootstrapRestrictedInvitation(email: string) {
   };
 }
 
-async function startRestrictedInvitationConsent(returnTo: string) {
-  const loginUrl = new URL("https://app.shiplet.cc/auth/login");
-  loginUrl.searchParams.set("return_to", returnTo);
-  const consentPage = await requestHelper(loginUrl.toString(), {
-    redirect: "manual",
-  });
-  expect(consentPage.status).toBe(200);
-  const html = await consentPage.text();
-  const { state, flowCookie } = await submitRestrictedInvitationConsent(html);
-  return { html, state, flowCookie };
+const INVITATION_APP_ORIGIN = "https://app.shiplet.cc";
+
+function invitationCode(email: string) {
+  return `test-code::${encodeURIComponent(email)}`;
 }
 
-async function submitRestrictedInvitationConsent(html: string) {
+/** Signs in through /auth/login toward a restricted Shiplet. */
+async function signInTowardShiplet(email: string, returnTo: string) {
+  const callback = await signInWithCode(requestHelper, invitationCode(email), {
+    origin: INVITATION_APP_ORIGIN,
+    returnTo,
+  });
+  expect(callback.status).toBe(302);
+  return callback;
+}
+
+/** The signed-in invitee's consent page, without accepting it. */
+async function openOfferedInvitationConsent(email: string, returnTo: string) {
+  const callback = await signInTowardShiplet(email, returnTo);
+  const consentUrl = new URL(callback.headers.get("location") || "");
+  expect(consentUrl.origin).toBe(INVITATION_APP_ORIGIN);
+  expect(consentUrl.pathname).toBe("/auth/login");
+  const cookie = sessionCookieHeader(callback);
+  const page = await requestHelper(consentUrl.toString(), {
+    headers: { Cookie: cookie, Accept: "text/html" },
+    redirect: "manual",
+  });
+  expect(page.status).toBe(200);
+  const html = await page.text();
   const consentToken = hiddenInput(html, "consent_token");
   expect(consentToken).toBeTruthy();
+  return { page, html, cookie, consentUrl, consentToken: consentToken! };
+}
 
-  const beginAuth = await requestHelper("https://app.shiplet.cc/auth/login", {
+function consentCard(html: string) {
+  return html.match(
+    /<section[^>]*invitation-consent-title[\s\S]*?<\/section>/,
+  )?.[0];
+}
+
+function postConsent(
+  consentToken: string,
+  headers: Record<string, string>,
+) {
+  return requestHelper(`${INVITATION_APP_ORIGIN}/auth/login`, {
     method: "POST",
     headers: {
       "Content-Type": "application/x-www-form-urlencoded",
-      Origin: "https://app.shiplet.cc",
+      ...headers,
     },
-    body: new URLSearchParams({ consent_token: consentToken! }),
+    body: new URLSearchParams({ consent_token: consentToken }),
     redirect: "manual",
   });
-  expect(beginAuth.status).toBe(302);
-  const authorizationUrl = new URL(beginAuth.headers.get("location") || "");
-  const state = authorizationUrl.searchParams.get("state");
-  expect(state).toBeTruthy();
-  const flowCookie = setCookiePairs(beginAuth).find((pair) =>
-    pair.startsWith("__Host-shiplet_auth_flow_"),
-  );
-  expect(flowCookie).toBeTruthy();
-  return { state: state!, flowCookie: flowCookie! };
+}
+
+/** The link a cross-origin hand-off page sends the browser on to. */
+function handoffLink(html: string) {
+  const href = html.match(/id="form-handoff-link"[^>]*href="([^"]+)"|href="([^"]+)"[^>]*id="form-handoff-link"/);
+  return (href?.[1] || href?.[2] || "").replace(/&amp;/g, "&");
 }
 
 function reviewCapabilitySecretForTest() {
@@ -1935,9 +1964,9 @@ describe("artifact and app security model", () => {
     });
   });
 
-  it("shows named, scoped consent before accepting a restricted Shiplet invitation", async () => {
+  it("offers named, scoped consent only after the invitee signs in", async () => {
     await withCustomDomain("shiplet.cc", async () => {
-      await withAppUrl("https://app.shiplet.cc", async () => {
+      await withAppUrl(INVITATION_APP_ORIGIN, async () => {
         const email = `consent-${crypto.randomUUID()}@example.com`;
         const setup = await bootstrapRestrictedInvitation(email);
         const returnTo = new URL(
@@ -1945,20 +1974,39 @@ describe("artifact and app security model", () => {
           `${setup.shipletUrl}/`,
         ).toString();
 
-        const { html } = await startRestrictedInvitationConsent(returnTo);
+        const loginUrl = new URL(`${INVITATION_APP_ORIGIN}/auth/login`);
+        loginUrl.searchParams.set("return_to", returnTo);
+        const anonymous = await requestHelper(loginUrl.toString(), {
+          redirect: "manual",
+        });
+        expect(anonymous.status).toBe(302);
+        expect(anonymous.headers.get("location")).toMatch(
+          /^https:\/\/authkit\.test\//,
+        );
+        const anonymousBody = await anonymous.text();
+        expect(anonymousBody).not.toContain(setup.project.name);
+        expect(anonymousBody).not.toContain(setup.organization.name);
 
+        const { html } = await openOfferedInvitationConsent(email, returnTo);
         expect(html).toContain(setup.project.name);
         expect(html).toContain(setup.organization.name);
-        expect(html).toContain("Sign in and accept invitation");
-        expect(html).not.toContain(email);
+        expect(html).toContain("Accept invitation and open Shiplet");
+        expect(html).not.toContain("Sign in and accept invitation");
+        expect(consentCard(html)).not.toContain(email);
         expect(html).not.toContain("invitation_token");
+        const invitation = await (env as unknown as TestEnv).DB.prepare(
+          `SELECT status FROM app_invitations WHERE id = ?`,
+        )
+          .bind(setup.invitation.id)
+          .first<{ status: string }>();
+        expect(invitation?.status).toBe("pending");
       });
     });
   });
 
   it("accepts only the requested invitation after exact-email authentication", async () => {
     await withCustomDomain("shiplet.cc", async () => {
-      await withAppUrl("https://app.shiplet.cc", async () => {
+      await withAppUrl(INVITATION_APP_ORIGIN, async () => {
         const email = `scoped-${crypto.randomUUID()}@example.com`;
         const requested = await bootstrapRestrictedInvitation(email);
         const unrelated = await bootstrapRestrictedInvitation(email);
@@ -1966,7 +2014,10 @@ describe("artifact and app security model", () => {
           "/docs/?mode=review",
           `${requested.shipletUrl}/`,
         ).toString();
-        const { state, flowCookie } = await startRestrictedInvitationConsent(returnTo);
+        const { state, cookie: flowCookie } = await startSignIn(requestHelper, {
+          origin: INVITATION_APP_ORIGIN,
+          returnTo,
+        });
         const tamperedStateValue = JSON.parse(atob(state)) as Record<
           string,
           unknown
@@ -1975,9 +2026,7 @@ describe("artifact and app security model", () => {
         const tamperedState = btoa(JSON.stringify(tamperedStateValue));
 
         const tampered = await requestHelper(
-          `https://app.shiplet.cc/auth/callback?code=${encodeURIComponent(
-            `test-code::${encodeURIComponent(email)}`,
-          )}&state=${encodeURIComponent(tamperedState)}`,
+          authCallbackUrl(INVITATION_APP_ORIGIN, invitationCode(email), tamperedState),
           { headers: { Cookie: flowCookie }, redirect: "manual" },
         );
         expect(tampered.status).toBe(400);
@@ -1993,16 +2042,18 @@ describe("artifact and app security model", () => {
         ]);
 
         // The refused callback spent that flow; the browser starts a new one.
-        const fresh = await startRestrictedInvitationConsent(returnTo);
-        const callback = await requestHelper(
-          `https://app.shiplet.cc/auth/callback?code=${encodeURIComponent(
-            `test-code::${encodeURIComponent(email)}`,
-          )}&state=${encodeURIComponent(fresh.state)}`,
-          { headers: { Cookie: fresh.flowCookie }, redirect: "manual" },
+        const callback = await signInTowardShiplet(email, returnTo);
+        const { accepted } = await acceptOfferedInvitationConsent(
+          requestHelper,
+          callback,
+          { origin: INVITATION_APP_ORIGIN },
         );
 
-        expect(callback.status).toBe(302);
-        const signedReturn = new URL(callback.headers.get("location") || "");
+        // The Shiplet is on another origin, so the form finishes in a new
+        // document rather than redirecting under form-action 'self'.
+        expect(accepted.status).toBe(200);
+        expect(accepted.headers.get("location")).toBeNull();
+        const signedReturn = new URL(handoffLink(await accepted.text()));
         expect(signedReturn.origin).toBe(new URL(returnTo).origin);
         expect(signedReturn.pathname).toBe("/docs/");
         expect(signedReturn.searchParams.get("mode")).toBe("review");
@@ -2049,14 +2100,18 @@ describe("artifact and app security model", () => {
 
   it("does not accept invitations after a generic login without scoped consent", async () => {
     await withCustomDomain("shiplet.cc", async () => {
-      await withAppUrl("https://app.shiplet.cc", async () => {
+      await withAppUrl(INVITATION_APP_ORIGIN, async () => {
         const email = `generic-${crypto.randomUUID()}@example.com`;
         const setup = await bootstrapRestrictedInvitation(email);
         const state = btoa(JSON.stringify({ returnTo: setup.shipletUrl }));
         const code = `test-code:${setup.organization.id}:${encodeURIComponent(email)}`;
 
-        const callback = await signInWithMintedState(requestHelper, env, code, JSON.parse(atob(state)), { origin: "https://app.shiplet.cc" });
+        const callback = await signInWithMintedState(requestHelper, env, code, JSON.parse(atob(state)), { origin: INVITATION_APP_ORIGIN });
         expect(callback.status).toBe(302);
+        // Sign-in only offers the consent step; it does not accept for them.
+        const offered = new URL(callback.headers.get("location") || "");
+        expect(offered.pathname).toBe("/auth/login");
+        expect(offered.searchParams.get("consent")).toBeTruthy();
 
         const invitation = await (env as unknown as TestEnv).DB.prepare(
           `SELECT status, accepted_on FROM app_invitations WHERE id = ?`,
@@ -2079,24 +2134,46 @@ describe("artifact and app security model", () => {
 
   it("rejects a same-domain email mismatch without changing WorkOS or local access", async () => {
     await withCustomDomain("shiplet.cc", async () => {
-      await withAppUrl("https://app.shiplet.cc", async () => {
+      await withAppUrl(INVITATION_APP_ORIGIN, async () => {
         const invitedEmail = `invited-${crypto.randomUUID()}@corp.example`;
         const otherEmail = `other-${crypto.randomUUID()}@corp.example`;
         const setup = await bootstrapRestrictedInvitation(invitedEmail);
-        const { state, flowCookie } = await startRestrictedInvitationConsent(
+
+        // The mismatched identity is not offered the invitation at all.
+        const otherCallback = await signInTowardShiplet(
+          otherEmail,
           setup.shipletUrl,
         );
-
-        const callback = await requestHelper(
-          `https://app.shiplet.cc/auth/callback?code=${encodeURIComponent(
-            `test-code::${encodeURIComponent(otherEmail)}`,
-          )}&state=${encodeURIComponent(state)}`,
-          { headers: { Cookie: flowCookie }, redirect: "manual" },
+        const otherDestination = new URL(
+          otherCallback.headers.get("location") || "",
         );
-        expect(callback.status).toBe(403);
-        const failure = await callback.text();
-        expect(failure).not.toContain(invitedEmail);
-        expect(failure).not.toContain(otherEmail);
+        expect(otherDestination.origin).toBe(new URL(setup.shipletUrl).origin);
+        expect(otherDestination.pathname).not.toBe("/auth/login");
+        const otherCookie = sessionCookieHeader(otherCallback);
+
+        // Nor can it accept the invitee's consent if the token reaches it.
+        const { consentToken } = await openOfferedInvitationConsent(
+          invitedEmail,
+          setup.shipletUrl,
+        );
+        const errorLog = vi
+          .spyOn(console, "error")
+          .mockImplementation(() => undefined);
+        try {
+          const replayed = await postConsent(consentToken, {
+            Cookie: otherCookie,
+            Origin: INVITATION_APP_ORIGIN,
+          });
+          expect(replayed.status).toBe(403);
+          const failure = await replayed.text();
+          expect(failure).not.toContain(invitedEmail);
+          expect(failure).not.toContain(otherEmail);
+          const logs = errorLog.mock.calls.flat().map(String).join("\n");
+          expect(logs).toContain('"reason":"identity_or_scope_mismatch"');
+          expect(logs).not.toContain("workos_acceptance_failed");
+        } finally {
+          errorLog.mockRestore();
+        }
 
         const invitation = await (env as unknown as TestEnv).DB.prepare(
           `SELECT status, accepted_on FROM app_invitations WHERE id = ?`,
@@ -2110,7 +2187,7 @@ describe("artifact and app security model", () => {
 
   it("rejects a same-domain mismatch for consent created from an email link", async () => {
     await withCustomDomain("shiplet.cc", async () => {
-      await withAppUrl("https://app.shiplet.cc", async () => {
+      await withAppUrl(INVITATION_APP_ORIGIN, async () => {
         const invitedEmail = `email-invited-${crypto.randomUUID()}@corp.example`;
         const otherEmail = `email-other-${crypto.randomUUID()}@corp.example`;
         const setup = await bootstrapRestrictedInvitation(invitedEmail);
@@ -2119,32 +2196,53 @@ describe("artifact and app security model", () => {
         )
           .bind(setup.invitation.id)
           .first<{ workos_invitation_token: string }>();
-        const emailLink = new URL("https://app.shiplet.cc/auth/login");
+        const emailLink = new URL(`${INVITATION_APP_ORIGIN}/auth/login`);
         emailLink.searchParams.set(
           "invitation_token",
           pending!.workos_invitation_token,
         );
-        const removeToken = await requestHelper(emailLink.toString(), {
+
+        // Signed out, the email link starts a normal sign-in and does not
+        // hand the invitation to AuthKit to accept before consent.
+        const anonymous = await requestHelper(emailLink.toString(), {
           redirect: "manual",
         });
-        const consentPage = await requestHelper(
-          removeToken.headers.get("location")!,
-        );
-        const { state, flowCookie } = await submitRestrictedInvitationConsent(
-          await consentPage.text(),
-        );
+        expect(anonymous.status).toBe(302);
+        const authorization = new URL(anonymous.headers.get("location") || "");
+        expect(authorization.origin).toBe("https://authkit.test");
+        expect(authorization.searchParams.has("invitation_token")).toBe(false);
+        const anonymousBody = await anonymous.text();
+        expect(anonymousBody).not.toContain(setup.project.name);
+        expect(anonymousBody).not.toContain(setup.organization.name);
+
+        // Signed in as a different address at the same domain, the link is
+        // not shown as an offer, and accepting it is refused.
+        const otherCallback = await signInTowardShiplet(otherEmail, "/");
+        const otherCookie = sessionCookieHeader(otherCallback);
+        const removeToken = await requestHelper(emailLink.toString(), {
+          headers: { Cookie: otherCookie },
+          redirect: "manual",
+        });
+        expect(removeToken.status).toBe(302);
+        const consentUrl = new URL(removeToken.headers.get("location") || "");
+        const consentToken = consentUrl.searchParams.get("consent")!;
+        expect(consentToken).toBeTruthy();
+        const consentPage = await requestHelper(consentUrl.toString(), {
+          headers: { Cookie: otherCookie },
+          redirect: "manual",
+        });
+        expect(consentPage.status).toBe(302);
+        expect(await consentPage.text()).not.toContain(setup.organization.name);
 
         const errorLog = vi
           .spyOn(console, "error")
           .mockImplementation(() => undefined);
         try {
-          const callback = await requestHelper(
-            `https://app.shiplet.cc/auth/callback?code=${encodeURIComponent(
-              `test-code::${encodeURIComponent(otherEmail)}`,
-            )}&state=${encodeURIComponent(state)}`,
-            { headers: { Cookie: flowCookie }, redirect: "manual" },
-          );
-          expect(callback.status).toBe(403);
+          const forced = await postConsent(consentToken, {
+            Cookie: otherCookie,
+            Origin: INVITATION_APP_ORIGIN,
+          });
+          expect(forced.status).toBe(403);
           const logs = errorLog.mock.calls.flat().map(String).join("\n");
           expect(logs).toContain('"reason":"identity_or_scope_mismatch"');
           expect(logs).not.toContain("workos_acceptance_failed");
@@ -2163,55 +2261,33 @@ describe("artifact and app security model", () => {
 
   it("rejects tampered consent and cross-origin consent submissions", async () => {
     await withCustomDomain("shiplet.cc", async () => {
-      await withAppUrl("https://app.shiplet.cc", async () => {
+      await withAppUrl(INVITATION_APP_ORIGIN, async () => {
         const email = `tamper-${crypto.randomUUID()}@example.com`;
         const setup = await bootstrapRestrictedInvitation(email);
-        const loginUrl = new URL("https://app.shiplet.cc/auth/login");
-        loginUrl.searchParams.set("return_to", setup.shipletUrl);
-        const consentPage = await requestHelper(loginUrl.toString());
-        const html = await consentPage.text();
-        const consentToken = hiddenInput(html, "consent_token")!;
+        const { consentToken, cookie } = await openOfferedInvitationConsent(
+          email,
+          setup.shipletUrl,
+        );
         const consentParts = consentToken.split(".");
         const signature = consentParts[2];
         consentParts[2] = `${signature.startsWith("A") ? "B" : "A"}${signature.slice(1)}`;
         const tampered = consentParts.join(".");
 
-        const tamperedResponse = await requestHelper(
-          "https://app.shiplet.cc/auth/login",
-          {
-            method: "POST",
-            headers: {
-              "Content-Type": "application/x-www-form-urlencoded",
-              Origin: "https://app.shiplet.cc",
-            },
-            body: new URLSearchParams({ consent_token: tampered }),
-          },
-        );
+        const tamperedResponse = await postConsent(tampered, {
+          Cookie: cookie,
+          Origin: INVITATION_APP_ORIGIN,
+        });
         expect(tamperedResponse.status).toBe(400);
 
-        const crossOriginResponse = await requestHelper(
-          "https://app.shiplet.cc/auth/login",
-          {
-            method: "POST",
-            headers: {
-              "Content-Type": "application/x-www-form-urlencoded",
-              Origin: "https://attacker.example",
-            },
-            body: new URLSearchParams({ consent_token: consentToken }),
-          },
-        );
+        const crossOriginResponse = await postConsent(consentToken, {
+          Cookie: cookie,
+          Origin: "https://attacker.example",
+        });
         expect(crossOriginResponse.status).toBe(403);
 
-        const originlessResponse = await requestHelper(
-          "https://app.shiplet.cc/auth/login",
-          {
-            method: "POST",
-            headers: {
-              "Content-Type": "application/x-www-form-urlencoded",
-            },
-            body: new URLSearchParams({ consent_token: consentToken }),
-          },
-        );
+        const originlessResponse = await postConsent(consentToken, {
+          Cookie: cookie,
+        });
         expect(originlessResponse.status).toBe(403);
 
         const invitation = await (env as unknown as TestEnv).DB.prepare(
@@ -2226,61 +2302,45 @@ describe("artifact and app security model", () => {
 
   it("accepts a same-origin top-level consent form whose no-referrer Origin is null", async () => {
     await withCustomDomain("shiplet.cc", async () => {
-      await withAppUrl("https://app.shiplet.cc", async () => {
+      await withAppUrl(INVITATION_APP_ORIGIN, async () => {
         const email = `null-origin-${crypto.randomUUID()}@example.com`;
         const setup = await bootstrapRestrictedInvitation(email);
-        const loginUrl = new URL("https://app.shiplet.cc/auth/login");
-        loginUrl.searchParams.set("return_to", setup.shipletUrl);
-        const consentPage = await requestHelper(loginUrl.toString(), {
-          headers: { Accept: "text/html" },
-        });
-        expect(consentPage.headers.get("referrer-policy")).toBe("no-referrer");
-        const consentToken = hiddenInput(await consentPage.text(), "consent_token")!;
-        expect(consentToken).toBeTruthy();
+        const { page, consentToken, cookie } =
+          await openOfferedInvitationConsent(email, setup.shipletUrl);
+        expect(page.headers.get("referrer-policy")).toBe("no-referrer");
 
-        const submit = (fetchMetadata: Record<string, string>) =>
-          requestHelper("https://app.shiplet.cc/auth/login", {
-            method: "POST",
-            headers: {
-              "Content-Type": "application/x-www-form-urlencoded",
-              Origin: "null",
-              ...fetchMetadata,
-            },
-            body: new URLSearchParams({ consent_token: consentToken }),
-            redirect: "manual",
-          });
-        const topLevelSameOrigin = {
+        const accepted = await postConsent(consentToken, {
+          Cookie: cookie,
+          Origin: "null",
           "Sec-Fetch-Site": "same-origin",
           "Sec-Fetch-Mode": "navigate",
           "Sec-Fetch-Dest": "document",
-        };
-
-        const accepted = await submit(topLevelSameOrigin);
-        expect(accepted.status).toBe(302);
-        const authorizationUrl = new URL(accepted.headers.get("location") || "");
-        expect(authorizationUrl.origin).toBe("https://authkit.test");
-        expect(authorizationUrl.searchParams.get("state")).toBeTruthy();
+        });
+        expect(accepted.status).toBe(200);
+        expect(accepted.headers.get("location")).toBeNull();
+        expect(new URL(handoffLink(await accepted.text())).origin).toBe(
+          new URL(setup.shipletUrl).origin,
+        );
 
         const invitation = await (env as unknown as TestEnv).DB.prepare(
           `SELECT status FROM app_invitations WHERE id = ?`,
         )
           .bind(setup.invitation.id)
           .first<{ status: string }>();
-        expect(invitation?.status).toBe("pending");
+        expect(invitation?.status).toBe("accepted");
       });
     });
   });
 
   it("rejects null-Origin consent submissions that are not same-origin top-level navigations", async () => {
     await withCustomDomain("shiplet.cc", async () => {
-      await withAppUrl("https://app.shiplet.cc", async () => {
+      await withAppUrl(INVITATION_APP_ORIGIN, async () => {
         const email = `null-origin-reject-${crypto.randomUUID()}@example.com`;
         const setup = await bootstrapRestrictedInvitation(email);
-        const loginUrl = new URL("https://app.shiplet.cc/auth/login");
-        loginUrl.searchParams.set("return_to", setup.shipletUrl);
-        const consentPage = await requestHelper(loginUrl.toString());
-        const consentToken = hiddenInput(await consentPage.text(), "consent_token")!;
-        expect(consentToken).toBeTruthy();
+        const { consentToken, cookie } = await openOfferedInvitationConsent(
+          email,
+          setup.shipletUrl,
+        );
 
         const topLevelSameOrigin = {
           "Sec-Fetch-Site": "same-origin",
@@ -2300,19 +2360,11 @@ describe("artifact and app security model", () => {
           ["fetch", { ...topLevelSameOrigin, "Sec-Fetch-Mode": "cors" }],
         ];
         for (const [label, fetchMetadata] of variants) {
-          const response = await requestHelper(
-            "https://app.shiplet.cc/auth/login",
-            {
-              method: "POST",
-              headers: {
-                "Content-Type": "application/x-www-form-urlencoded",
-                Origin: "null",
-                ...fetchMetadata,
-              },
-              body: new URLSearchParams({ consent_token: consentToken }),
-              redirect: "manual",
-            },
-          );
+          const response = await postConsent(consentToken, {
+            Cookie: cookie,
+            Origin: "null",
+            ...fetchMetadata,
+          });
           expect(response.status, label).toBe(403);
           expect(response.headers.get("location"), label).toBeNull();
         }
@@ -2329,7 +2381,7 @@ describe("artifact and app security model", () => {
 
   it("keeps local access pending when WorkOS invitation acceptance fails", async () => {
     await withCustomDomain("shiplet.cc", async () => {
-      await withAppUrl("https://app.shiplet.cc", async () => {
+      await withAppUrl(INVITATION_APP_ORIGIN, async () => {
         const email = `workos-failure-${crypto.randomUUID()}@example.com`;
         const setup = await bootstrapRestrictedInvitation(email);
         await (env as unknown as TestEnv).DB.prepare(
@@ -2337,18 +2389,24 @@ describe("artifact and app security model", () => {
         )
           .bind(setup.invitation.id)
           .run();
-        const { state, flowCookie } = await startRestrictedInvitationConsent(
+        const { consentToken, cookie } = await openOfferedInvitationConsent(
+          email,
           setup.shipletUrl,
         );
 
-        const callback = await requestHelper(
-          `https://app.shiplet.cc/auth/callback?code=${encodeURIComponent(
-            `test-code::${encodeURIComponent(email)}`,
-          )}&state=${encodeURIComponent(state)}`,
-          { headers: { Cookie: flowCookie }, redirect: "manual" },
-        );
-        expect(callback.status).toBe(502);
-        expect(await callback.text()).toBe("Invitation acceptance failed");
+        const errorLog = vi
+          .spyOn(console, "error")
+          .mockImplementation(() => undefined);
+        try {
+          const accepted = await postConsent(consentToken, {
+            Cookie: cookie,
+            Origin: INVITATION_APP_ORIGIN,
+          });
+          expect(accepted.status).toBe(502);
+          expect(await accepted.text()).toBe("Invitation acceptance failed");
+        } finally {
+          errorLog.mockRestore();
+        }
 
         const invitation = await (env as unknown as TestEnv).DB.prepare(
           `SELECT status, accepted_on FROM app_invitations WHERE id = ?`,
@@ -2362,23 +2420,22 @@ describe("artifact and app security model", () => {
 
   it("logs invitation outcomes without email addresses, codes, state, or tokens", async () => {
     await withCustomDomain("shiplet.cc", async () => {
-      await withAppUrl("https://app.shiplet.cc", async () => {
+      await withAppUrl(INVITATION_APP_ORIGIN, async () => {
         const email = `observability-${crypto.randomUUID()}@example.com`;
         const setup = await bootstrapRestrictedInvitation(email);
-        const { state, flowCookie } = await startRestrictedInvitationConsent(
+        const { consentToken, cookie } = await openOfferedInvitationConsent(
+          email,
           setup.shipletUrl,
         );
         const info = vi
           .spyOn(console, "info")
           .mockImplementation(() => undefined);
         try {
-          const callback = await requestHelper(
-            `https://app.shiplet.cc/auth/callback?code=${encodeURIComponent(
-              `test-code::${encodeURIComponent(email)}`,
-            )}&state=${encodeURIComponent(state)}`,
-            { headers: { Cookie: flowCookie }, redirect: "manual" },
-          );
-          expect(callback.status).toBe(302);
+          const accepted = await postConsent(consentToken, {
+            Cookie: cookie,
+            Origin: INVITATION_APP_ORIGIN,
+          });
+          expect(accepted.status).toBe(200);
           const logs = info.mock.calls.flat().map(String).join("\n");
           expect(logs).toContain('"event":"auth.invitation"');
           expect(logs).toContain('"outcome":"accepted"');
@@ -2386,7 +2443,7 @@ describe("artifact and app security model", () => {
           expect(logs).toContain(setup.invitation.id);
           expect(logs).not.toContain(email);
           expect(logs).not.toContain("test-code");
-          expect(logs).not.toContain(state);
+          expect(logs).not.toContain(consentToken);
           expect(logs).not.toContain("shiplet_invite_consent_v1");
         } finally {
           info.mockRestore();
@@ -2397,7 +2454,7 @@ describe("artifact and app security model", () => {
 
   it("removes an email invitation token before rendering scoped consent", async () => {
     await withCustomDomain("shiplet.cc", async () => {
-      await withAppUrl("https://app.shiplet.cc", async () => {
+      await withAppUrl(INVITATION_APP_ORIGIN, async () => {
         const email = `email-link-${crypto.randomUUID()}@example.com`;
         const setup = await bootstrapRestrictedInvitation(email);
         const pending = await (env as unknown as TestEnv).DB.prepare(
@@ -2405,14 +2462,17 @@ describe("artifact and app security model", () => {
         )
           .bind(setup.invitation.id)
           .first<{ workos_invitation_token: string }>();
+        const signedIn = await signInTowardShiplet(email, "/");
+        const cookie = sessionCookieHeader(signedIn);
 
-        const emailLink = new URL("https://app.shiplet.cc/auth/login");
+        const emailLink = new URL(`${INVITATION_APP_ORIGIN}/auth/login`);
         emailLink.searchParams.set(
           "invitation_token",
           pending!.workos_invitation_token,
         );
         emailLink.searchParams.set("return_to", setup.shipletUrl);
         const removeToken = await requestHelper(emailLink.toString(), {
+          headers: { Cookie: cookie },
           redirect: "manual",
         });
         expect(removeToken.status).toBe(302);
@@ -2424,20 +2484,20 @@ describe("artifact and app security model", () => {
         );
         expect(cleanConsentUrl.searchParams.get("consent")).toBeTruthy();
 
-        const consentPage = await requestHelper(cleanConsentUrl.toString());
+        const consentPage = await requestHelper(cleanConsentUrl.toString(), {
+          headers: { Cookie: cookie },
+        });
         expect(consentPage.status).toBe(200);
         const html = await consentPage.text();
         expect(html).toContain(setup.project.name);
         expect(html).toContain(setup.organization.name);
-        expect(html).not.toContain(email);
-        const { state, flowCookie } = await submitRestrictedInvitationConsent(html);
-        const callback = await requestHelper(
-          `https://app.shiplet.cc/auth/callback?code=${encodeURIComponent(
-            `test-code::${encodeURIComponent(email)}`,
-          )}&state=${encodeURIComponent(state)}`,
-          { headers: { Cookie: flowCookie }, redirect: "manual" },
-        );
-        expect(callback.status).toBe(302);
+        expect(html).not.toContain(pending!.workos_invitation_token);
+        expect(consentCard(html)).not.toContain(email);
+        const accepted = await postConsent(hiddenInput(html, "consent_token")!, {
+          Cookie: cookie,
+          Origin: INVITATION_APP_ORIGIN,
+        });
+        expect(accepted.status).toBe(200);
         const invitation = await (env as unknown as TestEnv).DB.prepare(
           `SELECT status, accepted_on FROM app_invitations WHERE id = ?`,
         )
