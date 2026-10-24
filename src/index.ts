@@ -22424,7 +22424,7 @@ app.post("/api/projects/:projectId/invitations", async (c) => {
           }),
       });
 
-      return json({ grant }, 201);
+      return json({ grant, delivery: "granted" }, 201);
     }
 
     if (targetType === "team") {
@@ -22458,7 +22458,7 @@ app.post("/api/projects/:projectId/invitations", async (c) => {
           }),
       });
 
-      return json({ grant }, 201);
+      return json({ grant, delivery: "granted" }, 201);
     }
 
     const email = String(body.email || "")
@@ -22491,13 +22491,16 @@ app.post("/api/projects/:projectId/invitations", async (c) => {
               project.id,
             )
           )[0];
+      // `delivery` tells the share UI whether someone was emailed an
+      // invitation or can already open the Shiplet.
       return json(
         pendingInvitation
           ? {
               grant: existingGrant,
               appInvitation: publicAppInvitation(pendingInvitation),
+              delivery: "invited",
             }
-          : { grant: existingGrant },
+          : { grant: existingGrant, delivery: "granted" },
         200,
       );
     }
@@ -22535,7 +22538,7 @@ app.post("/api/projects/:projectId/invitations", async (c) => {
           });
         },
       });
-      return json({ grant }, 201);
+      return json({ grant, delivery: "granted" }, 201);
     }
 
     const { workosInvitation, appInvitation, grant } =
@@ -22586,6 +22589,7 @@ app.post("/api/projects/:projectId/invitations", async (c) => {
         grant,
         appInvitation: publicAppInvitation(appInvitation),
         workosInvitation: publicWorkOSInvitation(workosInvitation),
+        delivery: "invited",
       },
       201,
     );

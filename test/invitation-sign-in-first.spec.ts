@@ -423,7 +423,9 @@ describe("email shares grant one Shiplet only", () => {
 		const body = (await shared.json()) as {
 			grant: { target_id: string; accepted_on: string | null };
 			appInvitation?: unknown;
+			delivery: string;
 		};
+		expect(body.delivery).toBe("granted");
 		expect(body.grant.target_id).toBe(member.id);
 		expect(body.grant.accepted_on).toBeTruthy();
 		expect(body.appInvitation).toBeUndefined();
@@ -448,11 +450,16 @@ describe("email shares grant one Shiplet only", () => {
 		const project = await publish(owner, organization.id, "private");
 		const newcomer = person("newcomer");
 
-		for (const email of [member.email, newcomer.email]) {
+		for (const [email, delivery] of [
+			[member.email, "granted"],
+			[newcomer.email, "invited"],
+		]) {
 			const first = await shareByEmail(owner, project.id, email);
 			expect(first.status, email).toBe(201);
+			expect(((await first.json()) as { delivery: string }).delivery, email).toBe(delivery);
 			const again = await shareByEmail(owner, project.id, email);
 			expect(again.status, email).toBe(200);
+			expect(((await again.json()) as { delivery: string }).delivery, email).toBe(delivery);
 			const changedRole = await shareByEmail(owner, project.id, email, "editor");
 			expect(changedRole.status, email).toBe(409);
 		}

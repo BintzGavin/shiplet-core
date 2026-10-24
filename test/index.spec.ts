@@ -10300,6 +10300,7 @@ describe("Shiplet", () => {
       };
       expect(body.grant.target_type).toBe("team");
       expect(body.grant.target_id).toBe(team.id);
+      expect((body as { delivery?: string }).delivery).toBe("granted");
       expect(body.grant.role).toBe("reviewer");
     });
 
