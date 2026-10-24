@@ -5,16 +5,19 @@ import {
   trustedReviewHostScript,
   trustedReviewHostStyles,
 } from "../src/trusted-review-host";
+import { trustedArtifactBridgeScript } from "../src/trusted-artifact-bridge";
 import {
   authHeaders,
   createOrganization,
   createReviewFeedback,
+  crossSiteFrameInputLaunchOptions,
   loginAs,
   publishStaticShiplet,
   testUser,
 } from "./helpers";
 
 test.use({
+  launchOptions: crossSiteFrameInputLaunchOptions,
   viewport: { width: 1180, height: 820 },
   screenshot: "off",
   trace: "off",
@@ -126,6 +129,7 @@ async function mountScopeFixture(page: Page, mode: Mode, options: {
   embeddedPageBindingProbe?: boolean;
   mentionsUnsupported?: boolean;
   pageComment?: boolean;
+  pageBridge?: boolean;
 } = {}) {
   let rows = fixtureRows({ pageComment: options.pageComment });
   if (options.embeddedPageBindingProbe && mode === "embedded") {
@@ -178,7 +182,9 @@ async function mountScopeFixture(page: Page, mode: Mode, options: {
     if (url.origin === siteOrigin && url.pathname === "/docs/start") {
       return route.fulfill({
         contentType: "text/html",
-        body: `<!doctype html><html><body><button id="review-target">Review target</button><script>window.scopePinMessages=[];addEventListener("message",event=>{if(event.data?.protocol==="shiplet.embed.ui.v1"&&Array.isArray(event.data.pins))window.scopePinMessages.push(event.data.pins);});</script><iframe id="trusted-host" style="width:100%;height:760px;border:0" src="${hostOrigin}/embedded-host"></iframe></body></html>`,
+        body: options.pageBridge
+          ? `<!doctype html><html><body><button id="review-target">Review target</button><iframe id="trusted-host" style="width:100%;height:760px;border:0"></iframe><script>${trustedArtifactBridgeScript(true)}</script><script>(()=>{const frame=document.querySelector("#trusted-host");attachShipletPageBridge(frame,"${hostOrigin}");frame.src="${hostOrigin}/embedded-host";})();</script></body></html>`
+          : `<!doctype html><html><body><button id="review-target">Review target</button><script>window.scopePinMessages=[];addEventListener("message",event=>{if(event.data?.protocol==="shiplet.embed.ui.v1"&&Array.isArray(event.data.pins))window.scopePinMessages.push(event.data.pins);});</script><iframe id="trusted-host" style="width:100%;height:760px;border:0" src="${hostOrigin}/embedded-host"></iframe></body></html>`,
       });
     }
     if (url.origin !== hostOrigin) return route.abort();
@@ -266,7 +272,9 @@ test("embedded Current page sends its trusted page binding and excludes hosted r
 });
 
 test("embedded Page comments leaves New comment actionable", async ({ page }) => {
-  const fixture = await mountScopeFixture(page, "embedded", { pageComment: true });
+  // A real install always attaches the page bridge; without it New comment
+  // correctly waits on "Connecting to the artifact…" and never selects.
+  const fixture = await mountScopeFixture(page, "embedded", { pageComment: true, pageBridge: true });
   const surface = fixture.surface;
   await surface.locator(".shiplet-review-comments-launcher").click();
   await expect(surface.getByRole("button", { name: /^Page comments/ })).toBeVisible();
