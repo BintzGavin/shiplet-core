@@ -6,8 +6,10 @@ import {
   trustedReviewHostStyles,
 } from "../src/trusted-review-host";
 import { trustedArtifactBridgeScript } from "../src/trusted-artifact-bridge";
+import { crossSiteFrameInputLaunchOptions } from "./helpers";
 
 test.use({
+	launchOptions: crossSiteFrameInputLaunchOptions,
 	viewport: { width: 1080, height: 760 },
 	screenshot: "off",
 	trace: "off",

@@ -3,6 +3,19 @@ import { deflateSync } from "node:zlib";
 
 import { expect, type APIRequestContext, type Page } from "@playwright/test";
 
+/**
+ * Headless Chrome 155 routes synthesized pointer input aimed at the bottom
+ * ~86px of the viewport over an out-of-process (cross-site) iframe to the
+ * parent page's <iframe> element instead of into the frame, so clicks on a
+ * docked review widget never reach it. Headed Chrome and older headless
+ * builds deliver the same clicks into the frame. Keeping cross-site frames
+ * in-process restores real-browser input routing; origins, postMessage
+ * checks and storage partitioning are unchanged.
+ */
+export const crossSiteFrameInputLaunchOptions = {
+	args: ["--disable-site-isolation-trials"],
+};
+
 const e2eBaseURL = "http://localhost:8787";
 const controlPlaneOrigin = new URL(e2eBaseURL).origin;
 
