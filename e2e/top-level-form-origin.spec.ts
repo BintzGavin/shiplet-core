@@ -66,6 +66,9 @@ test("an invited reviewer signs in, accepts consent with its browser-sent null O
   await page
     .goto(`/auth/login?return_to=${encodeURIComponent(shipletPath)}`)
     .catch(() => undefined);
+  // Chrome commits its error page for the failed AuthKit navigation after
+  // the goto above rejects; let it land so it cannot interrupt the callback.
+  await page.waitForURL(/^chrome-error:/, { waitUntil: "commit" });
   const authorization = await authKitRequest;
   const signInStart = await authorization.redirectedFrom()?.response();
   expect(signInStart?.status()).toBe(302);
