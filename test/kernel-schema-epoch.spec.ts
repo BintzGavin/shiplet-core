@@ -12,14 +12,16 @@ import app, { schemaInitializationTest } from "../src/index";
 // Pin the two together: when this digest changes, bump
 // CURRENT_KERNEL_SCHEMA_EPOCH in src/index.ts and update both values here.
 const PINNED_KERNEL_SCHEMA = {
-  epoch: 3,
-  digest: "f81f433fa732b49074d665b29ddd723f9b50d79c26cd1948aa6341f307820b47",
+  epoch: 4,
+  digest: "34c0cac2693b0024393d7f111113574b12a29df4e9eab01bedd41e771ab6de12",
 };
 
 // Releases up to v0.1.43 recorded epoch 1 before the invite link tables existed.
 const EPOCH_BEFORE_INVITE_LINKS = 1;
 // Releases before reusable CLI sessions recorded epoch 2.
 const EPOCH_BEFORE_REUSABLE_CLI_SESSIONS = 2;
+// Releases before WorkOS membership reconciliation recorded epoch 3.
+const EPOCH_BEFORE_MEMBERSHIP_SYNC = 3;
 const EPOCH_TABLE = "shiplet_kernel_schema_epoch";
 
 function db() {
@@ -99,6 +101,23 @@ describe("kernel schema epoch", () => {
       `SELECT epoch FROM ${EPOCH_TABLE} WHERE schema_id = 'kernel'`,
     ).first<{ epoch: number }>();
     expect(marker?.epoch).toBe(schemaInitializationTest.currentEpoch);
+  });
+
+  it("creates the membership sweep state table on a database that recorded the epoch from before it", async () => {
+    await request("/health");
+    await recordEpoch(EPOCH_BEFORE_MEMBERSHIP_SYNC);
+    await db().prepare("DROP TABLE IF EXISTS workos_membership_sync_state").run();
+    await db().prepare("DROP INDEX IF EXISTS idx_organization_memberships_user").run();
+
+    expect((await request(`/join/${"D".repeat(32)}`)).status).toBe(404);
+
+    expect(await tableExists("workos_membership_sync_state")).toBe(true);
+    const index = await db().prepare(
+      "SELECT name FROM sqlite_master WHERE type = 'index' AND name = ?",
+    )
+      .bind("idx_organization_memberships_user")
+      .first<{ name: string }>();
+    expect(index).not.toBeNull();
   });
 
   it("pins the kernel schema to its epoch so schema changes cannot ship without a bump", async () => {

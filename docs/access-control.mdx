@@ -64,6 +64,29 @@ link, your signed-in email must match a listed address exactly, ignoring letter
 case; otherwise the page asks you to sign out and return with the listed email,
 or to switch accounts where account switching is enabled.
 
+### When removal takes effect
+
+WorkOS owns organization membership. When you remove or deactivate someone in
+WorkOS, or demote them from admin to member, Shiplet applies the change at
+their next sign-in. A background sweep on the Worker's five-minute cron trigger
+also applies it for people who never sign in again. Each sweep run checks up
+to 20 people, about 240 an hour, so a full pass over an instance takes about
+five minutes for every 20 people who belong to an organization.
+
+Applying a removal deletes the person's membership of that organization and
+their place in its teams. Organization visibility, organization grants, team
+grants, and administrator actions stop applying to them on their next request,
+including requests from browser, CLI, and MCP sessions that are already open.
+Those sessions stay signed in until they expire. The person keeps Shiplets they
+own and any grant made to them on a single Shiplet; revoke those separately.
+Organization API keys belong to the organization, not to the person who
+created them, and keep working; revoke any key the person should no longer
+control.
+
+If WorkOS cannot be reached or returns an error, Shiplet keeps every
+membership and tries again at the next sign-in or sweep. It removes a
+membership only after two WorkOS reads agree that it is gone.
+
 ### Who can view
 
 | Visibility     | Anonymous visitor | Organization member | Organization admin or owner | Explicit user or team grant |
@@ -100,8 +123,9 @@ Agents have three connection paths:
 A claimed registration retains the stable agent identity separately from the
 person who completed the claim. It is restricted to the exact organization in
 the access token, its recognized scopes, and the delegated person's current
-Shiplet membership and grants. Removing that membership immediately blocks new
-writes. Anonymous registrations and durable WorkOS agent API keys are not
+Shiplet membership and grants. Once Shiplet applies the removal of that
+membership, as described in [When removal takes effect](#when-removal-takes-effect),
+the registration's next write is refused. Anonymous registrations and durable WorkOS agent API keys are not
 accepted in this release.
 
 An organization key's effective authority is the intersection of:

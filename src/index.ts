@@ -351,6 +351,10 @@ import {
   resolveVerifiedWorkOSUser,
 } from "./workos-identity";
 import {
+  reconcileWorkOSMembershipsForUser,
+  sweepWorkOSMemberships,
+} from "./workos-membership-sync";
+import {
   ReviewScope,
   ReviewCapability,
   ReviewCapabilityScope,
@@ -875,7 +879,8 @@ const KERNEL_SCHEMA_EPOCH_MARKER = "kernel";
 // test/kernel-schema-epoch.spec.ts pins the schema digest to this value.
 // 2: organization and team invite link tables.
 // 3: cli_authorization_requests.session_ttl_seconds for reusable CLI sessions.
-const CURRENT_KERNEL_SCHEMA_EPOCH = 3;
+// 4: workos_membership_sync_state and the organization membership user index.
+const CURRENT_KERNEL_SCHEMA_EPOCH = 4;
 
 async function readKernelSchemaEpoch(db: D1Database): Promise<number | null> {
   const table = await db
@@ -6242,6 +6247,10 @@ async function syncAuthenticatedWorkOSUser(
   organizationId?: string | null,
 ) {
   const user = await resolveVerifiedWorkOSUser(env.DB, workosUser);
+  // Drop memberships WorkOS removed and roles it demoted before this sign-in
+  // records the organization AuthKit chose. It never throws, and when WorkOS
+  // cannot answer it keeps every membership.
+  await reconcileWorkOSMembershipsForUser(env, user.id, { source: "sign_in" });
 
   if (organizationId) {
     const existingMembership = await getOrganizationMembership(
@@ -23297,6 +23306,12 @@ scheduledApp.scheduled = async (controller, environment, context) => {
       // unrelated database and OAuth reconciliation work in this cron run.
     }
     await autoInitializeDatabase(environment.DB);
+    try {
+      await sweepWorkOSMemberships(environment);
+    } catch {
+      // The sweep keeps its cursor in D1 and resumes on the next run. A
+      // failure here must not starve the OAuth reconciliation below.
+    }
     const runtime = environment as DeploymentRuntimeEnv;
     if (!(await cloudflareSupportEntrypointsReady(runtime))) return;
     await reconcileCloudflareOAuthAcknowledgements({

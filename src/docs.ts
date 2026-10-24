@@ -20,7 +20,7 @@ const DOCS_PUBLIC_CONTENT_SHA256: Record<string, string> = {
   "quickstart":
     "447ea3b2f09dcb48ea11813b612b697332cd4717c2fcc6c3a26e0815e3393120",
   "access-control":
-    "79149325c91406a2390f14cd814e9a1eae1d3eac6010ac6181040518fa75967a",
+    "3a162b132b94e5294d3588e68c2aeeb50a4367831ee76d6770b4c573147a671c",
   "publishing":
     "0d94977a77ce4a701644a65f43eeec8002f4a141a3cdbf11d591b366a1c52c90",
   "extensions":
@@ -195,6 +195,9 @@ const DOCS_PAGES: DocsPage[] = [
 <h2>People and teams</h2>
 <p>Organizations contain members and teams. A Shiplet can also grant access to an exact invited email address. Invitations become effective for the matching signed-in identity.</p>
 <p>Open <strong>Account</strong> at <code>/account</code> to inspect or switch the signed-in identity. Open <strong>Workspace</strong> at <code>/workspace</code> to choose the active organization.</p>
+<h2>Removing people</h2>
+<p>WorkOS owns organization membership. When you remove or deactivate someone in WorkOS, or demote them from admin to member, Shiplet applies the change at their next sign-in, and a background sweep applies it for people who never sign in again. Each five-minute sweep run checks up to 20 people, so a full pass takes about five minutes for every 20 people who belong to an organization.</p>
+<p>Applying a removal deletes the person's organization membership and their place in its teams. Organization visibility, organization and team grants, and administrator actions stop applying on their next request, including from sessions that are already open; those sessions stay signed in until they expire. The person keeps Shiplets they own and any grant made to them on a single Shiplet. If WorkOS cannot be reached, Shiplet keeps every membership and tries again later.</p>
 <h2>Invite links</h2>
 <p>Organization administrators create invite links in the <strong>Invite links</strong> section of <strong>Workspace</strong>. Each link targets the whole organization or exactly one team. It can allow a set number of uses or unlimited uses, expire after a number of days or never, and be reserved for specific email addresses. Administrators can copy the same link again later and revoke it at any time, and Shiplet records every link creation, join, and revocation in its audit history.</p>
 <p>A revoked, expired, or used-up link stops working immediately; ask an administrator for a new one. Anyone who has an unreserved link can sign in and join, so share it only where you would share membership.</p>
