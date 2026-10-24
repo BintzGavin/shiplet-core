@@ -213,3 +213,98 @@ test("the shipped CLI reuses one browser approval across commands, including dep
   await assert.rejects(run(["whoami"]), (error) => error.code === 1 && /Not signed in/.test(error.stdout));
   assert.doesNotMatch(printed, /shiplet_cli_session_/);
 });
+
+test("the shipped CLI publishes into the chosen workspace when the account has several", async (t) => {
+  if (process.platform === "win32") t.skip("Windows browser launcher is covered by unit contract only");
+  const authorizations = [];
+  const live = new Set();
+  const workspaces = new Set(["org_design", "org_research"]);
+  const published = [];
+  const server = http.createServer(async (request, response) => {
+    const url = new URL(request.url || "/", "http://127.0.0.1");
+    if (request.method === "GET" && url.pathname === "/cli/authorize") {
+      authorizations.push(Object.fromEntries(url.searchParams));
+      response.writeHead(200, { "content-type": "text/html; charset=utf-8" });
+      response.end("<!doctype html><title>Approved by test browser</title>");
+      return;
+    }
+    if (request.method === "POST" && url.pathname === "/api/cli/session/exchange") {
+      const accessToken = `shiplet_cli_session_${crypto.randomBytes(48).toString("hex")}`;
+      live.add(accessToken);
+      response.writeHead(201, { "content-type": "application/json", "cache-control": "no-store" });
+      response.end(JSON.stringify({ accessToken, expiresOn: new Date(Date.now() + 2 * 3600_000).toISOString() }));
+      return;
+    }
+    if (!live.has(String(request.headers.authorization || "").replace(/^Bearer /, ""))) {
+      response.writeHead(401).end("CLI session unavailable");
+      return;
+    }
+    if (request.method === "GET" && url.pathname === "/api/cli/session") {
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end(JSON.stringify({ account: { id: "user_A", email: "person@example.com" }, expiresOn: new Date(Date.now() + 3600_000).toISOString() }));
+      return;
+    }
+    if (request.method === "POST" && url.pathname === "/api/shiplets") {
+      let body = "";
+      for await (const chunk of request) body += chunk;
+      const parsed = JSON.parse(body);
+      // Like Shiplet, pick a workspace only for an account that has exactly one.
+      if (!parsed.organization_id) {
+        response.writeHead(400, { "content-type": "text/plain" }).end("Missing required fields: organization_id");
+        return;
+      }
+      if (!workspaces.has(parsed.organization_id)) {
+        response.writeHead(403, { "content-type": "text/plain" }).end("Organization access required");
+        return;
+      }
+      published.push(parsed.organization_id);
+      response.writeHead(201, { "content-type": "application/json" });
+      response.end(JSON.stringify({ ok: true, reviewUrl: `https://${parsed.subdomain}.shiplet.test/`, project: { id: `project_${published.length}` } }));
+      return;
+    }
+    response.writeHead(404).end();
+  });
+  const port = await listen(server);
+  t.after(() => server.close());
+  const directory = await mkdtemp(path.join(os.tmpdir(), "shiplet-cli-workspace-"));
+  const launcherPath = path.join(directory, process.platform === "darwin" ? "open" : "xdg-open");
+  await writeFile(
+    launcherPath,
+    `#!${process.execPath}\nconst u=new URL(process.argv[2]);fetch(u).then(()=>fetch(u.searchParams.get("redirect_uri")+"?code=shiplet_cli_code_"+"a".repeat(64)+"&state="+encodeURIComponent(u.searchParams.get("state"))));\n`,
+  );
+  await chmod(launcherPath, 0o700);
+  const artifactPath = path.join(directory, "index.html");
+  await writeFile(artifactPath, "<!doctype html><h1>Workspace review</h1>");
+  const baseEnv = { PATH: directory, SHIPLET_CLI_SESSION_STORE: "file", SHIPLET_CONFIG_DIR: path.join(directory, "config") };
+  const apiUrl = `http://127.0.0.1:${port}`;
+  const run = (args, extraEnv = {}) => execFileAsync(
+    process.execPath,
+    [cliPath, "prepare", artifactPath, "--name", "Workspace review", "--subdomain", "workspace-review", "--api-url", apiUrl, "--json", ...args],
+    { env: { ...baseEnv, ...extraEnv }, timeout: 15_000 },
+  );
+
+  await assert.rejects(run([]), (error) => {
+    assert.equal(error.code, 1);
+    assert.match(error.stderr, /more than one workspace/);
+    assert.match(error.stderr, /--organization <id>/);
+    assert.match(error.stderr, /SHIPLET_ORGANIZATION_ID/);
+    assert.ok(error.stderr.includes(`${apiUrl}/workspace`), error.stderr);
+    return true;
+  });
+  assert.deepEqual(published, []);
+
+  const fromEnvironment = await run([], { SHIPLET_ORGANIZATION_ID: "org_research" });
+  assert.equal(fromEnvironment.stderr, "");
+  assert.equal(JSON.parse(fromEnvironment.stdout).reviewUrl, "https://workspace-review.shiplet.test/");
+
+  const fromFlag = await run(["--organization", "org_design"], { SHIPLET_ORGANIZATION_ID: "org_research" });
+  assert.equal(fromFlag.stderr, "");
+  assert.deepEqual(published, ["org_research", "org_design"]);
+
+  await assert.rejects(
+    run(["--organization", "Design Team"]),
+    (error) => error.code === 1 && /--organization/.test(error.stderr) && /org_/.test(error.stderr),
+  );
+  assert.equal(published.length, 2, "an invalid workspace never reaches Shiplet");
+  assert.equal(authorizations.length, 1, "every attempt reused one browser approval");
+});

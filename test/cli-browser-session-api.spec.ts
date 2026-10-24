@@ -536,6 +536,55 @@ describe("CLI browser authorization session", () => {
     }
   });
 
+  it("asks a CLI session in two workspaces to name one, then publishes into the named workspace", async () => {
+    const member = {
+      "x-shiplet-user-id": `user_cli_two_workspaces_${crypto.randomUUID().replace(/-/g, "")}`,
+      "x-shiplet-user-email": `cli-two-workspaces-${crypto.randomUUID()}@example.com`,
+    };
+    const workspaceIds: string[] = [];
+    for (const label of ["Design", "Research"]) {
+      const created = await request("/api/organizations", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", ...member },
+        body: JSON.stringify({ name: `CLI ${label} ${crypto.randomUUID()}` }),
+      });
+      expect(created.status).toBe(201);
+      workspaceIds.push(
+        ((await created.json()) as { organization: { id: string } }).organization.id,
+      );
+    }
+    const { session } = await approvedSession("7200", 43200, member);
+    const html = "<h1>Two workspace review</h1>";
+    // The body `shiplet prepare` sends, before and after it names a workspace.
+    const payload = {
+      name: "Two workspace review",
+      subdomain: `cli-two-workspaces-${crypto.randomUUID().slice(0, 8)}`,
+      visibility: "organization",
+      assets: [{ path: "index.html", content: btoa(html), size: html.length }],
+    };
+    const publish = (body: Record<string, unknown>) =>
+      request("/api/shiplets", {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${session.accessToken}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify(body),
+      });
+
+    const unnamed = await publish(payload);
+    expect(unnamed.status).toBe(400);
+    // The CLI turns exactly this message into its --organization guidance.
+    expect(await unnamed.text()).toBe("Missing required fields: organization_id");
+
+    const named = await publish({ ...payload, organization_id: workspaceIds[1] });
+    expect(named.status).toBe(201);
+    const published = (await named.json()) as {
+      project: { organization_id: string };
+    };
+    expect(published.project.organization_id).toBe(workspaceIds[1]);
+  });
+
   it.each([
     "https://attacker.example/callback",
     "http://localhost:43191/callback",

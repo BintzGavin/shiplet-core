@@ -25,6 +25,9 @@ account and expiry, and `shiplet logout` to revoke it. Sessions last two hours
 by default; use `--no-session-cache` for approval on every command. The CLI and
 browser must run on the same computer. Credentials are never printed.
 
+If your account belongs to more than one workspace, choose where to publish with
+`--organization <id>` or `SHIPLET_ORGANIZATION_ID`. Workspace IDs start with `org_`.
+
 Draft writes require the expected `--version`; activation requires
 `--expected-active` and `--approve`. Packaging does not change these checks.
 The CLI has no feedback list/reply/status commands: use the review link or

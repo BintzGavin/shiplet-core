@@ -177,6 +177,25 @@ No Cloudflare connection is required for managed static publishing.
 
 `shiplet publish` is the compatibility alias for `shiplet prepare`.
 
+### Choose a workspace
+
+Shiplet publishes into your only workspace automatically. If your account
+belongs to more than one, name the workspace ID with `--organization`, or set
+`SHIPLET_ORGANIZATION_ID`; the flag wins when both are set:
+
+```bash
+shiplet prepare ./dist \
+  --name "Checkout review" \
+  --subdomain checkout-review \
+  --organization org_123
+```
+
+Workspace IDs start with `org_`. If you name neither, an account in several
+workspaces gets an error that names both options; Shiplet does not guess. Your
+workspaces are listed on the [Workspace](https://shiplet.cc/workspace) page, and
+`--dry-run` shows the workspace a command will use. An organization API key
+always publishes into its own workspace and rejects any other.
+
 ## Edit an existing Shiplet safely
 
 The IDs below are placeholders. Preserve the exact IDs and version numbers
@@ -378,6 +397,7 @@ the bound request and retry key without making a network request.
 | Required authorization or approval is denied or expires | Reauthenticate or obtain only the missing project scope. Customer deployment requires a fresh trusted human session. No side effect is committed without its required approval. |
 | Saved CLI session expired or was revoked                | Run the command again and approve the new browser request, or run `shiplet login`.                                                                                              |
 | Saved CLI session may be exposed                         | Run `shiplet logout` to revoke it on Shiplet immediately.                                                                                                                         |
+| Account belongs to several workspaces                   | Rerun with `--organization <id>` or set `SHIPLET_ORGANIZATION_ID`. Workspace IDs start with `org_`.                                                                             |
 | Cloudflare connection is revoked                        | Reconnect through scoped OAuth before another customer-owned update. The last customer-owned deployment keeps running.                                                          |
 | Network response is lost                                | Reuse the exact reported `--idempotency-key`; do not create a second operation with different inputs.                                                                           |
 | Pull or eject destination is non-empty                  | Choose an empty directory, or inspect it before using `--force` for a complete replacement.                                                                                     |
