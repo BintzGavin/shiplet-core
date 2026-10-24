@@ -493,7 +493,7 @@ the next request.
 ## Compatibility and operational truth
 
 Static Shiplets, external URLs, advanced Worker packages, review links,
-organization API keys/project rules, WordPress embeds, archived Shiplets,
+organization API keys/project rules, website-widget embeds, archived Shiplets,
 custom hostnames, sandbox, docs, and discovery routes remain supported through
 adapters and representative migration tests. New routes never silently change
 legacy active content.
