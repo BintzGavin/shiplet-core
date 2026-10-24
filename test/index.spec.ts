@@ -8346,6 +8346,61 @@ describe("Shiplet", () => {
       expect(text).toContain("Unsafe asset path");
     });
 
+    it.each([
+      ["a reserved device name", ["con.html"], "Unsupported asset path: con.html"],
+      [
+        "a character portable packages reject",
+        ["index.html", "notes?.txt"],
+        "Unsupported asset path: notes?.txt",
+      ],
+      [
+        "paths that differ only by letter case",
+        ["index.html", "A.css", "a.css"],
+        "Asset paths collide: A.css and a.css",
+      ],
+      [
+        "paths that differ only by Unicode form",
+        ["index.html", "caf\u00e9.css", "cafe\u0301.css"],
+        "Asset paths collide: caf\u00e9.css and cafe\u0301.css",
+      ],
+      [
+        "the same path after normalization",
+        ["index.html", "./index.html"],
+        "Asset paths collide: index.html and ./index.html",
+      ],
+    ])(
+      "Given static files with %s, When they are published, Then the upload fails with 400 before anything is saved and the subdomain stays free",
+      async (_label, paths, message) => {
+        const organization = await createTestOrganization(makeRequest);
+        const subdomain = `unportable-${crypto.randomUUID().slice(0, 8)}`;
+        const assetKeysBefore = await shipletAssetKeys();
+
+        const response = await makeRequest("/projects", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            name: "Unportable Static Upload",
+            organization_id: organization.id,
+            subdomain,
+            assets: paths.map((path, index) => ({
+              path,
+              content: btoa(`<!doctype html><h1>File ${index}</h1>`),
+            })),
+          }),
+        });
+
+        expect(response.status).toBe(400);
+        expect(await response.text()).toContain(message);
+        expect(await projectCountForSubdomain(subdomain)).toBe(0);
+        expect(await shipletAssetKeys()).toEqual(assetKeysBefore);
+
+        const retry = await publishStaticShiplet(makeRequest, organization.id, {
+          subdomain,
+        });
+        expect(retry.project.subdomain).toBe(subdomain);
+      },
+    );
+
     it("should reject risky or unsupported static asset types", async () => {
       const organization = await createTestOrganization(makeRequest);
       const response = await makeRequest("/projects", {
