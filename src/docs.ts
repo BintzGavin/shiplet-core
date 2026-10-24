@@ -20,7 +20,7 @@ const DOCS_PUBLIC_CONTENT_SHA256: Record<string, string> = {
   "quickstart":
     "447ea3b2f09dcb48ea11813b612b697332cd4717c2fcc6c3a26e0815e3393120",
   "access-control":
-    "0d2511e0d3ac096e7ce50dd919498fda5ee8be55cfe3ac904c5907810b8430db",
+    "71c4b16009ef9569e8f106138bb498fcfdb0c8a51281f98db1dc0262ee96e287",
   "publishing":
     "0d94977a77ce4a701644a65f43eeec8002f4a141a3cdbf11d591b366a1c52c90",
   "extensions":
