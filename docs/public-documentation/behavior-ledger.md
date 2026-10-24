@@ -22,7 +22,7 @@ compatibility evidence.
 | DOC-008 | in_scope | Core MCP, access, and automation credentials are distinct.                                                                                             | MCP and API-key guides cover browser OAuth, scoped keys, `search`, `execute`, artifact preparation, and feedback without custom package tools.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             | pass   | None.                                                                                                                      |
 | DOC-009 | in_scope | Worker pages, MDX pages, navigation, validation, and sitemap remain in parity.                                                                         | Twelve pages match across renderers; validation stages their MDX and article visuals while public discovery omits retired routes.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                          | pass   | Preserve material review-boundary parity as the guides evolve.                                                             |
 | DOC-010 | in_scope | Documentation is keyboard, landmark, and narrow-viewport usable.                                                                                       | Operated 320px, 390×844, and 1280×900 checks cover local table scrolling, collapsed/expanded navigation, first-viewport article access, touch targets, and keyboard skip focus.                                                                                                                                                                                                                                                                                                                                                                                                                                                                            | pass   | None.                                                                                                                      |
-| DOC-011 | in_scope | Supported review workflows remain findable and important recovery states are explained.                                                                | Publishing, external URL, feedback, access, API-key, WordPress, quickstart, extensions, and security guides remain public.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 | pass   | Public WordPress distribution remains excluded until a real signed artifact exists.                                        |
+| DOC-011 | in_scope | Supported review workflows remain findable and important recovery states are explained.                                                                | Publishing, external URL, feedback, access, API-key, website widget, quickstart, extensions, and security guides remain public.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            | pass   | Re-run the production docs smoke after deployment.                                                                         |
 | DOC-012 | internal | Source-checkout CLI distribution remains an internal contributor contract.                                                                             | Public automation starts with MCP or REST; the internal CLI guide remains truthful.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        | n/a    | Revisit only after a real public distribution.                                                                             |
 | DOC-013 | internal | Advanced Worker and custom MCP runtime contracts stay outside public product copy.                                                                     | Public review guides contain no managed WFP, dispatch namespace, custom MCP handler, or provider-gateway positioning.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      | n/a    | None for the review product.                                                                                               |
 | DOC-014 | in_scope | Artifacts and custom widgets are not credential stores.                                                                                                | Security and API-key guides keep browser sessions and organization keys in the trusted host or automation secret store.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    | pass   | None.                                                                                                                      |
@@ -206,8 +206,7 @@ operations and 119 match exactly one non-stale exclusion.
 Current local evidence is 1,356/1,356 Vitest checks, 26/26 Wizard scenarios,
 25/25 public-documentation checks, 24 enabled browser E2E checks with one
 declared stress skip, 105/105 killed security mutants, 8/8 killed embed
-mutants, plus passing typecheck, Mint validation, main Worker dry run,
-WordPress tests, and WordPress packaging. A new immutable-commit blind review
+mutants, plus passing typecheck, Mint validation, and main Worker dry run. A new immutable-commit blind review
 and operated production evidence remain required; no provider operation was
 performed by these checks.
 
@@ -242,7 +241,7 @@ rejects dynamic or unsupported registration. Current local evidence is 1,360
 Vitest checks, 29 Wizard scenarios, 42 public-documentation checks, 25 enabled
 browser E2E checks with one declared stress skip, 110/110 killed security
 mutants, and 8/8 killed embed mutants, plus green typecheck, Mint validation,
-main/support Worker dry runs, WordPress tests/package, and dependency audit.
+main/support Worker dry runs, and dependency audit.
 Fresh exact-commit blind review and operated production evidence remain
 required; no provider operation was performed by these checks.
 
@@ -266,8 +265,7 @@ promote. MDX and Worker-rendered Extensions plus the operator guide now state
 the same contract. Focused evidence is Wizard 38/38 and docs 17/17. Aggregate
 gates are also green: 1,376 Vitest checks, Wizard 38/38, public docs 43/43,
 typecheck/build/Mint, 26 E2E passes plus one declared stress skip, 110/110
-security and 8/8 embed mutants killed, support Worker dry-runs, WordPress
-package, and zero dependency vulnerabilities. A fresh frozen-candidate review
+security and 8/8 embed mutants killed, support Worker dry-runs, and zero dependency vulnerabilities. A fresh frozen-candidate review
 remains pending; no external service was mutated.
 
 ## Twelfth repair checkpoint — truthful Wizard timing and locked Mint
@@ -285,7 +283,7 @@ A new exact-SHA critic and operated production proof remain required.
 The complete post-repair local gate also passes: 1,376 Vitest checks, all 38
 Wizard scenarios, 43 public-documentation checks, type/build/Mint, 26 E2E
 passes plus one declared stress skip, 110/110 security and 8/8 embed mutants,
-support dry runs, WordPress packaging, shell/diff checks, and both dependency
+support dry runs, shell/diff checks, and both dependency
 audits. The repaired commit and fresh blind verdict remain pending.
 
 ## Thirteenth repair checkpoint — runnable preview and operator entry
@@ -302,10 +300,10 @@ Setup. The Wizard exposes value-free `--help` and `--preflight` before all state
 or provider setup, and both public renderers list the exact static extensions
 while explaining why active SVG is rejected. Focused docs 18/18, Wizard 39/39,
 preview 2/2, and both audits pass. The complete repaired gate also passes:
-1,376 Vitest checks, WordPress 4/4, build boundary 8/8, CLI subprocess 5/5,
+1,376 Vitest checks, build boundary 8/8, CLI subprocess 5/5,
 support migration 1/1, typecheck/build/docs, 26 E2E passes plus one declared
 stress skip, 110/110 security and 8/8 embed mutants killed, all four Worker
-dry-runs, WordPress packaging, shell/diff checks, and zero known vulnerabilities
+dry-runs, shell/diff checks, and zero known vulnerabilities
 in both lockfiles. A cohesive commit/push and fresh exact-SHA critic remain
 pending.
 
@@ -321,9 +319,9 @@ the fixed experimental `shiplet-external-setup` profile, OS-backed encrypted
 storage, ambient-token and dotenv refusal, no-follow public-state behavior, and
 the separation between this local operator profile and customer deployment
 grants. The full local release gate now passes: core Vitest 1,376/1,376,
-WordPress 4/4, build boundary 8/8, CLI/session 5/5, Wizard 44/44, support
+build boundary 8/8, CLI/session 5/5, Wizard 44/44, support
 migration 1/1, public docs 44/44, Playwright 26 pass with one declared stress
-skip, type/build/docs validation, all four Worker dry-runs, WordPress packaging,
+skip, type/build/docs validation, all four Worker dry-runs,
 110/110 security and 8/8 embed mutants killed, shell/diff checks, and zero known
 vulnerabilities in both lockfiles. Commit, push, and a fresh exact-SHA critic
 remain pending.
@@ -346,10 +344,9 @@ suites pass 4/4. Full gates, replacement commit/push, and a fresh blind round
 remain pending. Candidate public routes and Stage 10 operation remain correctly
 unverified until deployment.
 
-The replacement aggregate is green: core Vitest 1,376/1,376, WordPress 4/4,
-build boundary 8/8, CLI/session 5/5, Wizard 44/44, support migration 1/1,
+The replacement aggregate is green: core Vitest 1,376/1,376, build boundary 8/8, CLI/session 5/5, Wizard 44/44, support migration 1/1,
 public docs 44/44, typecheck/build/docs validation, all four Worker dry-runs,
-WordPress packaging, Playwright 26 pass with one declared stress skip,
+Playwright 26 pass with one declared stress skip,
 shell/diff checks, and zero known vulnerabilities in both lockfiles. Security
 and embed mutation target sources are unchanged from their 110/110 and 8/8 pass.
 
@@ -380,6 +377,6 @@ inventory now enumerates the directory, with a temporary future-table fixture
 proving uncounted durable state is detected. The aggregate passes 1,378 Vitest
 checks, Wizard 46/46, public docs 44/44, support migration 1/1, and 112/112
 security mutants with zero survivors. Typecheck/build/docs, Playwright 26 pass
-with one declared skip, three support Worker dry-runs, WordPress packaging,
+with one declared skip, three support Worker dry-runs,
 both dependency audits, and 8/8 embed mutants also pass. Replacement
 commit/push and one fresh blind review remain pending. No external state changed.

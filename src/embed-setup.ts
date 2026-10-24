@@ -1,4 +1,9 @@
-import { normalizeEmbedSiteUrl, type EmbedInstallationRecord } from "./embed";
+import {
+  BROWSER_INSTALLATION_FILTER,
+  browserInstallationSecretMarker,
+  normalizeEmbedSiteUrl,
+  type EmbedInstallationRecord,
+} from "./embed";
 import { newId, type OrganizationRecord, type ShipletUser } from "./store";
 import type { Project } from "./types";
 
@@ -25,11 +30,19 @@ export async function registerBrowserEmbed(
   const origin = normalized.siteOrigin;
   const existing = await db
     .prepare(
-      "SELECT * FROM embed_installations WHERE project_id = ? AND site_origin = ? AND revoked_on IS NULL ORDER BY created_on LIMIT 1",
+      `SELECT * FROM embed_installations WHERE project_id = ? AND site_origin = ? AND revoked_on IS NULL AND ${BROWSER_INSTALLATION_FILTER} ORDER BY created_on LIMIT 1`,
     )
     .bind(project.id, origin)
     .first<EmbedInstallationRecord>();
   if (existing) return existing;
+  // A retired server-secret installation for this origin grants nothing but
+  // still holds the one-active-installation slot, so release it first.
+  await db
+    .prepare(
+      `UPDATE embed_installations SET revoked_on = ? WHERE project_id = ? AND site_origin = ? AND revoked_on IS NULL AND NOT (${BROWSER_INSTALLATION_FILTER})`,
+    )
+    .bind(new Date().toISOString(), project.id, origin)
+    .run();
   const id = newId("embed_installation");
   // Browser installations have no server credential. Only an authenticated
   // editor can change them, and a reviewer still needs project access.
@@ -47,7 +60,7 @@ export async function registerBrowserEmbed(
       origin,
       normalized.siteUrl,
       project.name,
-      `browser-only:${id}`,
+      browserInstallationSecretMarker(id),
       user.id,
       new Date().toISOString(),
       project.id,
@@ -56,7 +69,7 @@ export async function registerBrowserEmbed(
     .run();
   return (await db
     .prepare(
-      "SELECT * FROM embed_installations WHERE project_id = ? AND site_origin = ? AND revoked_on IS NULL ORDER BY created_on LIMIT 1",
+      `SELECT * FROM embed_installations WHERE project_id = ? AND site_origin = ? AND revoked_on IS NULL AND ${BROWSER_INSTALLATION_FILTER} ORDER BY created_on LIMIT 1`,
     )
     .bind(project.id, origin)
     .first<EmbedInstallationRecord>())!;

@@ -49,7 +49,7 @@ export default defineConfig({
       "test/trusted-artifact-bridge.spec.ts",
       "test/trusted-review-host.spec.ts",
       "test/timing-safe-secret.spec.ts",
-      "test/wordpress-embed.spec.ts",
+      "test/embed-review.spec.ts",
       "test/workos-invitation-security.spec.ts",
     ],
   },

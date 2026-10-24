@@ -1381,9 +1381,10 @@ describe("Shiplet", () => {
       expect(introduction).not.toContain("immutable revision");
       expect(mcp).not.toContain("custom_shiplet_scope_required");
 
-      const wordpress = await requestHelper("/docs/wordpress");
-      expect(wordpress.status).toBe(301);
-      expect(wordpress.headers.get("location")).toBe("/docs/embed");
+      // The retired plugin guide is deleted, not redirected.
+      const retiredPluginGuide = await requestHelper("/docs/wordpress");
+      expect(retiredPluginGuide.status).toBe(404);
+      expect(retiredPluginGuide.headers.get("location")).toBeNull();
     });
 
     it("Given a visitor opens Why Shiplet, When the article renders, Then its product argument and future-facing ownership idea are canonical", async () => {

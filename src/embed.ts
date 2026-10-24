@@ -1,7 +1,7 @@
 import type { Project } from "./types";
 import { newId, timestamps, type ShipletUser } from "./store";
 
-export type EmbedExchangePurpose = "connection" | "review";
+export type EmbedExchangePurpose = "review";
 
 export type EmbedInstallationRecord = {
   id: string;
@@ -31,15 +31,6 @@ type EmbedExchangeCodeRecord = {
   expires_on: string;
   used_on: string | null;
   created_on: string;
-};
-
-export type EmbedConnectionRequest = {
-  siteUrl: string;
-  siteOrigin: string;
-  siteName: string;
-  returnUrl: string;
-  state: string;
-  projectId: string;
 };
 
 export type EmbedReviewSessionPublic = {
@@ -91,13 +82,12 @@ export type EmbedReviewOperationReceiptClaimInput = {
   now: Date;
 };
 
-const CONNECTION_CODE_PREFIX = "shiplet_embed_connect_";
 const REVIEW_GRANT_PREFIX = "shiplet_embed_auth_";
-const INSTALLATION_SECRET_PREFIX = "shiplet_embed_install_";
+// Website-widget installations carry this marker instead of a server secret.
+// Rows without it belong to the retired server-secret integration and grant
+// nothing.
+const BROWSER_INSTALLATION_SECRET_PREFIX = "browser-only:";
 const MAX_URL_LENGTH = 2_048;
-const MAX_SITE_NAME_LENGTH = 160;
-const MAX_STATE_LENGTH = 512;
-const CONNECTION_CODE_TTL_SECONDS = 5 * 60;
 const REVIEW_SESSION_COOKIE_PREFIX = "__Host-shiplet_embed_review_";
 const MAX_REVIEW_SESSION_TTL_SECONDS = 5 * 60;
 const MAX_EMBED_INSTALLATION_ID_LENGTH = 160;
@@ -141,12 +131,12 @@ export async function createEmbedReviewSession(
   },
 ) {
   if (input.installation.revoked_on) {
-    throw new Response("WordPress installation is disconnected", {
+    throw new Response("Site installation is disconnected", {
       status: 410,
     });
   }
   if (input.installation.project_id !== input.project.id) {
-    throw new Response("WordPress installation project mismatch", {
+    throw new Response("Site installation project mismatch", {
       status: 403,
     });
   }
@@ -439,67 +429,6 @@ export async function digestEmbedReviewOperationReceiptHandle(value: unknown) {
   return hashToken(value);
 }
 
-export function normalizeEmbedConnectionRequest(
-  input: Record<string, unknown>,
-): EmbedConnectionRequest | null {
-  const site = normalizeEmbedSiteUrl(input.site_url ?? input.siteUrl);
-  if (!site) return null;
-  const returnUrl = normalizeEmbedReturnUrl(
-    input.return_url ?? input.returnUrl,
-    site.siteOrigin,
-  );
-  if (!returnUrl) return null;
-  const siteName = normalizeString(
-    input.site_name ?? input.siteName,
-    MAX_SITE_NAME_LENGTH,
-  );
-  const state = normalizeString(input.state, MAX_STATE_LENGTH);
-  const projectId = normalizeString(input.project_id ?? input.projectId, 160);
-  return {
-    ...site,
-    siteName: siteName || new URL(site.siteUrl).hostname,
-    returnUrl,
-    state,
-    projectId,
-  };
-}
-
-export function appendEmbedRedirectParams(
-  returnUrl: string,
-  params: Record<string, string>,
-) {
-  const url = new URL(returnUrl);
-  for (const [name, value] of Object.entries(params)) {
-    if (value) url.searchParams.set(name, value);
-  }
-  return url.toString();
-}
-
-export async function createEmbedConnectionCode(
-  db: D1Database,
-  input: {
-    project: Project;
-    user: ShipletUser;
-    siteOrigin: string;
-    siteUrl: string;
-    siteName: string;
-    returnUrl: string;
-  },
-) {
-  return createEmbedExchangeCode(db, {
-    purpose: "connection",
-    prefix: CONNECTION_CODE_PREFIX,
-    installationId: null,
-    project: input.project,
-    user: input.user,
-    siteOrigin: input.siteOrigin,
-    siteUrl: input.siteUrl,
-    siteName: input.siteName,
-    returnUrl: input.returnUrl,
-    expiresInSeconds: CONNECTION_CODE_TTL_SECONDS,
-  });
-}
-
 export async function createEmbedReviewGrant(
   db: D1Database,
   input: {
@@ -532,12 +461,7 @@ export async function consumeEmbedExchangeCode(
   },
 ) {
   const code = normalizeString(input.code, 512);
-  if (
-    !code.startsWith(
-      input.purpose === "review" ? REVIEW_GRANT_PREFIX : CONNECTION_CODE_PREFIX,
-    )
-  )
-    return null;
+  if (!code.startsWith(REVIEW_GRANT_PREFIX)) return null;
   const codeHash = await hashToken(code);
   const now = timestamps.now();
   const row = await db
@@ -567,63 +491,6 @@ export async function consumeEmbedExchangeCode(
   return { ...row, used_on: now };
 }
 
-export async function createEmbedInstallation(
-  db: D1Database,
-  code: EmbedExchangeCodeRecord,
-) {
-  const secret = secureToken(INSTALLATION_SECRET_PREFIX);
-  const secretHash = await hashToken(secret);
-  const now = timestamps.now();
-  const installation: EmbedInstallationRecord = {
-    id: newId("embed_installation"),
-    project_id: code.project_id,
-    organization_id: code.organization_id,
-    site_origin: code.site_origin,
-    site_url: code.site_url,
-    site_name: code.site_name,
-    secret_hash: secretHash,
-    created_by_user_id: code.user_id,
-    created_on: now,
-    last_used_on: null,
-    revoked_on: null,
-  };
-
-  await db.batch([
-    db
-      .prepare(
-        `UPDATE embed_installations
-				 SET revoked_on = ?
-				 WHERE site_origin = ? AND project_id = ? AND revoked_on IS NULL`,
-      )
-      .bind(now, installation.site_origin, installation.project_id),
-    db
-      .prepare(
-        `INSERT INTO embed_installations
-				 (id, project_id, organization_id, site_origin, site_url, site_name,
-				  secret_hash, created_by_user_id, created_on, last_used_on, revoked_on)
-				 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      )
-      .bind(
-        installation.id,
-        installation.project_id,
-        installation.organization_id,
-        installation.site_origin,
-        installation.site_url,
-        installation.site_name,
-        installation.secret_hash,
-        installation.created_by_user_id,
-        installation.created_on,
-        installation.last_used_on,
-        installation.revoked_on,
-      ),
-  ]);
-
-  return {
-    installation: publicEmbedInstallation(installation),
-    secret,
-  };
-}
-
 export async function getEmbedInstallation(
   db: D1Database,
   installationId: string,
@@ -634,144 +501,18 @@ export async function getEmbedInstallation(
     .prepare(
       `SELECT *
 			 FROM embed_installations
-			 WHERE id = ? ${revokedFilter}
+			 WHERE id = ? AND ${BROWSER_INSTALLATION_FILTER} ${revokedFilter}
 			 LIMIT 1`,
     )
     .bind(installationId)
     .first<EmbedInstallationRecord>();
 }
 
-export async function authenticateEmbedInstallation(
-  db: D1Database,
-  installationId: string,
-  authorization: string | null | undefined,
-) {
-  const secret = parseBearerToken(authorization);
-  if (!secret?.startsWith(INSTALLATION_SECRET_PREFIX)) return null;
-  const secretHash = await hashToken(secret);
-  const installation = await db
-    .prepare(
-      `SELECT *
-			 FROM embed_installations
-			 WHERE id = ? AND secret_hash = ? AND revoked_on IS NULL
-			 LIMIT 1`,
-    )
-    .bind(installationId, secretHash)
-    .first<EmbedInstallationRecord>();
-  if (!installation) return null;
-  await db
-    .prepare(
-      `UPDATE embed_installations
-			 SET last_used_on = ?
-			 WHERE id = ? AND revoked_on IS NULL`,
-    )
-    .bind(timestamps.now(), installation.id)
-    .run();
-  return installation;
-}
+/** SQL predicate that admits only website-widget installation rows. */
+export const BROWSER_INSTALLATION_FILTER = `substr(secret_hash, 1, ${BROWSER_INSTALLATION_SECRET_PREFIX.length}) = '${BROWSER_INSTALLATION_SECRET_PREFIX}'`;
 
-export async function revokeEmbedInstallation(
-  db: D1Database,
-  installationId: string,
-) {
-  const revokedOn = timestamps.now();
-  const result = await db
-    .prepare(
-      `UPDATE embed_installations
-			 SET revoked_on = ?
-			 WHERE id = ? AND revoked_on IS NULL`,
-    )
-    .bind(revokedOn, installationId)
-    .run();
-  return result.meta.changes === 1;
-}
-
-export function publicEmbedInstallation(installation: EmbedInstallationRecord) {
-  return {
-    id: installation.id,
-    projectId: installation.project_id,
-    organizationId: installation.organization_id,
-    siteOrigin: installation.site_origin,
-    siteUrl: installation.site_url,
-    siteName: installation.site_name,
-    createdOn: installation.created_on,
-    lastUsedOn: installation.last_used_on,
-    revokedOn: installation.revoked_on,
-  };
-}
-
-export function embedClientScript() {
-  return String.raw`
-(() => {
-	const embed = window.__SHIPLET_EMBED__;
-	const mountKey = "__SHIPLET_EMBED_CLIENT_MOUNTED__";
-	if (!embed || !embed.installationId || window[mountKey]) return;
-	const scriptSource = document.currentScript && document.currentScript.src;
-	if (!scriptSource) return;
-	let scriptUrl;
-	try {
-		scriptUrl = new URL(scriptSource, location.href);
-	} catch {
-		return;
-	}
-	if (scriptUrl.protocol !== "https:" && scriptUrl.hostname !== "localhost") return;
-
-	const installationId = String(embed.installationId).trim();
-	if (!/^[A-Za-z0-9_-]{1,160}$/.test(installationId)) return;
-	const pageUrl = new URL(location.href);
-	pageUrl.hash = "";
-	const credentialKeys = new Set(["authorization_code", "claim", "claim_url", "code", "credential", "id_token", "key_pair_id", "magic_link", "nonce", "oauth_code", "oauth_token", "password", "policy", "presence_token", "reset_code", "session", "shiplet_code", "shiplet_embed_code", "sig", "signature", "signed", "state", "token"]);
-	function isCredentialKey(key) {
-		const normalized = String(key).trim().toLowerCase().replace(/-/g, "_");
-		const compact = normalized.replace(/[^a-z0-9]/g, "");
-		return credentialKeys.has(normalized) || normalized.startsWith("x_amz_") || compact.includes("token") || compact.includes("secret") || compact.includes("password") || compact.includes("credential") || compact.includes("authorization") || compact.includes("signature") || compact === "apikey" || compact === "keypairid";
-	}
-	function parsePageCandidate(value) {
-		if (typeof value !== "string" || value.length > 2048) return null;
-		try {
-			const candidate = new URL(value);
-			const localHttp = candidate.protocol === "http:" && (candidate.hostname === "localhost" || candidate.hostname === "127.0.0.1" || candidate.hostname === "[::1]" || candidate.hostname.endsWith(".localhost"));
-			if ((candidate.protocol !== "https:" && !localHttp) || candidate.username || candidate.password) return null;
-			return candidate;
-		} catch {
-			return null;
-		}
-	}
-	function sanitizePage(candidate, depth) {
-		candidate.hash = "";
-		const entries = Array.from(candidate.searchParams.entries());
-		candidate.search = "";
-		for (const [key, value] of entries) {
-			if (isCredentialKey(key)) continue;
-			const nested = parsePageCandidate(value);
-			if (!nested) {
-				candidate.searchParams.append(key, value);
-				continue;
-			}
-			if (depth >= 8) continue;
-			candidate.searchParams.append(key, sanitizePage(nested, depth + 1).toString());
-		}
-		return candidate;
-	}
-	sanitizePage(pageUrl, 0);
-
-	const start = new URL("/embed/review/start", scriptUrl.origin);
-	start.searchParams.set("installation_id", installationId);
-	start.searchParams.set("return_url", pageUrl.toString());
-
-	const frame = document.createElement("iframe");
-	frame.src = start.toString();
-	frame.title = "Review this page in Shiplet";
-	frame.setAttribute("sandbox", "allow-scripts allow-forms allow-same-origin allow-popups allow-popups-to-escape-sandbox");
-	frame.setAttribute("referrerpolicy", "no-referrer");
-	frame.setAttribute("loading", "lazy");
-	frame.setAttribute("aria-label", frame.title);
-	frame.style.cssText = "position:fixed;right:16px;bottom:16px;width:min(420px,calc(100vw - 32px));height:min(680px,calc(100vh - 32px));z-index:2147483647;border:0;border-radius:12px;background:#fff;box-shadow:0 16px 48px rgba(15,23,42,.28)";
-	frame.dataset.shipletTrustedReview = "";
-	window[mountKey] = true;
-	document.body.appendChild(frame);
-})();
-`;
+export function browserInstallationSecretMarker(installationId: string) {
+  return `${BROWSER_INSTALLATION_SECRET_PREFIX}${installationId}`;
 }
 
 async function createEmbedExchangeCode(
@@ -974,9 +715,4 @@ async function hashToken(token: string) {
   return Array.from(new Uint8Array(digest))
     .map((byte) => byte.toString(16).padStart(2, "0"))
     .join("");
-}
-
-function parseBearerToken(authorization: string | null | undefined) {
-  if (!authorization) return null;
-  return authorization.match(/^Bearer\s+(.+)$/i)?.[1]?.trim() || null;
 }
