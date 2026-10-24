@@ -499,6 +499,66 @@ describe("WordPress embed installations", () => {
     });
   });
 
+  it("accepts only same-origin top-level connect forms whose no-referrer Origin is null", async () => {
+    const { organization } = await createOrganization();
+    const { project } = await createExternalProject(organization.id);
+    const connectPage = await request(connectUrl(project.id), {
+      headers: { ...OWNER_HEADERS, Accept: "text/html" },
+    });
+    expect(connectPage.status).toBe(200);
+    expect(connectPage.headers.get("referrer-policy")).toBe("no-referrer");
+    const topLevelSameOrigin = {
+      "Sec-Fetch-Site": "same-origin",
+      "Sec-Fetch-Mode": "navigate",
+      "Sec-Fetch-Dest": "document",
+    };
+    const submit = (fetchMetadata: Record<string, string>) =>
+      request("/embed/connect", {
+        method: "POST",
+        redirect: "manual",
+        headers: {
+          "Content-Type": "application/x-www-form-urlencoded",
+          Origin: "null",
+          ...fetchMetadata,
+          ...OWNER_HEADERS,
+        },
+        body: new URLSearchParams({
+          site_url: "https://client.example.com/",
+          site_name: "Client site",
+          return_url:
+            "https://client.example.com/wp-admin/admin-post.php?action=shiplet_connect_callback",
+          state: "null-origin-state",
+          project_id: project.id,
+        }),
+      });
+
+    for (const [label, fetchMetadata] of [
+      ["no fetch metadata", {}],
+      // A sandboxed artifact frame has an opaque origin, so the browser
+      // labels its form submission cross-site even on Shiplet's host.
+      [
+        "sandboxed or foreign frame",
+        { ...topLevelSameOrigin, "Sec-Fetch-Site": "cross-site" },
+      ],
+      ["same-site", { ...topLevelSameOrigin, "Sec-Fetch-Site": "same-site" }],
+      ["iframe", { ...topLevelSameOrigin, "Sec-Fetch-Dest": "iframe" }],
+      ["fetch", { ...topLevelSameOrigin, "Sec-Fetch-Mode": "cors" }],
+    ] as Array<[string, Record<string, string>]>) {
+      const rejected = await submit(fetchMetadata);
+      expect(rejected.status, label).toBe(403);
+      expect(rejected.headers.get("location"), label).toBeNull();
+    }
+
+    const accepted = await submit(topLevelSameOrigin);
+    expect(accepted.status).toBe(302);
+    const callbackUrl = new URL(accepted.headers.get("location") || "");
+    expect(callbackUrl.origin).toBe("https://client.example.com");
+    expect(callbackUrl.searchParams.get("state")).toBe("null-origin-state");
+    expect(callbackUrl.searchParams.get("shiplet_code")).toMatch(
+      /^shiplet_embed_connect_/,
+    );
+  });
+
   it("establishes review authority only inside an app-origin trusted frame", async () => {
     const { organization } = await createOrganization();
     const { project } = await createExternalProject(organization.id);
