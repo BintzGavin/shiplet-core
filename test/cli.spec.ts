@@ -463,6 +463,42 @@ describe("Shiplet CLI", () => {
 		expect(network).not.toHaveBeenCalled();
 	});
 
+	it("fails before upload when static files exceed the total upload limit", async () => {
+		const artifactDir = await makeTempDir();
+		await writeFile(path.join(artifactDir, "index.html"), "<h1>Review me</h1>");
+		const stylesheet = "x".repeat(8_500_000);
+		for (const index of [0, 1, 2]) {
+			await writeFile(path.join(artifactDir, `part-${index}.css`), stylesheet);
+		}
+
+		const stdout = createWritable();
+		const stderr = createWritable();
+		const network = vi.fn();
+
+		const exitCode = await cli.runCli({
+			argv: [
+				"prepare",
+				artifactDir,
+				"--name",
+				"Too Large",
+				"--subdomain",
+				"too-large",
+				"--dry-run",
+			],
+			env: {},
+			fetch: network as unknown as typeof fetch,
+			stdout,
+			stderr,
+		});
+
+		expect(exitCode).toBe(1);
+		expect(stdout.value()).toBe("");
+		expect(stderr.value()).toContain(
+			"Static upload is too large. Total files are limited to 24 MB.",
+		);
+		expect(network).not.toHaveBeenCalled();
+	});
+
 	it("fails before upload for invalid requested subdomains", async () => {
 		const artifactDir = await makeTempDir();
 		await writeFile(path.join(artifactDir, "index.html"), "<h1>Review me</h1>");

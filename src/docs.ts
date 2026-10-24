@@ -22,7 +22,7 @@ const DOCS_PUBLIC_CONTENT_SHA256: Record<string, string> = {
   "access-control":
     "71c4b16009ef9569e8f106138bb498fcfdb0c8a51281f98db1dc0262ee96e287",
   "publishing":
-    "0d94977a77ce4a701644a65f43eeec8002f4a141a3cdbf11d591b366a1c52c90",
+    "b9f56eaf441f5e4fa4c060936613eb378e2415dffa91b63c29fdf93e75267582",
   "extensions":
     "c834eef088f4ab55ed628fe95cc4b169445c7ca3f77732e8717e5c048fc70d13",
   "review-feedback":
@@ -224,6 +224,7 @@ const DOCS_PAGES: DocsPage[] = [
 <p>Remove <code>--dry-run</code> to publish and approve the browser session when prompted. Open the returned review URL. The CLI encodes assets and preserves folder paths for you.</p>
 <h2>Uploaded files</h2>
 <p>Direct REST clients send base64-encoded <code>assets</code>. The browser Prepare page accepts supported files directly. Shiplet serves <code>index.html</code> when present and creates a file review page when it is absent.</p>
+<p>Uploads are limited to 200 files, 10 MB per file, and 24 MB in total.</p>
 <pre><code>{
   "name": "Campaign prototype",
   "subdomain": "campaign-prototype",

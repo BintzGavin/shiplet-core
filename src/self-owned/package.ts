@@ -1,6 +1,7 @@
 import { types as nodeUtilTypes } from "node:util";
 
 import { MAX_STATIC_ASSET_FILE_BYTES } from "../upload-policy";
+import { isPortablePath, portableCollisionKey } from "./portable-path";
 import {
   UnsupportedWidgetDependencyError,
   validateRuntimeV1Widget,
@@ -13,15 +14,13 @@ const PACKAGE_SCHEMA_VERSION = "shiplet.package/v1";
 const RUNTIME_COMPATIBILITY_VERSION = "shiplet.runtime/v1";
 const MAX_FILE_COUNT = 1_024;
 const MAX_FILE_BYTES = MAX_STATIC_ASSET_FILE_BYTES;
-const MAX_PACKAGE_BYTES = 32 * 1024 * 1024;
+export const MAX_PACKAGE_BYTES = 32 * 1024 * 1024;
 const MAX_MANIFEST_DEPTH = 32;
 const MAX_STRING_BYTES = 1024 * 1024;
 const MAX_FILE_CONTENT_STRING_BYTES =
   Math.ceil(MAX_FILE_BYTES / 3) * 4;
 const MAX_TREE_WIDTH = 256;
 const MAX_TREE_NODES = 4_096;
-const MAX_PORTABLE_PATH_BYTES = 1_024;
-const MAX_PORTABLE_PATH_SEGMENT_BYTES = 255;
 
 const REQUIRED_ENTRYPOINTS = [
   "artifact",
@@ -349,48 +348,7 @@ function assertNoForbiddenAuthority(value: unknown, path = "") {
 }
 
 function assertPortablePath(path: string) {
-  if (
-    path.length === 0 ||
-    new TextEncoder().encode(path).byteLength > MAX_PORTABLE_PATH_BYTES ||
-    path.startsWith("/") ||
-    path.includes("\\") ||
-    /[\u0000-\u001f\u007f]/u.test(path)
-  ) {
-    fail("invalid_path", path);
-  }
-  const segments = path.split("/");
-  if (
-    segments.some(
-      (segment) => segment === "" || segment === "." || segment === "..",
-    )
-  ) {
-    fail("invalid_path", path);
-  }
-  for (const segment of segments) {
-    if (
-      new TextEncoder().encode(segment).byteLength >
-        MAX_PORTABLE_PATH_SEGMENT_BYTES ||
-      /[<>:"|?*]/u.test(segment) ||
-      /[. ]$/u.test(segment)
-    ) {
-      fail("invalid_path", path);
-    }
-    const basename = segment.split(".", 1)[0].toLocaleUpperCase("en-US");
-    if (
-      basename === "CON" ||
-      basename === "PRN" ||
-      basename === "AUX" ||
-      basename === "NUL" ||
-      /^COM[1-9]$/u.test(basename) ||
-      /^LPT[1-9]$/u.test(basename)
-    ) {
-      fail("invalid_path", path);
-    }
-  }
-}
-
-function portableCollisionKey(path: string) {
-  return path.normalize("NFC").toLocaleLowerCase("en-US");
+  if (!isPortablePath(path)) fail("invalid_path", path);
 }
 
 function assertAllowedPackagePath(path: string) {
@@ -820,6 +778,23 @@ export function assertShipletPackageAuthoritySafe(input: unknown) {
   return parsed;
 }
 
+/** Serialized size that parseShipletPackage compares with MAX_PACKAGE_BYTES. */
+export function shipletPackageEnvelopeBytes(input: {
+  mediaType: string;
+  manifest: unknown;
+  files: readonly unknown[];
+}) {
+  return new TextEncoder().encode(
+    JSON.stringify(
+      canonicalize({
+        mediaType: input.mediaType,
+        manifest: input.manifest,
+        files: input.files,
+      }),
+    ),
+  ).byteLength;
+}
+
 export async function parseShipletPackage(
   input: unknown,
 ): Promise<ValidatedShipletPackage> {
@@ -840,15 +815,11 @@ export async function parseShipletPackage(
   if (files.length > manifest.limits.fileCount) {
     fail("limit_exceeded", "manifest.limits.fileCount");
   }
-  const serializedEnvelopeBytes = new TextEncoder().encode(
-    JSON.stringify(
-      canonicalize({
-        mediaType: SHIPLET_PACKAGE_MEDIA_TYPE,
-        manifest,
-        files,
-      }),
-    ),
-  ).byteLength;
+  const serializedEnvelopeBytes = shipletPackageEnvelopeBytes({
+    mediaType: SHIPLET_PACKAGE_MEDIA_TYPE,
+    manifest,
+    files,
+  });
   if (serializedEnvelopeBytes > MAX_PACKAGE_BYTES) {
     fail("package_too_large", "files");
   }

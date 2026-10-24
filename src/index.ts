@@ -39,6 +39,7 @@ import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/
 
 import {
   createStandaloneAssetPreviewIndex,
+  STANDALONE_ASSET_DOWNLOAD_PARAM,
   STANDALONE_ASSET_PREVIEW_MARKER,
 } from "./asset-preview";
 import {
@@ -111,6 +112,7 @@ import {
   sweepStaleExternalRewriteSpools,
 } from "./cloudflare-external-rewrite-spool";
 import {
+  assertStaticUploadFitsPackage,
   MAX_UPLOAD_JSON_BYTES,
   validateAndNormalizeStaticAssets,
 } from "./upload-policy";
@@ -154,7 +156,10 @@ import {
   type RevisionKernelAuthorizationBinding,
   type ShipletActor,
 } from "./self-owned/revisions";
-import { migrateLegacyShipletRevision } from "./self-owned/legacy-migration";
+import {
+  legacyStaticPackageEnvelopeBytes,
+  migrateLegacyShipletRevision,
+} from "./self-owned/legacy-migration";
 import { createRevisionMcpManifestValidator } from "./self-owned/mcp-revision-validator";
 import {
   addTrustedRevisionPreviewContext,
@@ -169,6 +174,7 @@ import {
 } from "./self-owned/revision-preview-receipts";
 import {
   digestShipletPackage,
+  MAX_PACKAGE_BYTES,
   parseShipletPackage,
   ShipletPackageError,
   type ValidatedShipletPackage,
@@ -4474,6 +4480,10 @@ async function injectReviewClient(
   options: ArtifactResponseOptions = {},
 ) {
   if (request.method !== "GET") return response;
+  // A download keeps the stored bytes rather than the review-ready rewrite.
+  if (/^attachment\b/i.test(response.headers.get("content-disposition") || "")) {
+    return response;
+  }
 
   const contentType = response.headers.get("content-type") || "";
   const normalizedContentType = contentType.toLowerCase();
@@ -5829,13 +5839,28 @@ function isExternalProject(project: Project) {
   );
 }
 
+function isStandaloneAssetPreview(project: Project) {
+  return (
+    project.source_type === "static" &&
+    project.script_content.startsWith(STANDALONE_ASSET_PREVIEW_MARKER)
+  );
+}
+
 function standalonePreviewDownloadsAllowed(project: Project, assetPath = "/") {
   const normalizedPath = `/${assetPath}`.replace(/\/+/, "/");
   return (
-    project.source_type === "static" &&
-    project.script_content.startsWith(STANDALONE_ASSET_PREVIEW_MARKER) &&
+    isStandaloneAssetPreview(project) &&
     (normalizedPath === "/" || normalizedPath === "/index.html")
   );
+}
+
+function attachmentContentDisposition(fileName: string) {
+  const fallback = fileName.replace(/[^\x20-\x7e]|["\\%]/g, "_");
+  const encoded = encodeURIComponent(fileName).replace(
+    /['()*]/g,
+    (character) => `%${character.charCodeAt(0).toString(16).toUpperCase()}`,
+  );
+  return `attachment; filename="${fallback}"; filename*=UTF-8''${encoded}`;
 }
 
 function isPublicExternalArtifactRead(project: Project, request: Request) {
@@ -7310,19 +7335,6 @@ async function publishShipletForOrganization(
     }
   }
 
-  if (customHostname) {
-    const customHostnameCreated = await createCustomHostname(
-      env,
-      customHostname,
-    );
-    if (!customHostnameCreated) {
-      throw new Response(
-        "Custom hostname could not be provisioned on Cloudflare. Check CLOUDFLARE_ZONE_ID and API token permissions, then try again.",
-        { status: 502 },
-      );
-    }
-  }
-
   let scriptPlaceholder: string;
   let staticAssetsToStore: AssetFile[] | null = null;
   let sourceType: Project["source_type"];
@@ -7377,6 +7389,28 @@ async function publishShipletForOrganization(
     created_on: new Date().toISOString(),
     modified_on: new Date().toISOString(),
   };
+
+  // The first revision packages every stored file, so refuse an upload that
+  // cannot fit before the hostname, project, or assets are saved.
+  if (staticAssetsToStore) {
+    assertStaticUploadFitsPackage(
+      await legacyStaticPackageEnvelopeBytes(project, staticAssetsToStore),
+      MAX_PACKAGE_BYTES,
+    );
+  }
+
+  if (customHostname) {
+    const customHostnameCreated = await createCustomHostname(
+      env,
+      customHostname,
+    );
+    if (!customHostnameCreated) {
+      throw new Response(
+        "Custom hostname could not be provisioned on Cloudflare. Check CLOUDFLARE_ZONE_ID and API token permissions, then try again.",
+        { status: 502 },
+      );
+    }
+  }
 
   await CreateProject(db, project);
   if (staticAssetsToStore) {
@@ -13665,6 +13699,16 @@ async function serveRevisionStaticArtifact(
     "x-shiplet-revision": revisionId,
   });
   if (file.object_key) headers.set("x-shiplet-static-fallback", "r2");
+  // Download links on a generated file review page ask for the stored file.
+  if (
+    isStandaloneAssetPreview(project) &&
+    new URL(request.url).searchParams.has(STANDALONE_ASSET_DOWNLOAD_PARAM)
+  ) {
+    headers.set(
+      "content-disposition",
+      attachmentContentDisposition(file.path.split("/").pop() || "download"),
+    );
+  }
   const responseBody = body.buffer.slice(
     body.byteOffset,
     body.byteOffset + body.byteLength,
@@ -20800,14 +20844,31 @@ app.get("/shiplets/:projectId/review-host", async (c) => {
 
 async function handleSandboxedArtifactFrame(c: any, assetPath = "/") {
   try {
-    const user = await getCurrentUser(c.req.raw, c.env);
+    let user = await getCurrentUser(c.req.raw, c.env);
     const project = await getProjectById(c.env.DB, c.req.param("projectId"));
     if (!project) return c.text("Shiplet not found", 404);
     if (project.archived_on)
       return archivedShipletPageResponse(c, project, user);
-    const canReadArtifact =
+    let canReadArtifact =
       isPublicExternalArtifactRead(project, c.req.raw) ||
       (await canViewProject(c.env.DB, project, user?.id));
+    // The opaque frame cannot send the session cookie for the files a page
+    // loads, so reads accept the review host's preview cookie for this
+    // Shiplet, as tenant artifact frames do.
+    if (
+      !canReadArtifact &&
+      (c.req.method === "GET" || c.req.method === "HEAD")
+    ) {
+      const capability = await authenticateArtifactPreviewCapability(
+        c.env,
+        c.req.raw,
+        project,
+      );
+      if (capability) {
+        user = reviewCapabilityUser(capability);
+        canReadArtifact = true;
+      }
+    }
     if (!canReadArtifact) {
       return user
         ? c.text("Shiplet access denied", 403)

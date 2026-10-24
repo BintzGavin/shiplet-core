@@ -347,6 +347,29 @@ async function reviewAssetKeys() {
   return keys.sort();
 }
 
+async function shipletAssetKeys() {
+  const keys: string[] = [];
+  let cursor: string | undefined;
+  do {
+    const page = await (env as unknown as TestEnv).SHIPLET_ASSETS.list({
+      cursor,
+      limit: 1_000,
+    });
+    keys.push(...page.objects.map((object) => object.key));
+    cursor = page.truncated ? page.cursor : undefined;
+  } while (cursor);
+  return keys.sort();
+}
+
+async function projectCountForSubdomain(subdomain: string) {
+  const row = await (env as unknown as TestEnv).DB.prepare(
+    "SELECT COUNT(*) AS count FROM projects WHERE subdomain = ?",
+  )
+    .bind(subdomain)
+    .first<{ count: number }>();
+  return Number(row?.count || 0);
+}
+
 async function createTestOrganizationMember(
   organizationId: string,
   email: string,
@@ -8300,6 +8323,61 @@ describe("Shiplet", () => {
       expect(text).toContain("Unsafe asset path");
     });
 
+    it.each([
+      ["a reserved device name", ["con.html"], "Unsupported asset path: con.html"],
+      [
+        "a character portable packages reject",
+        ["index.html", "notes?.txt"],
+        "Unsupported asset path: notes?.txt",
+      ],
+      [
+        "paths that differ only by letter case",
+        ["index.html", "A.css", "a.css"],
+        "Asset paths collide: A.css and a.css",
+      ],
+      [
+        "paths that differ only by Unicode form",
+        ["index.html", "caf\u00e9.css", "cafe\u0301.css"],
+        "Asset paths collide: caf\u00e9.css and cafe\u0301.css",
+      ],
+      [
+        "the same path after normalization",
+        ["index.html", "./index.html"],
+        "Asset paths collide: index.html and ./index.html",
+      ],
+    ])(
+      "Given static files with %s, When they are published, Then the upload fails with 400 before anything is saved and the subdomain stays free",
+      async (_label, paths, message) => {
+        const organization = await createTestOrganization(makeRequest);
+        const subdomain = `unportable-${crypto.randomUUID().slice(0, 8)}`;
+        const assetKeysBefore = await shipletAssetKeys();
+
+        const response = await makeRequest("/projects", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            name: "Unportable Static Upload",
+            organization_id: organization.id,
+            subdomain,
+            assets: paths.map((path, index) => ({
+              path,
+              content: btoa(`<!doctype html><h1>File ${index}</h1>`),
+            })),
+          }),
+        });
+
+        expect(response.status).toBe(400);
+        expect(await response.text()).toContain(message);
+        expect(await projectCountForSubdomain(subdomain)).toBe(0);
+        expect(await shipletAssetKeys()).toEqual(assetKeysBefore);
+
+        const retry = await publishStaticShiplet(makeRequest, organization.id, {
+          subdomain,
+        });
+        expect(retry.project.subdomain).toBe(subdomain);
+      },
+    );
+
     it("should reject risky or unsupported static asset types", async () => {
       const organization = await createTestOrganization(makeRequest);
       const response = await makeRequest("/projects", {
@@ -8407,6 +8485,129 @@ describe("Shiplet", () => {
       expect(text).toContain("Asset is too large");
     });
 
+    it("Given static files over the total upload limit, When they are published, Then the upload fails with 413 before anything is saved and the subdomain stays free", async () => {
+      const organization = await createTestOrganization(makeRequest);
+      const subdomain = `over-limit-${crypto.randomUUID().slice(0, 8)}`;
+      const stylesheet = btoa("x".repeat(9_500_000));
+      const assetKeysBefore = await shipletAssetKeys();
+
+      const response = await makeRequest("/projects", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          name: "Over Limit Static Upload",
+          organization_id: organization.id,
+          subdomain,
+          assets: [
+            {
+              path: "index.html",
+              content: btoa("<!doctype html><h1>Large</h1>"),
+              size: 29,
+            },
+            ...[0, 1, 2].map((index) => ({
+              path: `styles/part-${index}.css`,
+              content: stylesheet,
+              size: 9_500_000,
+            })),
+          ],
+        }),
+      });
+
+      expect(response.status).toBe(413);
+      expect(await response.text()).toBe(
+        "Static upload is too large. Total files are limited to 24 MB.",
+      );
+      expect(await projectCountForSubdomain(subdomain)).toBe(0);
+      expect(await shipletAssetKeys()).toEqual(assetKeysBefore);
+
+      const retry = await publishStaticShiplet(makeRequest, organization.id, {
+        subdomain,
+      });
+      expect(retry.project.subdomain).toBe(subdomain);
+    }, 60_000);
+
+    it("Given text files without an index.html whose escaped previews push the package over its limit, When they are published, Then the upload fails with 413 before anything is saved", async () => {
+      const organization = await createTestOrganization(makeRequest);
+      const subdomain = `review-page-limit-${crypto.randomUUID().slice(0, 8)}`;
+      // Each quote becomes &quot; in the generated file review page.
+      const notes = btoa('"'.repeat(7_999_000));
+      const assetKeysBefore = await shipletAssetKeys();
+
+      const response = await makeRequest("/projects", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          name: "Generated Review Page Limit",
+          organization_id: organization.id,
+          subdomain,
+          assets: [0, 1, 2].map((index) => ({
+            path: `notes/part-${index}.txt`,
+            content: notes,
+            size: 7_999_000,
+          })),
+        }),
+      });
+
+      expect(response.status).toBe(413);
+      expect(await response.text()).toBe(
+        "Static upload is too large. Total files are limited to 24 MB, including the file review page Shiplet creates when index.html is absent.",
+      );
+      expect(await projectCountForSubdomain(subdomain)).toBe(0);
+      expect(await shipletAssetKeys()).toEqual(assetKeysBefore);
+
+      const retry = await publishStaticShiplet(makeRequest, organization.id, {
+        subdomain,
+      });
+      expect(retry.project.subdomain).toBe(subdomain);
+    }, 60_000);
+
+    it("Given static files at the advertised total upload limit, When they are published, Then the Shiplet gets a revision and serves every file", async () => {
+      const organization = await createTestOrganization(makeRequest);
+      const subdomain = `at-limit-${crypto.randomUUID().slice(0, 8)}`;
+      const html =
+        '<!doctype html><link rel="stylesheet" href="/styles/part-0.css">';
+      const partSizes = [8_000_000, 8_000_000, 8_000_000 - html.length];
+      expect(html.length + partSizes.reduce((sum, size) => sum + size)).toBe(
+        24_000_000,
+      );
+
+      const response = await makeRequest("/projects", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          name: "At Limit Static Upload",
+          organization_id: organization.id,
+          subdomain,
+          assets: [
+            { path: "index.html", content: btoa(html), size: html.length },
+            ...partSizes.map((size, index) => ({
+              path: `styles/part-${index}.css`,
+              content: btoa("x".repeat(size)),
+              size,
+            })),
+          ],
+        }),
+      });
+
+      expect(response.status, await response.clone().text()).toBe(201);
+      const body = (await response.json()) as { project: { id: string } };
+      const project = await (env as unknown as TestEnv).DB.prepare(
+        "SELECT active_revision_id FROM projects WHERE id = ?",
+      )
+        .bind(body.project.id)
+        .first<{ active_revision_id: string | null }>();
+      expect(project?.active_revision_id).toBeTruthy();
+
+      for (const [index, size] of partSizes.entries()) {
+        const assetResponse = await makeRequest(
+          `/${subdomain}/styles/part-${index}.css`,
+        );
+        expect(assetResponse.status).toBe(200);
+        expect(assetResponse.headers.get("content-length")).toBe(String(size));
+        expect((await assetResponse.arrayBuffer()).byteLength).toBe(size);
+      }
+    }, 120_000);
+
     it("should publish and serve large screenshot-sized static assets from object storage", async () => {
       const organization = await createTestOrganization(makeRequest);
       const subdomain = `large-image-${crypto.randomUUID().slice(0, 8)}`;
@@ -8445,6 +8646,137 @@ describe("Shiplet", () => {
       expect(assetResponse.headers.get("content-length")).toBe("5000000");
       expect(assetResponse.headers.get("x-shiplet-static-fallback")).toBe("r2");
     }, 15_000);
+
+    async function publishPreviewCookieShiplet(organizationId: string) {
+      const { project } = await publishStaticShiplet(
+        makeRequest,
+        organizationId,
+        {
+          visibility: "organization",
+          assets: [
+            {
+              path: "index.html",
+              content: btoa(
+                '<!doctype html><link rel="stylesheet" href="styles/site.css">',
+              ),
+            },
+            { path: "styles/site.css", content: btoa("body{color:#172243}") },
+          ],
+        },
+      );
+      return project;
+    }
+
+    // The cookie the review host sets for the opaque artifact frame.
+    async function previewCookie(projectId: string, issuedAt = new Date()) {
+      const token = await createReviewCapabilityToken({
+        secret:
+          (env as unknown as { SHIPLET_REVIEW_TOKEN_SECRET?: string })
+            .SHIPLET_REVIEW_TOKEN_SECRET ||
+          "shiplet-test-review-capability-secret",
+        projectId,
+        viewer: { id: "user_test", email: "test@example.com", name: "Test" },
+        scopes: ["feedback:read", "feedback:write", "presence:join", "watch:write"],
+        expiresInSeconds: 5 * 60,
+        now: issuedAt,
+      });
+      return `shiplet_artifact_access=${encodeURIComponent(token)}`;
+    }
+
+    function frameFileUrl(projectId: string) {
+      return `/shiplets/${projectId}/artifact-frame/styles/site.css`;
+    }
+
+    it("Given only the preview cookie, When the in-app artifact frame loads a file of the bound Shiplet, Then GET and HEAD serve it", async () => {
+      const organization = await createTestOrganization(makeRequest);
+      const project = await publishPreviewCookieShiplet(organization.id);
+      const cookie = await previewCookie(project.id);
+
+      const anonymous = await requestHelper(frameFileUrl(project.id));
+      expect(anonymous.status).toBe(302);
+
+      const served = await requestHelper(frameFileUrl(project.id), {
+        headers: { Cookie: cookie },
+      });
+      expect(served.status).toBe(200);
+      expect(await served.text()).toBe("body{color:#172243}");
+
+      const head = await requestHelper(frameFileUrl(project.id), {
+        method: "HEAD",
+        headers: { Cookie: cookie },
+      });
+      expect(head.status).toBe(200);
+      expect(head.headers.get("content-type")).toContain("text/css");
+    });
+
+    it("Given the preview cookie of one Shiplet, When the in-app artifact frame of another Shiplet loads a file, Then it is refused", async () => {
+      const organization = await createTestOrganization(makeRequest);
+      const project = await publishPreviewCookieShiplet(organization.id);
+      const otherProject = await publishPreviewCookieShiplet(organization.id);
+
+      const response = await requestHelper(frameFileUrl(otherProject.id), {
+        headers: { Cookie: await previewCookie(project.id) },
+      });
+
+      expect(response.status).toBe(302);
+      expect(response.headers.get("location")).toContain("/auth/login");
+    });
+
+    it("Given an expired preview cookie, When the in-app artifact frame loads a file, Then it is refused", async () => {
+      const organization = await createTestOrganization(makeRequest);
+      const project = await publishPreviewCookieShiplet(organization.id);
+
+      const response = await requestHelper(frameFileUrl(project.id), {
+        headers: {
+          Cookie: await previewCookie(
+            project.id,
+            new Date(Date.now() - (5 * 60 + 1) * 1000),
+          ),
+        },
+      });
+
+      expect(response.status).toBe(302);
+      expect(response.headers.get("location")).toContain("/auth/login");
+    });
+
+    it("Given a valid preview cookie, When a request other than GET or HEAD reaches the in-app artifact frame, Then it is refused", async () => {
+      const organization = await createTestOrganization(makeRequest);
+      const project = await publishPreviewCookieShiplet(organization.id);
+      const cookie = await previewCookie(project.id);
+
+      const crossSite = await requestHelper(frameFileUrl(project.id), {
+        method: "POST",
+        headers: { Cookie: cookie },
+      });
+      expect(crossSite.status).toBe(403);
+      expect(await crossSite.text()).not.toContain("body{color:#172243}");
+
+      const sameOrigin = await requestHelper(frameFileUrl(project.id), {
+        method: "POST",
+        headers: { Cookie: cookie, Origin: "http://localhost" },
+      });
+      expect(sameOrigin.status).toBe(404);
+      expect(await sameOrigin.text()).not.toContain("body{color:#172243}");
+    });
+
+    it("Given a valid preview cookie, When it is sent to routes outside the artifact frame, Then it grants nothing", async () => {
+      const organization = await createTestOrganization(makeRequest);
+      const project = await publishPreviewCookieShiplet(organization.id);
+      const cookie = await previewCookie(project.id);
+
+      const reviewHost = await requestHelper(
+        `/shiplets/${project.id}/review-host`,
+        { headers: { Cookie: cookie } },
+      );
+      expect(reviewHost.status).toBe(302);
+      expect(reviewHost.headers.get("location")).toContain("/auth/login");
+
+      const feedback = await requestHelper(
+        `/api/projects/${project.id}/review-feedback`,
+        { headers: { Cookie: cookie } },
+      );
+      expect(feedback.status).toBe(401);
+    });
 
     it("should keep root-relative static image URLs inside the authenticated preview route", async () => {
       const organization = await createTestOrganization(makeRequest);
@@ -8546,7 +8878,7 @@ describe("Shiplet", () => {
       ["SVG image", "diagram.svg", "image/svg+xml"],
       ["video", "walkthrough.webm", "video/webm"],
     ])(
-      "should render a standalone uploaded %s without an authenticated subresource request",
+      "should render a standalone uploaded %s from its stored file",
       async (_label, fileName, mediaType) => {
         const organization = await createTestOrganization(makeRequest);
         const subdomain = `standalone-media-${crypto.randomUUID().slice(0, 8)}`;
@@ -8575,15 +8907,121 @@ describe("Shiplet", () => {
         );
         expect(artifact.status).toBe(200);
         const html = await artifact.text();
-        expect(html).toContain(
-          `src="data:${mediaType};base64,${btoa(mediaBytes)}"`,
-        );
+        const storedHref = `./${encodeURIComponent(fileName)}`;
+        expect(html).toContain(`src="${storedHref}"`);
+        expect(html).not.toContain(`data:${mediaType}`);
         expect(html).toContain("height: 100dvh");
         expect(html).toContain("object-fit: contain");
         expect(html).not.toContain(`src="/shiplets/${body.project.id}/`);
         expect(html).not.toContain('class="asset-card"');
+
+        const media = await makeRequest(
+          new URL(
+            storedHref,
+            `http://localhost/shiplets/${body.project.id}/artifact-frame/`,
+          ).toString(),
+        );
+        expect(media.status).toBe(200);
+        expect(media.headers.get("content-type")).toContain(mediaType);
+        expect(new TextDecoder().decode(await media.arrayBuffer())).toBe(
+          mediaBytes,
+        );
       },
     );
+
+    it("Given a standalone 4 MB PNG, When it is published, Then its review page shows the stored image instead of a copy", async () => {
+      const organization = await createTestOrganization(makeRequest);
+      const subdomain = `standalone-png-${crypto.randomUUID().slice(0, 8)}`;
+      const response = await makeRequest("/projects", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          name: "Standalone Screenshot",
+          organization_id: organization.id,
+          subdomain,
+          assets: [
+            {
+              path: "screenshot.png",
+              content: btoa("x".repeat(4_000_000)),
+              size: 4_000_000,
+            },
+          ],
+        }),
+      });
+
+      expect(response.status, await response.clone().text()).toBe(201);
+      const body = (await response.json()) as { project: { id: string } };
+      const reviewPage = await makeRequest(
+        `/shiplets/${body.project.id}/artifact-frame/`,
+      );
+      expect(reviewPage.status).toBe(200);
+      const html = await reviewPage.text();
+      expect(html).toContain('src="./screenshot.png"');
+      expect(html).not.toContain("data:");
+      expect(html.length).toBeLessThan(100_000);
+
+      const image = await makeRequest(
+        `/shiplets/${body.project.id}/artifact-frame/screenshot.png`,
+      );
+      expect(image.status).toBe(200);
+      expect(image.headers.get("content-type")).toContain("image/png");
+      expect((await image.arrayBuffer()).byteLength).toBe(4_000_000);
+    }, 60_000);
+
+    it("Given a standalone 8 MB PDF, When it is published, Then its review page downloads the stored file", async () => {
+      const organization = await createTestOrganization(makeRequest);
+      const subdomain = `standalone-pdf-${crypto.randomUUID().slice(0, 8)}`;
+      const response = await makeRequest("/projects", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          name: "Standalone Report",
+          organization_id: organization.id,
+          subdomain,
+          assets: [
+            {
+              path: "reports/Q3 report.pdf",
+              content: btoa("x".repeat(8_000_000)),
+              size: 8_000_000,
+            },
+          ],
+        }),
+      });
+
+      expect(response.status, await response.clone().text()).toBe(201);
+      const body = (await response.json()) as { project: { id: string } };
+      const reviewPage = await makeRequest(
+        `/shiplets/${body.project.id}/artifact-frame/`,
+      );
+      const html = await reviewPage.text();
+      expect(html).toContain('class="asset-binary-preview"');
+      expect(html).toContain(
+        'href="./reports/Q3%20report.pdf?shiplet_download=1"',
+      );
+      expect(html).not.toContain("data:");
+
+      for (const frame of [
+        `/shiplets/${body.project.id}/artifact-frame`,
+        `/${subdomain}/__shiplet/artifact-frame`,
+      ]) {
+        const download = await makeRequest(
+          `${frame}/reports/Q3%20report.pdf?shiplet_download=1`,
+        );
+        expect(download.status).toBe(200);
+        expect(download.headers.get("content-type")).toContain(
+          "application/pdf",
+        );
+        expect(download.headers.get("content-disposition")).toBe(
+          "attachment; filename=\"Q3 report.pdf\"; filename*=UTF-8''Q3%20report.pdf",
+        );
+        expect((await download.arrayBuffer()).byteLength).toBe(8_000_000);
+
+        const opened = await makeRequest(`${frame}/reports/Q3%20report.pdf`);
+        expect(opened.status).toBe(200);
+        expect(opened.headers.get("content-disposition")).toBeNull();
+        await opened.arrayBuffer();
+      }
+    }, 60_000);
 
     it("should safely accept and preview common code, document, data, and GIS formats", async () => {
       const organization = await createTestOrganization(makeRequest);
@@ -8653,8 +9091,8 @@ describe("Shiplet", () => {
       expect(html).toContain('class="asset-text-preview"');
       expect(html).toContain('class="asset-binary-preview"');
       expect(html).toContain("Shapefile set");
-      expect(html).toContain("data:application/pdf;base64,");
-      expect(html).not.toContain('href="./report.pdf"');
+      expect(html).toContain('href="./report.pdf?shiplet_download=1"');
+      expect(html).not.toContain("data:");
 
       const contentTypes = [
         ["app.ts", "text/plain"],
