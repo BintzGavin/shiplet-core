@@ -3819,7 +3819,12 @@ describe("Shiplet", () => {
       expect(memberTokenRevokeResponse.status).toBe(403);
     });
 
-    it("should preserve organization administrator access during WorkOS membership reconciliation", async () => {
+    // Sign-in reconciles memberships with WorkOS, which owns the role. A
+    // member-role invitation, or the organization AuthKit chose for the
+    // session, says nothing about the role and must not demote anyone; only
+    // WorkOS reporting a non-administrator role does (covered in
+    // test/workos-membership-sync.spec.ts).
+    it("should keep an administrator's role at sign-in when a member-role invitation and the sign-in organization imply member but WorkOS still reports administrator", async () => {
       const suffix = crypto.randomUUID().slice(0, 8);
       const adminEmail = `org-admin-${suffix}@example.com`;
       const adminHeaders = {
@@ -3854,8 +3859,12 @@ describe("Shiplet", () => {
       );
       expect(invitationResponse.status).toBe(201);
 
+      const listedBefore = workosTestDouble.membershipListings().length;
       const callback = await signInWithCode(requestHelper, `test-code:${organization.organization.id}:${encodeURIComponent(adminEmail)}`);
       expect(callback.status).toBe(302);
+      expect(
+        workosTestDouble.membershipListings().slice(listedBefore),
+      ).toContain(adminHeaders["x-shiplet-user-id"]);
 
       const tokenList = await requestHelper(
         `/api/organizations/${organization.organization.id}/api-tokens`,
