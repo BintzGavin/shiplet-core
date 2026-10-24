@@ -11,7 +11,11 @@ import {
 export const MAX_UPLOAD_JSON_BYTES = 80 * 1024 * 1024;
 export const MAX_STATIC_ASSET_FILES = 200;
 export const MAX_STATIC_ASSET_FILE_BYTES = 10_000_000;
-export const MAX_STATIC_ASSET_TOTAL_BYTES = 50_000_000;
+// Every upload becomes one Shiplet package, which is capped at 32 MiB as
+// base64 JSON. That leaves about 25 MB of files once encoding and per-file
+// metadata are counted; 24 MB keeps room for 200 maximum-length paths.
+// assertStaticUploadFitsPackage enforces the exact package size.
+export const MAX_STATIC_ASSET_TOTAL_BYTES = 24_000_000;
 
 const MAX_STATIC_ASSET_PATH_LENGTH = 512;
 
@@ -58,6 +62,17 @@ export function validateAndNormalizeStaticAssets(value: unknown): AssetFile[] {
 	}
 
 	return assets;
+}
+
+export function assertStaticUploadFitsPackage(
+	packageBytes: number,
+	maxPackageBytes: number,
+) {
+	if (packageBytes <= maxPackageBytes) return;
+	throw new Response(
+		`Static upload is too large. Total files are limited to ${formatBytes(MAX_STATIC_ASSET_TOTAL_BYTES)}, including the copy of each file in the review page Shiplet creates when index.html is absent.`,
+		{ status: 413 },
+	);
 }
 
 function normalizeStaticAssetPath(value: unknown) {

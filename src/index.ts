@@ -111,6 +111,7 @@ import {
   sweepStaleExternalRewriteSpools,
 } from "./cloudflare-external-rewrite-spool";
 import {
+  assertStaticUploadFitsPackage,
   MAX_UPLOAD_JSON_BYTES,
   validateAndNormalizeStaticAssets,
 } from "./upload-policy";
@@ -151,7 +152,10 @@ import {
   type RevisionKernelAuthorizationBinding,
   type ShipletActor,
 } from "./self-owned/revisions";
-import { migrateLegacyShipletRevision } from "./self-owned/legacy-migration";
+import {
+  legacyStaticPackageEnvelopeBytes,
+  migrateLegacyShipletRevision,
+} from "./self-owned/legacy-migration";
 import { createRevisionMcpManifestValidator } from "./self-owned/mcp-revision-validator";
 import {
   addTrustedRevisionPreviewContext,
@@ -166,6 +170,7 @@ import {
 } from "./self-owned/revision-preview-receipts";
 import {
   digestShipletPackage,
+  MAX_PACKAGE_BYTES,
   parseShipletPackage,
   ShipletPackageError,
   type ValidatedShipletPackage,
@@ -7155,19 +7160,6 @@ async function publishShipletForOrganization(
     }
   }
 
-  if (customHostname) {
-    const customHostnameCreated = await createCustomHostname(
-      env,
-      customHostname,
-    );
-    if (!customHostnameCreated) {
-      throw new Response(
-        "Custom hostname could not be provisioned on Cloudflare. Check CLOUDFLARE_ZONE_ID and API token permissions, then try again.",
-        { status: 502 },
-      );
-    }
-  }
-
   let scriptPlaceholder: string;
   let staticAssetsToStore: AssetFile[] | null = null;
   let sourceType: Project["source_type"];
@@ -7222,6 +7214,28 @@ async function publishShipletForOrganization(
     created_on: new Date().toISOString(),
     modified_on: new Date().toISOString(),
   };
+
+  // The first revision packages every stored file, so refuse an upload that
+  // cannot fit before the hostname, project, or assets are saved.
+  if (staticAssetsToStore) {
+    assertStaticUploadFitsPackage(
+      await legacyStaticPackageEnvelopeBytes(project, staticAssetsToStore),
+      MAX_PACKAGE_BYTES,
+    );
+  }
+
+  if (customHostname) {
+    const customHostnameCreated = await createCustomHostname(
+      env,
+      customHostname,
+    );
+    if (!customHostnameCreated) {
+      throw new Response(
+        "Custom hostname could not be provisioned on Cloudflare. Check CLOUDFLARE_ZONE_ID and API token permissions, then try again.",
+        { status: 502 },
+      );
+    }
+  }
 
   await CreateProject(db, project);
   if (staticAssetsToStore) {

@@ -33,8 +33,9 @@ Rules:
 - Shiplet serves `index.html` as the artifact entry point when it is present.
 - Shiplet creates a file review page when `index.html` is absent.
 - Paths are relative to the artifact root.
-- Upload limits apply to the number of files, each file, and the complete
-  artifact.
+- Uploads are limited to 200 files, 10 MB per file, and 24 MB in total.
+  Without `index.html`, the file review page embeds a copy of each file, so
+  standalone uploads have less room.
 
 ```json
 {

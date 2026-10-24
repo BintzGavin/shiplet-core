@@ -342,6 +342,29 @@ async function reviewAssetKeys() {
   return keys.sort();
 }
 
+async function shipletAssetKeys() {
+  const keys: string[] = [];
+  let cursor: string | undefined;
+  do {
+    const page = await (env as unknown as TestEnv).SHIPLET_ASSETS.list({
+      cursor,
+      limit: 1_000,
+    });
+    keys.push(...page.objects.map((object) => object.key));
+    cursor = page.truncated ? page.cursor : undefined;
+  } while (cursor);
+  return keys.sort();
+}
+
+async function projectCountForSubdomain(subdomain: string) {
+  const row = await (env as unknown as TestEnv).DB.prepare(
+    "SELECT COUNT(*) AS count FROM projects WHERE subdomain = ?",
+  )
+    .bind(subdomain)
+    .first<{ count: number }>();
+  return Number(row?.count || 0);
+}
+
 async function createTestOrganizationMember(
   organizationId: string,
   email: string,
@@ -8429,6 +8452,128 @@ describe("Shiplet", () => {
       const text = await response.text();
       expect(text).toContain("Asset is too large");
     });
+
+    it("Given static files over the total upload limit, When they are published, Then the upload fails with 413 before anything is saved and the subdomain stays free", async () => {
+      const organization = await createTestOrganization(makeRequest);
+      const subdomain = `over-limit-${crypto.randomUUID().slice(0, 8)}`;
+      const stylesheet = btoa("x".repeat(9_500_000));
+      const assetKeysBefore = await shipletAssetKeys();
+
+      const response = await makeRequest("/projects", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          name: "Over Limit Static Upload",
+          organization_id: organization.id,
+          subdomain,
+          assets: [
+            {
+              path: "index.html",
+              content: btoa("<!doctype html><h1>Large</h1>"),
+              size: 29,
+            },
+            ...[0, 1, 2].map((index) => ({
+              path: `styles/part-${index}.css`,
+              content: stylesheet,
+              size: 9_500_000,
+            })),
+          ],
+        }),
+      });
+
+      expect(response.status).toBe(413);
+      expect(await response.text()).toBe(
+        "Static upload is too large. Total files are limited to 24 MB.",
+      );
+      expect(await projectCountForSubdomain(subdomain)).toBe(0);
+      expect(await shipletAssetKeys()).toEqual(assetKeysBefore);
+
+      const retry = await publishStaticShiplet(makeRequest, organization.id, {
+        subdomain,
+      });
+      expect(retry.project.subdomain).toBe(subdomain);
+    }, 60_000);
+
+    it("Given text files without an index.html whose generated review page pushes the package over its limit, When they are published, Then the upload fails with 413 before anything is saved", async () => {
+      const organization = await createTestOrganization(makeRequest);
+      const subdomain = `review-page-limit-${crypto.randomUUID().slice(0, 8)}`;
+      const notes = btoa("x".repeat(7_999_000));
+      const assetKeysBefore = await shipletAssetKeys();
+
+      const response = await makeRequest("/projects", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          name: "Generated Review Page Limit",
+          organization_id: organization.id,
+          subdomain,
+          assets: [0, 1, 2].map((index) => ({
+            path: `notes/part-${index}.txt`,
+            content: notes,
+            size: 7_999_000,
+          })),
+        }),
+      });
+
+      expect(response.status).toBe(413);
+      expect(await response.text()).toBe(
+        "Static upload is too large. Total files are limited to 24 MB, including the copy of each file in the review page Shiplet creates when index.html is absent.",
+      );
+      expect(await projectCountForSubdomain(subdomain)).toBe(0);
+      expect(await shipletAssetKeys()).toEqual(assetKeysBefore);
+
+      const retry = await publishStaticShiplet(makeRequest, organization.id, {
+        subdomain,
+      });
+      expect(retry.project.subdomain).toBe(subdomain);
+    }, 60_000);
+
+    it("Given static files at the advertised total upload limit, When they are published, Then the Shiplet gets a revision and serves every file", async () => {
+      const organization = await createTestOrganization(makeRequest);
+      const subdomain = `at-limit-${crypto.randomUUID().slice(0, 8)}`;
+      const html =
+        '<!doctype html><link rel="stylesheet" href="/styles/part-0.css">';
+      const partSizes = [8_000_000, 8_000_000, 8_000_000 - html.length];
+      expect(html.length + partSizes.reduce((sum, size) => sum + size)).toBe(
+        24_000_000,
+      );
+
+      const response = await makeRequest("/projects", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          name: "At Limit Static Upload",
+          organization_id: organization.id,
+          subdomain,
+          assets: [
+            { path: "index.html", content: btoa(html), size: html.length },
+            ...partSizes.map((size, index) => ({
+              path: `styles/part-${index}.css`,
+              content: btoa("x".repeat(size)),
+              size,
+            })),
+          ],
+        }),
+      });
+
+      expect(response.status, await response.clone().text()).toBe(201);
+      const body = (await response.json()) as { project: { id: string } };
+      const project = await (env as unknown as TestEnv).DB.prepare(
+        "SELECT active_revision_id FROM projects WHERE id = ?",
+      )
+        .bind(body.project.id)
+        .first<{ active_revision_id: string | null }>();
+      expect(project?.active_revision_id).toBeTruthy();
+
+      for (const [index, size] of partSizes.entries()) {
+        const assetResponse = await makeRequest(
+          `/${subdomain}/styles/part-${index}.css`,
+        );
+        expect(assetResponse.status).toBe(200);
+        expect(assetResponse.headers.get("content-length")).toBe(String(size));
+        expect((await assetResponse.arrayBuffer()).byteLength).toBe(size);
+      }
+    }, 120_000);
 
     it("should publish and serve large screenshot-sized static assets from object storage", async () => {
       const organization = await createTestOrganization(makeRequest);

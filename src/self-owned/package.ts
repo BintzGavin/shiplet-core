@@ -13,7 +13,7 @@ const PACKAGE_SCHEMA_VERSION = "shiplet.package/v1";
 const RUNTIME_COMPATIBILITY_VERSION = "shiplet.runtime/v1";
 const MAX_FILE_COUNT = 1_024;
 const MAX_FILE_BYTES = MAX_STATIC_ASSET_FILE_BYTES;
-const MAX_PACKAGE_BYTES = 32 * 1024 * 1024;
+export const MAX_PACKAGE_BYTES = 32 * 1024 * 1024;
 const MAX_MANIFEST_DEPTH = 32;
 const MAX_STRING_BYTES = 1024 * 1024;
 const MAX_FILE_CONTENT_STRING_BYTES =
@@ -820,6 +820,23 @@ export function assertShipletPackageAuthoritySafe(input: unknown) {
   return parsed;
 }
 
+/** Serialized size that parseShipletPackage compares with MAX_PACKAGE_BYTES. */
+export function shipletPackageEnvelopeBytes(input: {
+  mediaType: string;
+  manifest: unknown;
+  files: readonly unknown[];
+}) {
+  return new TextEncoder().encode(
+    JSON.stringify(
+      canonicalize({
+        mediaType: input.mediaType,
+        manifest: input.manifest,
+        files: input.files,
+      }),
+    ),
+  ).byteLength;
+}
+
 export async function parseShipletPackage(
   input: unknown,
 ): Promise<ValidatedShipletPackage> {
@@ -840,15 +857,11 @@ export async function parseShipletPackage(
   if (files.length > manifest.limits.fileCount) {
     fail("limit_exceeded", "manifest.limits.fileCount");
   }
-  const serializedEnvelopeBytes = new TextEncoder().encode(
-    JSON.stringify(
-      canonicalize({
-        mediaType: SHIPLET_PACKAGE_MEDIA_TYPE,
-        manifest,
-        files,
-      }),
-    ),
-  ).byteLength;
+  const serializedEnvelopeBytes = shipletPackageEnvelopeBytes({
+    mediaType: SHIPLET_PACKAGE_MEDIA_TYPE,
+    manifest,
+    files,
+  });
   if (serializedEnvelopeBytes > MAX_PACKAGE_BYTES) {
     fail("package_too_large", "files");
   }
