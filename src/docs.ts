@@ -26,7 +26,7 @@ const DOCS_PUBLIC_CONTENT_SHA256: Record<string, string> = {
   "extensions":
     "c834eef088f4ab55ed628fe95cc4b169445c7ca3f77732e8717e5c048fc70d13",
   "review-feedback":
-    "56b2b5ef78e69b80e9cf8e28252c3ed7e88ff6955d214ed3d839a22ebd3be78f",
+    "3cf5e78d73d4036525249aa494a73bf3d62b157726f27470db3f9e73df07df70",
   "code-mode-mcp":
     "262b9c534331c1d7bc76a4e2b8708e18f8f54fb79dbcbff960ef96e6c889624a",
   "api-keys":
@@ -267,6 +267,7 @@ const DOCS_PAGES: DocsPage[] = [
 <h2>Review in the browser</h2>
 <ol><li>Open the review link.</li><li>Choose the page or a visible element.</li><li>Leave a comment and submit it through the trusted toolbar.</li><li>Reply, update status, mention a collaborator, or watch the Shiplet from its detail page.</li></ol>
 <p>Use <a href="/feedback">Feedback</a> for the global review queue and <a href="/inbox">Inbox</a> for notifications. If live updates stop, reload the trusted review host; persisted feedback remains available.</p>
+<p>Only someone who can edit the Shiplet can invite through a mention: mentioning a workspace member who cannot open it yet grants them reviewer access. Other workspace members' mentions only notify people who can already open the Shiplet. A mention that has no effect never reveals whether that person exists or belongs to the workspace.</p>
 <h2>Optional feedback automation through MCP</h2>
 <p>An authorized agent can read tickets, create replies, and update status through documented API operations. Shiplet records the authenticated agent credential as the actor.</p>
 <p><strong>Next:</strong> open <a href="/feedback">Feedback</a> to work through review tickets.</p>`,

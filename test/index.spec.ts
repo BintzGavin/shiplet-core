@@ -11173,7 +11173,7 @@ describe("Shiplet", () => {
       expect(expanded.width).toBe(320);
     });
 
-    it("should autocomplete org mentions, invite mentioned reviewers, and create inbox notifications", async () => {
+    it("should autocomplete org mentions, let an editor's mention invite reviewers, and create inbox notifications", async () => {
       const { organization, project } = await createReviewShiplet();
       const reviewer = await createOrganizationMember(
         organization.id,
@@ -11302,6 +11302,349 @@ describe("Shiplet", () => {
       expect(mentionedFeedback.feedback.map((item) => item.id)).toContain(
         created.feedback.id,
       );
+    });
+
+    async function createPrivateMentionShiplet() {
+      const organization = await createTestOrganization(makeRequest);
+      const response = await makeRequest("/projects", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          name: "Private mention Shiplet",
+          organization_id: organization.id,
+          subdomain: `mention-${crypto.randomUUID().slice(0, 8)}`,
+          visibility: "private",
+          assets: [
+            {
+              path: "index.html",
+              content: btoa("<!doctype html><h1>Private</h1>"),
+              size: 31,
+            },
+          ],
+        }),
+      });
+      expect(response.status).toBe(201);
+      const body = (await response.json()) as {
+        project: { id: string; organization_id: string };
+      };
+      const member = (label: string) =>
+        createOrganizationMember(
+          organization.id,
+          `${label}-${crypto.randomUUID().slice(0, 8)}@example.com`,
+        );
+      const grant = (userId: string, email: string, role: string) =>
+        (env as unknown as TestEnv).DB.prepare(
+          `INSERT INTO shiplet_access_grants
+           (id, project_id, organization_id, target_type, target_id, email, role,
+            invited_by_user_id, workos_invitation_id, created_on, accepted_on)
+           VALUES (?, ?, ?, 'user', ?, ?, ?, ?, NULL, ?, ?)`,
+        )
+          .bind(
+            `grant_${crypto.randomUUID().replace(/-/g, "")}`,
+            body.project.id,
+            organization.id,
+            userId,
+            email,
+            role,
+            AUTH_HEADERS["x-shiplet-user-id"],
+            new Date().toISOString(),
+            new Date().toISOString(),
+          )
+          .run();
+      await muteOwnerWatch(body.project.id);
+      return { organization, project: body.project, member, grant };
+    }
+
+    // Non-owner authors would otherwise notify the owner as the default
+    // watcher, and later tests expect the shared owner's inbox to be empty.
+    async function muteOwnerWatch(projectId: string) {
+      const now = new Date().toISOString();
+      await (env as unknown as TestEnv).DB.prepare(
+        `INSERT INTO shiplet_watch_subscriptions
+         (project_id, user_id, status, created_by_user_id, created_on, updated_on)
+         VALUES (?, ?, 'muted', ?, ?, ?)`,
+      )
+        .bind(
+          projectId,
+          AUTH_HEADERS["x-shiplet-user-id"],
+          AUTH_HEADERS["x-shiplet-user-id"],
+          now,
+          now,
+        )
+        .run();
+    }
+
+    async function mentionSideEffects(projectId: string, userId: string) {
+      return (env as unknown as TestEnv).DB.prepare(
+        `SELECT
+         (SELECT COUNT(*) FROM shiplet_access_grants
+          WHERE project_id = ? AND target_type = 'user' AND target_id = ?) AS grants,
+         (SELECT COUNT(*) FROM review_notifications
+          WHERE project_id = ? AND recipient_user_id = ?) AS notifications,
+         (SELECT COUNT(*) FROM review_feedback_mentions
+          WHERE project_id = ? AND mentioned_user_id = ?) AS mentions`,
+      )
+        .bind(projectId, userId, projectId, userId, projectId, userId)
+        .first<{ grants: number; notifications: number; mentions: number }>();
+    }
+
+    it("Given a private Shiplet, When a viewer mentions a member without access, Then only people who can already view are notified and nothing reveals the skipped member", async () => {
+      const { project, member, grant } = await createPrivateMentionShiplet();
+      const viewer = await member("mention-viewer");
+      const target = await member("mention-target");
+      const colleague = await member("mention-colleague");
+      await grant(viewer.id, viewer.email, "viewer");
+      await grant(colleague.id, colleague.email, "reviewer");
+
+      const before = await requestHelper(`/shiplets/${project.id}`, {
+        headers: target.headers,
+        redirect: "manual",
+      });
+      expect(before.status).toBe(302);
+      expect(before.headers.get("location")).toContain(
+        `/shiplets/${project.id}/access`,
+      );
+
+      const postFeedback = (mentions: unknown[]) =>
+        requestHelper(`/api/projects/${project.id}/review-feedback`, {
+          method: "POST",
+          headers: { ...viewer.headers, "Content-Type": "application/json" },
+          body: JSON.stringify({
+            comment: "Viewer mention",
+            pageUrl: "http://localhost/review/viewer-mentions",
+            clientFeedbackId: `client-${crypto.randomUUID()}`,
+            mentions,
+          }),
+        });
+      type CreatedFeedback = {
+        feedback: {
+          id: string;
+          mentions: Array<{ mentioned_user_id: string; access_status: string }>;
+        };
+      };
+      const skipped = await postFeedback([
+        { userId: target.id },
+        { email: target.email },
+      ]);
+      expect(skipped.status).toBe(201);
+      const skippedText = await skipped.text();
+      const skippedBody = JSON.parse(skippedText) as CreatedFeedback;
+      expect(skippedBody.feedback.mentions).toEqual([]);
+      expect(skippedText).not.toContain(target.id);
+      expect(skippedText).not.toContain(target.email);
+      const unknown = await postFeedback([
+        { userId: `user_unknown_${crypto.randomUUID()}` },
+        { email: `unknown-${crypto.randomUUID()}@example.com` },
+      ]);
+      expect(unknown.status).toBe(201);
+      expect(((await unknown.json()) as CreatedFeedback).feedback.mentions).toEqual(
+        [],
+      );
+
+      const notified = await postFeedback([
+        { userId: colleague.id },
+        { userId: target.id },
+      ]);
+      expect(notified.status).toBe(201);
+      const notifiedBody = (await notified.json()) as CreatedFeedback;
+      expect(
+        notifiedBody.feedback.mentions.map((mention) => mention.mentioned_user_id),
+      ).toEqual([colleague.id]);
+      expect(notifiedBody.feedback.mentions[0].access_status).toBe("active");
+
+      const reply = await requestHelper(
+        `/api/projects/${project.id}/review-feedback/${notifiedBody.feedback.id}/replies`,
+        {
+          method: "POST",
+          headers: { ...viewer.headers, "Content-Type": "application/json" },
+          body: JSON.stringify({
+            comment: "Viewer reply mention",
+            mentions: [{ email: target.email }],
+          }),
+        },
+      );
+      expect(reply.status).toBe(201);
+      expect(await reply.text()).not.toContain(target.email);
+
+      expect(await mentionSideEffects(project.id, target.id)).toEqual({
+        grants: 0,
+        notifications: 0,
+        mentions: 0,
+      });
+      expect(await mentionSideEffects(project.id, colleague.id)).toEqual({
+        grants: 1,
+        notifications: 1,
+        mentions: 1,
+      });
+      const after = await requestHelper(`/shiplets/${project.id}`, {
+        headers: target.headers,
+        redirect: "manual",
+      });
+      expect(after.status).toBe(302);
+
+      const invited = await makeRequest(
+        `/api/projects/${project.id}/review-feedback`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            comment: "Owner invites the target",
+            pageUrl: "http://localhost/review/editor-mentions",
+            clientFeedbackId: `client-${crypto.randomUUID()}`,
+            mentions: [{ userId: target.id }],
+          }),
+        },
+      );
+      expect(invited.status).toBe(201);
+      const invitedBody = (await invited.json()) as CreatedFeedback;
+      expect(invitedBody.feedback.mentions[0]).toMatchObject({
+        mentioned_user_id: target.id,
+        access_status: "invited",
+      });
+      expect(await mentionSideEffects(project.id, target.id)).toEqual({
+        grants: 1,
+        notifications: 1,
+        mentions: 1,
+      });
+      const invitedView = await requestHelper(`/shiplets/${project.id}`, {
+        headers: target.headers,
+        redirect: "manual",
+      });
+      expect(invitedView.status).toBe(200);
+    });
+
+    it("Given a private Shiplet, When an agent credential mentions members, Then it notifies viewers and never invites", async () => {
+      const { organization, project, member, grant } =
+        await createPrivateMentionShiplet();
+      const target = await member("agent-target");
+      const colleague = await member("agent-colleague");
+      await grant(colleague.id, colleague.email, "reviewer");
+      const { token } = await createOrganizationApiToken(
+        makeRequest,
+        organization.id,
+      );
+      const response = await requestHelper(
+        `/api/projects/${project.id}/review-feedback`,
+        {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${token}`,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            comment: "Agent mention",
+            pageUrl: "http://localhost/review/agent-mentions",
+            clientFeedbackId: `client-${crypto.randomUUID()}`,
+            mentions: [{ userId: colleague.id }, { email: target.email }],
+          }),
+        },
+      );
+      expect(response.status).toBe(201);
+      const text = await response.text();
+      expect(text).not.toContain(target.email);
+      expect(await mentionSideEffects(project.id, target.id)).toEqual({
+        grants: 0,
+        notifications: 0,
+        mentions: 0,
+      });
+      expect(await mentionSideEffects(project.id, colleague.id)).toEqual({
+        grants: 1,
+        notifications: 1,
+        mentions: 1,
+      });
+    });
+
+    it("Given a public Shiplet, When a non-member mentions workspace members by email, Then no grant, notification, or enumeration signal is produced", async () => {
+      const { organization, project } = await createPublicPresenceShiplet();
+      await muteOwnerWatch(project.id);
+      const target = await createOrganizationMember(
+        organization.id,
+        `public-target-${crypto.randomUUID().slice(0, 8)}@example.com`,
+      );
+      const outsiderOrganization = await createTestOrganization(makeRequest);
+      const outsider = await createOrganizationMember(
+        outsiderOrganization.id,
+        `public-outsider-${crypto.randomUUID().slice(0, 8)}@example.com`,
+      );
+      const post = (mentions: unknown[]) =>
+        requestHelper(`/api/projects/${project.id}/review-feedback`, {
+          method: "POST",
+          headers: { ...outsider.headers, "Content-Type": "application/json" },
+          body: JSON.stringify({
+            comment: "Outsider mention",
+            pageUrl: "http://localhost/review/public-mentions",
+            clientFeedbackId: `client-${crypto.randomUUID()}`,
+            mentions,
+          }),
+        });
+      const member = await post([{ email: target.email }, { userId: target.id }]);
+      const unknown = await post([
+        { email: `nobody-${crypto.randomUUID()}@example.com` },
+      ]);
+      expect(member.status).toBe(201);
+      expect(unknown.status).toBe(201);
+      const memberText = await member.text();
+      expect(memberText).not.toContain(target.email);
+      expect(memberText).not.toContain(target.id);
+      const memberBody = JSON.parse(memberText) as {
+        feedback: { mentions: unknown[] };
+      };
+      const unknownBody = (await unknown.json()) as {
+        feedback: { mentions: unknown[] };
+      };
+      expect(memberBody.feedback.mentions).toEqual([]);
+      expect(unknownBody.feedback.mentions).toEqual([]);
+
+      const autocomplete = await requestHelper(
+        `/api/projects/${project.id}/review-mention-users?q=${encodeURIComponent(target.email)}`,
+        { headers: outsider.headers },
+      );
+      expect(autocomplete.status).toBe(403);
+      expect(await mentionSideEffects(project.id, target.id)).toEqual({
+        grants: 0,
+        notifications: 0,
+        mentions: 0,
+      });
+    });
+
+    it("Given a private Shiplet, When mention candidates are listed, Then only editors are offered members without access", async () => {
+      const { project, member, grant } = await createPrivateMentionShiplet();
+      const viewer = await member("candidate-viewer");
+      const target = await member("candidate-target");
+      const colleague = await member("candidate-colleague");
+      await grant(viewer.id, viewer.email, "viewer");
+      await grant(colleague.id, colleague.email, "reviewer");
+
+      const modern = async (headers: Record<string, string>) => {
+        const response = await requestHelper(
+          `/api/projects/${project.id}/review-mention-users?q=candidate-`,
+          { headers },
+        );
+        expect(response.status).toBe(200);
+        const body = (await response.json()) as { users: Array<{ id: string }> };
+        return body.users.map((user) => user.id).sort();
+      };
+      const legacy = async (headers: Record<string, string>) => {
+        const response = await requestHelper(
+          `/api/projects/${project.id}/review-mention-users?limit=50`,
+          { headers },
+        );
+        expect(response.status).toBe(200);
+        const body = (await response.json()) as { users: Array<{ id: string }> };
+        return body.users.map((user) => user.id);
+      };
+
+      expect(await modern(AUTH_HEADERS)).toEqual(
+        [viewer.id, target.id, colleague.id].sort(),
+      );
+      expect(await modern(viewer.headers)).toEqual(
+        [viewer.id, colleague.id].sort(),
+      );
+      expect(await legacy(AUTH_HEADERS)).toContain(target.id);
+      const viewerLegacy = await legacy(viewer.headers);
+      expect(viewerLegacy).toContain(colleague.id);
+      expect(viewerLegacy).toContain(AUTH_HEADERS["x-shiplet-user-id"]);
+      expect(viewerLegacy).not.toContain(target.id);
     });
 
     it("should send configured mention notification emails without blocking feedback creation", async () => {

@@ -311,6 +311,7 @@ import {
   getUser,
   isProjectOwner,
   listOrganizationMentionUsers,
+  ORGANIZATION_MEMBER_CAN_VIEW_PROJECT_SQL,
   listProjectsForOrganization,
   listProjectsForUser,
   listOrganizationsForUser,
@@ -5125,6 +5126,7 @@ async function applyDurableHumanThreadOperation(input: {
     await requireDurableReviewMentionRecipients(
       input.env.DB,
       input.project,
+      input.user,
       input.mentions || [],
     );
   } else {
@@ -5208,6 +5210,7 @@ async function applyDurableHumanFeedbackOperation(input: {
   await requireDurableReviewMentionRecipients(
     input.env.DB,
     input.project,
+    input.user,
     input.payload.mentions,
   );
   const activeRevisionId = trustedReviewRevisionId(input.project);
@@ -5585,11 +5588,15 @@ async function listTrustedReviewMentionCandidates(
     user.id,
   );
   if (!membership) return [];
+  // Only an editor's mention can invite, so only editors are offered members
+  // who cannot view the Shiplet yet.
+  const canInvite = await canEditProject(env.DB, project, user);
   const users = await listOrganizationMentionUsers(
     env.DB,
     project.organization_id,
     query,
     limit,
+    canInvite ? {} : { viewersOfProjectId: project.id },
   );
   const hydrated = [];
   for (const mentionUser of users) {
@@ -5698,12 +5705,17 @@ async function listModernReviewMentionCandidates(
 			throw new Response("Invalid review mention cursor", { status: 400 });
 		}
 	}
+	// Only an editor's mention can invite, so only editors are offered members
+	// who cannot view the Shiplet yet.
+	const canInvite = await canEditProject(env.DB, project, user);
 	const bindings: Array<string | number> = [project.organization_id];
+	if (!canInvite) bindings.push(project.id);
 	const rows = await env.DB.prepare(
 		`SELECT users.id, users.email, users.first_name, users.last_name
 		 FROM organization_memberships
 		 JOIN users ON users.id = organization_memberships.user_id
-		 WHERE organization_memberships.organization_id = ?`,
+		 WHERE organization_memberships.organization_id = ?
+		 ${canInvite ? "" : `AND ${ORGANIZATION_MEMBER_CAN_VIEW_PROJECT_SQL}`}`,
 	).bind(...bindings).all<{ id: string; email: string; first_name: string | null; last_name: string | null }>();
 	const candidates: ModernReviewMentionCandidate[] = (rows.results || []).map((candidate) => {
 		const label = reviewerLabel(candidate as ShipletUser);
@@ -14948,6 +14960,7 @@ app.post("/review/confirm", async (c) => {
       await requireDurableReviewMentionRecipients(
         c.env.DB,
         project,
+        user,
         feedbackValidation.value.mentions,
       );
       validatedPayload = { ...feedbackValidation.value };
@@ -15127,6 +15140,7 @@ async function requireEmbedConfirmationBinding(c: any, form: FormData) {
   return {
     project,
     pageUrl,
+    user,
     session: {
       installationId: installation.id,
       revisionId,
@@ -15162,7 +15176,7 @@ app.post("/embed/review/confirm", async (c) => {
     const binding = formData.has("installation_id")
       ? await requireEmbedConfirmationBinding(c, formData)
       : await requireEmbedReviewSession(c);
-    const { session, project, pageUrl } = binding;
+    const { session, project, pageUrl, user } = binding;
     const requestId = String(formData.get("request_id") || "").trim();
     const operation = String(formData.get("operation") || "").trim();
     const submittedPageUrl = String(formData.get("page_url") || "");
@@ -15233,6 +15247,7 @@ app.post("/embed/review/confirm", async (c) => {
       await requireDurableReviewMentionRecipients(
         c.env.DB,
         project,
+        user,
         feedbackValidation.value.mentions,
       );
       validatedPayload = { ...feedbackValidation.value };
@@ -15377,10 +15392,8 @@ app.post("/embed/review/thread", async (c) => {
       await readRequestTextWithLimit(c.req.raw, 32_768),
     ))
       form.set(key, value);
-    const { project, session, pageUrl } = await requireEmbedConfirmationBinding(
-      c,
-      form,
-    );
+    const { project, session, pageUrl, user } =
+      await requireEmbedConfirmationBinding(c, form);
     const feedbackId = String(form.get("feedback_id") || "");
     const feedback = await getReviewFeedback(c.env.DB, project.id, feedbackId);
     if (
@@ -15406,6 +15419,7 @@ app.post("/embed/review/thread", async (c) => {
       await requireDurableReviewMentionRecipients(
         c.env.DB,
         project,
+        user,
         mentionResult.value,
       );
     }
