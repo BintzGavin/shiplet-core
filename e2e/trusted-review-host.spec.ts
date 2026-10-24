@@ -401,6 +401,79 @@ test.describe("trusted review host", () => {
     await expect(page.locator("[data-shiplet-artifact-frame]")).toHaveCount(1);
   });
 
+  test("renders linked files in the in-app review host and the dashboard preview", async ({
+    page,
+    request,
+  }) => {
+    const user = testUser("trusted-in-app-linked-files");
+    const organization = await createOrganization(request, user);
+    const pixel =
+      "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=";
+    const publish = async (assets: { path: string; content: string }[]) => {
+      const subdomain = `in-app-files-${randomUUID().slice(0, 8)}`;
+      const response = await request.post("/projects", {
+        headers: {
+          ...authHeaders(user),
+          "Content-Type": "application/json",
+          Origin: "http://localhost:8787",
+        },
+        data: {
+          name: `In-app linked files ${subdomain}`,
+          organization_id: organization.id,
+          subdomain,
+          visibility: "organization",
+          assets,
+        },
+      });
+      expect(response.ok(), await response.text()).toBe(true);
+      return ((await response.json()) as { project: { id: string } }).project;
+    };
+    const site = await publish([
+      {
+        path: "index.html",
+        content: Buffer.from(
+          '<!doctype html><link rel="stylesheet" href="style.css"><img id="photo" src="/images/pixel.png" alt="Pixel">',
+        ).toString("base64"),
+      },
+      {
+        path: "style.css",
+        content: Buffer.from("body { background-color: rgb(1, 2, 3); }").toString(
+          "base64",
+        ),
+      },
+      { path: "images/pixel.png", content: pixel },
+    ]);
+    const standalone = await publish([{ path: "pixel.png", content: pixel }]);
+    await loginAs(page, user);
+
+    const reviewHostFrame = page.frameLocator("[data-shiplet-artifact-frame]");
+    const dashboardFrame = page
+      .frameLocator("#artifactPreviewFrame")
+      .frameLocator("[data-shiplet-artifact-frame]");
+    const naturalWidth = (image: ReturnType<typeof page.locator>) =>
+      image.evaluate((element) => (element as HTMLImageElement).naturalWidth);
+    for (const [path, frame] of [
+      [`/shiplets/${site.id}/review-host`, reviewHostFrame],
+      [`/shiplets/${site.id}`, dashboardFrame],
+    ] as const) {
+      await page.goto(path, { waitUntil: "domcontentloaded" });
+      await expect.poll(() => naturalWidth(frame.locator("#photo"))).toBe(1);
+      await expect(frame.locator("body")).toHaveCSS(
+        "background-color",
+        "rgb(1, 2, 3)",
+      );
+    }
+    for (const [path, frame] of [
+      [`/shiplets/${standalone.id}/review-host`, reviewHostFrame],
+      [`/shiplets/${standalone.id}`, dashboardFrame],
+    ] as const) {
+      await page.goto(path, { waitUntil: "domcontentloaded" });
+      await expect
+        .poll(() => naturalWidth(frame.locator("img.asset-media")))
+        .toBe(1);
+    }
+  });
+
   test("preserves exact tenant provenance without leaking its review path to confirmation", async ({
     context,
     page,

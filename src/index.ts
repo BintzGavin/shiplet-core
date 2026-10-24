@@ -20800,14 +20800,31 @@ app.get("/shiplets/:projectId/review-host", async (c) => {
 
 async function handleSandboxedArtifactFrame(c: any, assetPath = "/") {
   try {
-    const user = await getCurrentUser(c.req.raw, c.env);
+    let user = await getCurrentUser(c.req.raw, c.env);
     const project = await getProjectById(c.env.DB, c.req.param("projectId"));
     if (!project) return c.text("Shiplet not found", 404);
     if (project.archived_on)
       return archivedShipletPageResponse(c, project, user);
-    const canReadArtifact =
+    let canReadArtifact =
       isPublicExternalArtifactRead(project, c.req.raw) ||
       (await canViewProject(c.env.DB, project, user?.id));
+    // The opaque frame cannot send the session cookie for the files a page
+    // loads, so reads accept the review host's preview cookie for this
+    // Shiplet, as tenant artifact frames do.
+    if (
+      !canReadArtifact &&
+      (c.req.method === "GET" || c.req.method === "HEAD")
+    ) {
+      const capability = await authenticateArtifactPreviewCapability(
+        c.env,
+        c.req.raw,
+        project,
+      );
+      if (capability) {
+        user = reviewCapabilityUser(capability);
+        canReadArtifact = true;
+      }
+    }
     if (!canReadArtifact) {
       return user
         ? c.text("Shiplet access denied", 403)

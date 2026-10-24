@@ -8670,6 +8670,137 @@ describe("Shiplet", () => {
       expect(assetResponse.headers.get("x-shiplet-static-fallback")).toBe("r2");
     }, 15_000);
 
+    async function publishPreviewCookieShiplet(organizationId: string) {
+      const { project } = await publishStaticShiplet(
+        makeRequest,
+        organizationId,
+        {
+          visibility: "organization",
+          assets: [
+            {
+              path: "index.html",
+              content: btoa(
+                '<!doctype html><link rel="stylesheet" href="styles/site.css">',
+              ),
+            },
+            { path: "styles/site.css", content: btoa("body{color:#172243}") },
+          ],
+        },
+      );
+      return project;
+    }
+
+    // The cookie the review host sets for the opaque artifact frame.
+    async function previewCookie(projectId: string, issuedAt = new Date()) {
+      const token = await createReviewCapabilityToken({
+        secret:
+          (env as unknown as { SHIPLET_REVIEW_TOKEN_SECRET?: string })
+            .SHIPLET_REVIEW_TOKEN_SECRET ||
+          "shiplet-test-review-capability-secret",
+        projectId,
+        viewer: { id: "user_test", email: "test@example.com", name: "Test" },
+        scopes: ["feedback:read", "feedback:write", "presence:join", "watch:write"],
+        expiresInSeconds: 5 * 60,
+        now: issuedAt,
+      });
+      return `shiplet_artifact_access=${encodeURIComponent(token)}`;
+    }
+
+    function frameFileUrl(projectId: string) {
+      return `/shiplets/${projectId}/artifact-frame/styles/site.css`;
+    }
+
+    it("Given only the preview cookie, When the in-app artifact frame loads a file of the bound Shiplet, Then GET and HEAD serve it", async () => {
+      const organization = await createTestOrganization(makeRequest);
+      const project = await publishPreviewCookieShiplet(organization.id);
+      const cookie = await previewCookie(project.id);
+
+      const anonymous = await requestHelper(frameFileUrl(project.id));
+      expect(anonymous.status).toBe(302);
+
+      const served = await requestHelper(frameFileUrl(project.id), {
+        headers: { Cookie: cookie },
+      });
+      expect(served.status).toBe(200);
+      expect(await served.text()).toBe("body{color:#172243}");
+
+      const head = await requestHelper(frameFileUrl(project.id), {
+        method: "HEAD",
+        headers: { Cookie: cookie },
+      });
+      expect(head.status).toBe(200);
+      expect(head.headers.get("content-type")).toContain("text/css");
+    });
+
+    it("Given the preview cookie of one Shiplet, When the in-app artifact frame of another Shiplet loads a file, Then it is refused", async () => {
+      const organization = await createTestOrganization(makeRequest);
+      const project = await publishPreviewCookieShiplet(organization.id);
+      const otherProject = await publishPreviewCookieShiplet(organization.id);
+
+      const response = await requestHelper(frameFileUrl(otherProject.id), {
+        headers: { Cookie: await previewCookie(project.id) },
+      });
+
+      expect(response.status).toBe(302);
+      expect(response.headers.get("location")).toContain("/auth/login");
+    });
+
+    it("Given an expired preview cookie, When the in-app artifact frame loads a file, Then it is refused", async () => {
+      const organization = await createTestOrganization(makeRequest);
+      const project = await publishPreviewCookieShiplet(organization.id);
+
+      const response = await requestHelper(frameFileUrl(project.id), {
+        headers: {
+          Cookie: await previewCookie(
+            project.id,
+            new Date(Date.now() - (5 * 60 + 1) * 1000),
+          ),
+        },
+      });
+
+      expect(response.status).toBe(302);
+      expect(response.headers.get("location")).toContain("/auth/login");
+    });
+
+    it("Given a valid preview cookie, When a request other than GET or HEAD reaches the in-app artifact frame, Then it is refused", async () => {
+      const organization = await createTestOrganization(makeRequest);
+      const project = await publishPreviewCookieShiplet(organization.id);
+      const cookie = await previewCookie(project.id);
+
+      const crossSite = await requestHelper(frameFileUrl(project.id), {
+        method: "POST",
+        headers: { Cookie: cookie },
+      });
+      expect(crossSite.status).toBe(403);
+      expect(await crossSite.text()).not.toContain("body{color:#172243}");
+
+      const sameOrigin = await requestHelper(frameFileUrl(project.id), {
+        method: "POST",
+        headers: { Cookie: cookie, Origin: "http://localhost" },
+      });
+      expect(sameOrigin.status).toBe(404);
+      expect(await sameOrigin.text()).not.toContain("body{color:#172243}");
+    });
+
+    it("Given a valid preview cookie, When it is sent to routes outside the artifact frame, Then it grants nothing", async () => {
+      const organization = await createTestOrganization(makeRequest);
+      const project = await publishPreviewCookieShiplet(organization.id);
+      const cookie = await previewCookie(project.id);
+
+      const reviewHost = await requestHelper(
+        `/shiplets/${project.id}/review-host`,
+        { headers: { Cookie: cookie } },
+      );
+      expect(reviewHost.status).toBe(302);
+      expect(reviewHost.headers.get("location")).toContain("/auth/login");
+
+      const feedback = await requestHelper(
+        `/api/projects/${project.id}/review-feedback`,
+        { headers: { Cookie: cookie } },
+      );
+      expect(feedback.status).toBe(401);
+    });
+
     it("should keep root-relative static image URLs inside the authenticated preview route", async () => {
       const organization = await createTestOrganization(makeRequest);
       const subdomain = `preview-image-${crypto.randomUUID().slice(0, 8)}`;
