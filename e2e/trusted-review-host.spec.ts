@@ -1,4 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
+import { readFile } from "node:fs/promises";
 
 import { expect, test, type Response } from "@playwright/test";
 
@@ -343,6 +344,60 @@ test.describe("trusted review host", () => {
     await expect(page.locator("[data-shiplet-artifact-frame]")).toHaveCount(1);
     await expect(artifact.getByText(content)).toBeVisible();
     await expect(artifact.getByRole("link", { name: "Open file" })).toHaveCount(0);
+    await expect(page.locator("[data-shiplet-artifact-frame]")).toHaveCount(1);
+  });
+
+  test("shows and downloads the stored files of a generated no-index review page", async ({
+    page,
+    request,
+  }) => {
+    const user = testUser("trusted-no-index-stored-files");
+    const organization = await createOrganization(request, user);
+    const subdomain = `trusted-stored-${randomUUID().slice(0, 8)}`;
+    const pixel =
+      "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=";
+    const report = "%PDF-1.4 stored review report";
+    const publishResponse = await request.post("/projects", {
+      headers: {
+        ...authHeaders(user),
+        "Content-Type": "application/json",
+        Origin: "http://localhost:8787",
+      },
+      data: {
+        name: `Trusted stored files ${Date.now()}`,
+        organization_id: organization.id,
+        subdomain,
+        visibility: "organization",
+        assets: [
+          { path: "images/pixel.png", content: pixel },
+          {
+            path: "reports/review.pdf",
+            content: Buffer.from(report).toString("base64"),
+          },
+        ],
+      },
+    });
+    expect(publishResponse.ok(), await publishResponse.text()).toBe(true);
+    await loginAs(page, user);
+
+    await page.goto(`/${subdomain}`, { waitUntil: "domcontentloaded" });
+    const artifact = page.frameLocator("[data-shiplet-artifact-frame]");
+    const image = artifact.locator("img.asset-media");
+    await expect(image).toHaveAttribute("src", "./images/pixel.png");
+    await expect
+      .poll(() =>
+        image.evaluate((element) => (element as HTMLImageElement).naturalWidth),
+      )
+      .toBe(1);
+
+    const downloadPromise = page.waitForEvent("download");
+    await artifact
+      .locator('a[href="./reports/review.pdf?shiplet_download=1"]')
+      .dispatchEvent("click");
+    const download = await downloadPromise;
+    expect(download.suggestedFilename()).toBe("review.pdf");
+    expect(await readFile(await download.path(), "utf8")).toBe(report);
+    await expect(image).toBeVisible();
     await expect(page.locator("[data-shiplet-artifact-frame]")).toHaveCount(1);
   });
 

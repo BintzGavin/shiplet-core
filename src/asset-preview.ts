@@ -5,11 +5,12 @@ import {
 	STATIC_IMAGE_EXTENSIONS,
 	STATIC_TEXT_EXTENSIONS,
 	STATIC_VIDEO_EXTENSIONS,
-	staticAssetContentTypeForPath,
 	staticAssetExtension,
 	staticAssetFileName,
 } from "./static-asset-types";
 
+// Shared by every text preview on the page, so the page stays small next to
+// the files it links to.
 const MAX_TEXT_PREVIEW_BYTES = 512 * 1024;
 const JSON_EXTENSIONS = new Set([
 	"geojson",
@@ -33,6 +34,10 @@ const SHAPEFILE_EXTENSIONS = new Set([
 export const STANDALONE_ASSET_PREVIEW_MARKER =
 	"/* Shiplet generated standalone asset preview */";
 
+// Browsers ignore the download attribute on stored-file links inside the
+// opaque review sandbox, so download links ask for an attachment response.
+export const STANDALONE_ASSET_DOWNLOAD_PARAM = "shiplet_download";
+
 export function createStandaloneAssetPreviewIndex(
 	shipletName: string,
 	assets: AssetFile[],
@@ -47,13 +52,17 @@ export function createStandaloneAssetPreviewIndex(
 
 function standaloneAssetPreviewHtml(shipletName: string, assets: AssetFile[]) {
 	const title = escapeHtml(shipletName || "Shiplet preview");
+	const textPreviewBytes = Math.floor(
+		MAX_TEXT_PREVIEW_BYTES /
+			Math.max(1, assets.filter(isTextPreviewCandidate).length),
+	);
 	const assetPreviews = assets
-		.map((asset) => renderAssetPreview(asset, assets))
+		.map((asset) => renderAssetPreview(asset, assets, textPreviewBytes))
 		.join("\n");
 	const assetCount = assets.length;
 	const mediaOnly = assets.every(isEmbeddableMedia);
 	return `<!doctype html>
-<html lang="en" data-shiplet-generated-asset-preview="v2">
+<html lang="en" data-shiplet-generated-asset-preview="v3">
 <head>
 	<meta charset="utf-8">
 	<meta name="viewport" content="width=device-width, initial-scale=1">
@@ -241,12 +250,16 @@ function standaloneAssetPreviewHtml(shipletName: string, assets: AssetFile[]) {
 </html>`;
 }
 
-function renderAssetPreview(asset: AssetFile, assets: AssetFile[]) {
+function renderAssetPreview(
+	asset: AssetFile,
+	assets: AssetFile[],
+	textPreviewBytes: number,
+) {
 	if (isEmbeddableMedia(asset)) return renderEmbeddedMedia(asset);
-	const text = readableTextPreview(asset);
+	const text = readableTextPreview(asset, textPreviewBytes);
 	return text === null
 		? renderBinaryPreview(asset, assets)
-		: renderTextPreview(asset, assets, text);
+		: renderTextPreview(asset, assets, text, textPreviewBytes);
 }
 
 function isEmbeddableMedia(asset: AssetFile) {
@@ -261,7 +274,7 @@ function isEmbeddableMedia(asset: AssetFile) {
 function renderEmbeddedMedia(asset: AssetFile) {
 	const extension = staticAssetExtension(asset.path);
 	const label = escapeHtml(assetDisplayPath(asset.path));
-	const source = downloadHref(asset);
+	const source = storedAssetHref(asset);
 	let media: string;
 	if (STATIC_IMAGE_EXTENSIONS.has(extension)) {
 		media = `<img class="asset-media" src="${source}" alt="${label}">`;
@@ -272,7 +285,7 @@ function renderEmbeddedMedia(asset: AssetFile) {
 	}
 	return `<figure class="asset-viewer">
 	${media}
-	<a class="asset-download asset-download-floating" href="${source}" download="${downloadName(asset.path)}">Download</a>
+	<a class="asset-download asset-download-floating" href="${downloadHref(asset)}" download="${downloadName(asset.path)}">Download</a>
 	<figcaption class="sr-only">${label}</figcaption>
 </figure>`;
 }
@@ -281,10 +294,11 @@ function renderTextPreview(
 	asset: AssetFile,
 	assets: AssetFile[],
 	preview: { text: string; truncated: boolean },
+	textPreviewBytes: number,
 ) {
 	const companionContext = renderCompanionContext(asset, assets);
 	const note = preview.truncated
-		? `<div class="asset-preview-note">Showing the first ${formatBytes(MAX_TEXT_PREVIEW_BYTES)}. Download the file to inspect the rest.</div>`
+		? `<div class="asset-preview-note">Showing the first ${formatBytes(textPreviewBytes)}. Download the file to inspect the rest.</div>`
 		: "";
 	return `<article class="asset-document">
 	${renderAssetToolbar(asset, companionContext)}
@@ -322,20 +336,21 @@ function renderAssetToolbar(asset: AssetFile, companionContext: string) {
 </div>`;
 }
 
-function readableTextPreview(asset: AssetFile) {
+function isTextPreviewCandidate(asset: AssetFile) {
+	return (
+		!isEmbeddableMedia(asset) &&
+		(STATIC_TEXT_EXTENSIONS.has(staticAssetExtension(asset.path)) ||
+			ALLOWED_STATIC_ASSET_FILENAMES.has(staticAssetFileName(asset.path)))
+	);
+}
+
+function readableTextPreview(asset: AssetFile, maxBytes: number) {
 	const extension = staticAssetExtension(asset.path);
-	if (
-		!STATIC_TEXT_EXTENSIONS.has(extension) &&
-		!ALLOWED_STATIC_ASSET_FILENAMES.has(staticAssetFileName(asset.path))
-	) {
-		return null;
-	}
+	if (!isTextPreviewCandidate(asset)) return null;
 	try {
 		const bytes = base64ToBytes(asset.content);
-		const truncated = bytes.byteLength > MAX_TEXT_PREVIEW_BYTES;
-		const previewBytes = truncated
-			? bytes.slice(0, MAX_TEXT_PREVIEW_BYTES)
-			: bytes;
+		const truncated = bytes.byteLength > maxBytes;
+		const previewBytes = truncated ? bytes.slice(0, maxBytes) : bytes;
 		let text = new TextDecoder("utf-8", { fatal: !truncated }).decode(
 			previewBytes,
 		);
@@ -345,6 +360,14 @@ function readableTextPreview(asset: AssetFile) {
 			} catch {
 				// Invalid JSON is still useful as escaped source text.
 			}
+		}
+		// Formatting can make JSON longer than the preview budget.
+		const textBytes = new TextEncoder().encode(text);
+		if (textBytes.byteLength > maxBytes) {
+			return {
+				text: new TextDecoder().decode(textBytes.slice(0, maxBytes)),
+				truncated: true,
+			};
 		}
 		return { text, truncated };
 	} catch {
@@ -402,9 +425,13 @@ function formatLabel(path: string) {
 	return labels[extension] || extension.toUpperCase() || "Text file";
 }
 
+// The page is served from the artifact root, next to the stored files.
+function storedAssetHref(asset: AssetFile) {
+	return `./${assetDisplayPath(asset.path)}`;
+}
+
 function downloadHref(asset: AssetFile) {
-	const type = staticAssetContentTypeForPath(asset.path).replace(/;\s*/g, ";");
-	return `data:${type};base64,${asset.content}`;
+	return `${storedAssetHref(asset)}?${STANDALONE_ASSET_DOWNLOAD_PARAM}=1`;
 }
 
 function downloadName(path: string) {

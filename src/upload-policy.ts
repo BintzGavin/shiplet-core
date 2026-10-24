@@ -87,7 +87,7 @@ export function assertStaticUploadFitsPackage(
 ) {
 	if (packageBytes <= maxPackageBytes) return;
 	throw new Response(
-		`Static upload is too large. Total files are limited to ${formatBytes(MAX_STATIC_ASSET_TOTAL_BYTES)}, including the copy of each file in the review page Shiplet creates when index.html is absent.`,
+		`Static upload is too large. Total files are limited to ${formatBytes(MAX_STATIC_ASSET_TOTAL_BYTES)}, including the file review page Shiplet creates when index.html is absent.`,
 		{ status: 413 },
 	);
 }

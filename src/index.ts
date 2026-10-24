@@ -39,6 +39,7 @@ import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/
 
 import {
   createStandaloneAssetPreviewIndex,
+  STANDALONE_ASSET_DOWNLOAD_PARAM,
   STANDALONE_ASSET_PREVIEW_MARKER,
 } from "./asset-preview";
 import {
@@ -4376,6 +4377,10 @@ async function injectReviewClient(
   options: ArtifactResponseOptions = {},
 ) {
   if (request.method !== "GET") return response;
+  // A download keeps the stored bytes rather than the review-ready rewrite.
+  if (/^attachment\b/i.test(response.headers.get("content-disposition") || "")) {
+    return response;
+  }
 
   const contentType = response.headers.get("content-type") || "";
   const normalizedContentType = contentType.toLowerCase();
@@ -5720,13 +5725,28 @@ function isExternalProject(project: Project) {
   );
 }
 
+function isStandaloneAssetPreview(project: Project) {
+  return (
+    project.source_type === "static" &&
+    project.script_content.startsWith(STANDALONE_ASSET_PREVIEW_MARKER)
+  );
+}
+
 function standalonePreviewDownloadsAllowed(project: Project, assetPath = "/") {
   const normalizedPath = `/${assetPath}`.replace(/\/+/, "/");
   return (
-    project.source_type === "static" &&
-    project.script_content.startsWith(STANDALONE_ASSET_PREVIEW_MARKER) &&
+    isStandaloneAssetPreview(project) &&
     (normalizedPath === "/" || normalizedPath === "/index.html")
   );
+}
+
+function attachmentContentDisposition(fileName: string) {
+  const fallback = fileName.replace(/[^\x20-\x7e]|["\\%]/g, "_");
+  const encoded = encodeURIComponent(fileName).replace(
+    /['()*]/g,
+    (character) => `%${character.charCodeAt(0).toString(16).toUpperCase()}`,
+  );
+  return `attachment; filename="${fallback}"; filename*=UTF-8''${encoded}`;
 }
 
 function isPublicExternalArtifactRead(project: Project, request: Request) {
@@ -13557,6 +13577,16 @@ async function serveRevisionStaticArtifact(
     "x-shiplet-revision": revisionId,
   });
   if (file.object_key) headers.set("x-shiplet-static-fallback", "r2");
+  // Download links on a generated file review page ask for the stored file.
+  if (
+    isStandaloneAssetPreview(project) &&
+    new URL(request.url).searchParams.has(STANDALONE_ASSET_DOWNLOAD_PARAM)
+  ) {
+    headers.set(
+      "content-disposition",
+      attachmentContentDisposition(file.path.split("/").pop() || "download"),
+    );
+  }
   const responseBody = body.buffer.slice(
     body.byteOffset,
     body.byteOffset + body.byteLength,

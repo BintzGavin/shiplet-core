@@ -1,5 +1,6 @@
 import { env } from "cloudflare:test";
 import { beforeAll, describe, expect, it } from "vitest";
+import { createStandaloneAssetPreviewIndex } from "../src/asset-preview";
 import { ensureSchema } from "../src/schema";
 import {
 	buildLegacyCompatibilityPackage,
@@ -298,6 +299,22 @@ describe("static upload package size before storage", () => {
 
 		expect(
 			await legacyStaticPackageEnvelopeBytes(project, assets),
+		).toBeLessThanOrEqual(MAX_PACKAGE_BYTES);
+	});
+
+	it("Given standalone text files at the advertised total, When Shiplet adds their file review page, Then the package still fits", async () => {
+		const project = await insertStaticProject("project_static_review_page");
+		const fileBytes = MAX_STATIC_ASSET_TOTAL_BYTES / 3;
+		const content = btoa("x".repeat(fileBytes));
+		const assets = [0, 1, 2].map((index) => ({
+			path: `notes/part-${index}.txt`,
+			content,
+			size: fileBytes,
+		}));
+		const reviewPage = createStandaloneAssetPreviewIndex(project.name, assets);
+
+		expect(
+			await legacyStaticPackageEnvelopeBytes(project, [reviewPage, ...assets]),
 		).toBeLessThanOrEqual(MAX_PACKAGE_BYTES);
 	});
 });
