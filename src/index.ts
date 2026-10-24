@@ -127,6 +127,7 @@ import {
   LEGACY_SESSION_COOKIE,
   SESSION_COOKIE,
   getAccountGroupCookie,
+  createAuthFlowState,
   createUserSessionResponse,
   getCookie,
   getSessionCookie,
@@ -136,6 +137,8 @@ import {
   requireCurrentUser,
   requestCanUsePlatformCookies,
   switchAccountSessionResponse,
+  verifyAuthFlowState,
+  type AuthFlowVerification,
 } from "./auth";
 import {
   createInvitationConsentToken,
@@ -1019,15 +1022,6 @@ async function readRequestTextWithLimit(request: Request, limit: number) {
 
 function normalizeAssetFiles(value: unknown) {
   return validateAndNormalizeStaticAssets(value);
-}
-
-function decodeState(state: string | null) {
-  if (!state) return {};
-  try {
-    return JSON.parse(atob(state));
-  } catch {
-    return {};
-  }
 }
 
 function appBaseUrl(env: Env, requestUrl: string) {
@@ -12301,7 +12295,7 @@ app.post("/api/cli/session/revoke", async (c) => {
   }
 });
 
-function workOSLoginRedirect(
+async function workOSLoginRedirect(
   c: any,
   options: {
     returnTo: string;
@@ -12310,16 +12304,17 @@ function workOSLoginRedirect(
     consentToken?: string | null;
     organizationId?: string | null;
     prompt?: "login";
+    retried?: boolean;
   },
 ) {
-  const state = btoa(
-    JSON.stringify({
-      returnTo: options.returnTo,
-      invitationToken: options.invitationToken || undefined,
-      accountAction: options.accountAction,
-      consentToken: options.consentToken || undefined,
-    }),
-  );
+  const { state, cookie } = await createAuthFlowState(c.env, {
+    returnTo: options.returnTo,
+    invitationToken: options.invitationToken || undefined,
+    accountAction: options.accountAction,
+    consentToken: options.consentToken || undefined,
+    retried: options.retried || undefined,
+  });
+  c.header("set-cookie", cookie, { append: true });
   const authorizationUrl = getWorkOSAuthorizationUrl(c.env, {
     state,
     invitationToken: options.invitationToken,
@@ -12356,6 +12351,9 @@ app.get("/auth/login", async (c) => {
       url.searchParams.get("account_action") === "add"
         ? "add"
         : undefined;
+    // Set when a callback could not find this browser's flow cookie and
+    // restarted sign-in once; a second miss shows recovery instead of looping.
+    const retried = url.searchParams.get("auth_retry") === "1";
 
     if (invitationToken) {
       const pending = await findPendingInvitationsByWorkOSInvitationToken(
@@ -12390,6 +12388,7 @@ app.get("/auth/login", async (c) => {
         invitationToken,
         accountAction,
         organizationId,
+        retried,
       });
     }
 
@@ -12424,6 +12423,7 @@ app.get("/auth/login", async (c) => {
       returnTo,
       accountAction,
       organizationId,
+      retried,
     });
   } catch (error) {
     if (isResponse(error)) return error;
@@ -12512,20 +12512,84 @@ app.post("/auth/login", async (c) => {
   }
 });
 
+// A callback whose state this browser did not mint is never exchanged: that
+// would let a link carrying someone else's code sign the visitor into their
+// account. Without state (AuthKit-initiated sign-in, or a stale or foreign
+// link) the browser restarts sign-in once through /auth/login, which binds a
+// new flow; a state whose cookie disagrees, or a second miss, gets recovery.
+function rejectedAuthCallbackResponse(
+  c: any,
+  flow: Exclude<AuthFlowVerification, { ok: true }>,
+) {
+  console.warn(
+    JSON.stringify({
+      event: "auth.callback",
+      outcome: "rejected",
+      reason: `state_${flow.reason}`,
+    }),
+  );
+  if (flow.reason === "missing") return c.redirect("/auth/login", 302);
+  if (flow.reason === "unbound" && flow.state.retried !== true) {
+    const params = new URLSearchParams({
+      return_to: safeReturnTo(
+        c.env,
+        typeof flow.state.returnTo === "string" ? flow.state.returnTo : null,
+      ),
+    });
+    if (flow.state.accountAction === "add") params.set("account_action", "add");
+    params.set("auth_retry", "1");
+    return c.redirect(`/auth/login?${params}`, 302);
+  }
+  if (flow.clearCookie) c.header("set-cookie", flow.clearCookie, { append: true });
+  return c.text(
+    "This sign-in was started in another browser or has expired. Start sign-in again.",
+    400,
+  );
+}
+
+function withAppendedSetCookie(response: Response, cookie: string) {
+  const headers = new Headers(response.headers);
+  headers.append("set-cookie", cookie);
+  return new Response(response.body, {
+    status: response.status,
+    statusText: response.statusText,
+    headers,
+  });
+}
+
 app.get("/auth/callback", async (c) => {
+  let flow: AuthFlowVerification;
   try {
     const url = new URL(c.req.url);
-    const code = url.searchParams.get("code");
-    const state = decodeState(url.searchParams.get("state")) as {
+    if (!url.searchParams.get("code")) {
+      return c.text("Missing WorkOS authorization code", 400);
+    }
+    flow = await verifyAuthFlowState(
+      c.req.raw,
+      c.env,
+      url.searchParams.get("state"),
+    );
+  } catch {
+    return c.text("Authentication failed", 500);
+  }
+  if (!flow.ok) return rejectedAuthCallbackResponse(c, flow);
+  // The flow cookie is single-use whatever the exchange outcome.
+  return withAppendedSetCookie(
+    await completeAuthCallback(c, flow.state),
+    flow.clearCookie,
+  );
+});
+
+async function completeAuthCallback(c: any, verifiedState: Record<string, unknown>) {
+  try {
+    const url = new URL(c.req.url);
+    const code = url.searchParams.get("code") || "";
+    const state = verifiedState as {
       returnTo?: string;
       invitationToken?: string;
       accountAction?: string;
       consentToken?: string;
     };
-
-    if (!code) {
-      return c.text("Missing WorkOS authorization code", 400);
-    }
 
     const authResponse = await authenticateWorkOSCode(c.env, {
       code,
@@ -12641,7 +12705,7 @@ app.get("/auth/callback", async (c) => {
     );
     return c.text("Authentication failed", 500);
   }
-});
+}
 
 app.post("/auth/switch-account", async (c) => {
   if (!useFeatureFlag(c.env, ACCOUNT_EMAIL_SWITCHING_FLAG)) {

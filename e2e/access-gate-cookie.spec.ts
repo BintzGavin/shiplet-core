@@ -130,17 +130,16 @@ test.describe("access-gate browser cookie lifecycle", () => {
 			platformOrigin,
 		);
 		accessGate.searchParams.set("return_to", tenantUrl);
+		const login = new URL("/auth/login", platformOrigin);
+		login.searchParams.set("return_to", accessGate.toString());
+		await page.goto(login.toString(), { waitUntil: "domcontentloaded" });
+		const authorize = new URL(proxy.takeRedirect("app.shiplet.test", "/auth/login"));
 		const callback = new URL("/auth/callback", platformOrigin);
 		callback.searchParams.set(
 			"code",
 			`test-code:${organization.organization.id}:${reviewer["x-shiplet-user-email"]}`,
 		);
-		callback.searchParams.set(
-			"state",
-			Buffer.from(JSON.stringify({ returnTo: accessGate.toString() })).toString(
-				"base64",
-			),
-		);
+		callback.searchParams.set("state", authorize.searchParams.get("state") || "");
 
 		await page.goto(callback.toString(), { waitUntil: "domcontentloaded" });
 		const gatedUrl = proxy.takeRedirect("app.shiplet.test", "/auth/callback");
@@ -439,7 +438,8 @@ async function installHttpsShipletProxy(
 		const redirectLocation = responseHeaders.location;
 		const pauseRedirect =
 			Boolean(redirectLocation) &&
-			(requestUrl.pathname === "/auth/callback" ||
+			(requestUrl.pathname === "/auth/login" ||
+				requestUrl.pathname === "/auth/callback" ||
 				requestUrl.pathname.endsWith("/access") ||
 				requestUrl.searchParams.has(capabilityQueryName) ||
 				(requestUrl.hostname.startsWith("sibling-") &&

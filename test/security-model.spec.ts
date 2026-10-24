@@ -6,6 +6,11 @@ import {
 import { describe, expect, it, vi } from "vitest";
 import app, { reviewCapabilitySecret } from "../src/index";
 import {
+  setCookiePairs,
+  signInWithCode,
+  signInWithMintedState,
+} from "./helpers/auth-flow";
+import {
   createReviewCapabilityToken,
   verifyReviewCapabilityToken,
 } from "../src/review";
@@ -179,8 +184,8 @@ async function startRestrictedInvitationConsent(returnTo: string) {
   });
   expect(consentPage.status).toBe(200);
   const html = await consentPage.text();
-  const state = await submitRestrictedInvitationConsent(html);
-  return { html, state };
+  const { state, flowCookie } = await submitRestrictedInvitationConsent(html);
+  return { html, state, flowCookie };
 }
 
 async function submitRestrictedInvitationConsent(html: string) {
@@ -200,7 +205,11 @@ async function submitRestrictedInvitationConsent(html: string) {
   const authorizationUrl = new URL(beginAuth.headers.get("location") || "");
   const state = authorizationUrl.searchParams.get("state");
   expect(state).toBeTruthy();
-  return state!;
+  const flowCookie = setCookiePairs(beginAuth).find((pair) =>
+    pair.startsWith("__Host-shiplet_auth_flow_"),
+  );
+  expect(flowCookie).toBeTruthy();
+  return { state: state!, flowCookie: flowCookie! };
 }
 
 function reviewCapabilitySecretForTest() {
@@ -320,10 +329,7 @@ describe("artifact and app security model", () => {
     await withCustomDomain("shiplet.cc", async () => {
       await withAppUrl("https://shiplet.cc", async () => {
         await withFeatureFlags("account-email-switching", async () => {
-          const response = await requestHelper(
-            "https://shiplet.cc/auth/callback?code=test-code%3A%3Acookie%2540example.com",
-            { redirect: "manual" },
-          );
+          const response = await signInWithCode(requestHelper, "test-code::cookie%40example.com", { origin: "https://shiplet.cc" });
           const setCookie = setCookieHeader(response);
 
           expect(response.status).toBe(302);
@@ -349,10 +355,7 @@ describe("artifact and app security model", () => {
   it("keeps local Wrangler session cookies usable when routes rewrite request hosts", async () => {
     await withCustomDomain("shiplet.cc", async () => {
       await withAppUrl("http://localhost:8787", async () => {
-        const response = await requestHelper(
-          "http://shiplet.cc/auth/callback?code=test-code%3A%3Alocal%2540example.com",
-          { redirect: "manual" },
-        );
+        const response = await signInWithCode(requestHelper, "test-code::local%40example.com", { origin: "http://shiplet.cc" });
         const setCookie = setCookieHeader(response);
         const cookie = cookieHeaderFromSetCookie(setCookie);
 
@@ -390,10 +393,7 @@ describe("artifact and app security model", () => {
   it("authenticates dashboard requests but not legacy or project-origin session cookies", async () => {
     await withCustomDomain("shiplet.cc", async () => {
       await withAppUrl("https://shiplet.cc", async () => {
-        const callback = await requestHelper(
-          "https://shiplet.cc/auth/callback?code=test-code%3A%3Asecure%2540example.com",
-          { redirect: "manual" },
-        );
+        const callback = await signInWithCode(requestHelper, "test-code::secure%40example.com", { origin: "https://shiplet.cc" });
         const setCookie = setCookieHeader(callback);
         const cookie = cookieHeaderFromSetCookie(setCookie);
         const sessionId = cookieValue(setCookie, "__Host-shiplet_session");
@@ -1256,12 +1256,7 @@ describe("artifact and app security model", () => {
         };
         const returnTo = `https://${publishBody.project.subdomain}.shiplet.cc/docs/?mode=review`;
         const state = btoa(JSON.stringify({ returnTo }));
-        const callback = await requestHelper(
-          `https://app.shiplet.cc/auth/callback?code=${encodeURIComponent(
-            "test-code::project-return@example.com",
-          )}&state=${encodeURIComponent(state)}`,
-          { redirect: "manual" },
-        );
+        const callback = await signInWithMintedState(requestHelper, env, "test-code::project-return@example.com", JSON.parse(atob(state)), { origin: "https://app.shiplet.cc" });
         expect(callback.status).toBe(302);
         const location = callback.headers.get("location") || "";
         expect(location).toContain(
@@ -1354,12 +1349,7 @@ describe("artifact and app security model", () => {
         );
 
         const memberState = btoa(JSON.stringify({ returnTo: accessGate }));
-        const memberCallback = await requestHelper(
-          `https://app.shiplet.cc/auth/callback?code=${encodeURIComponent(
-            `test-code:${organization.organization.id}:Colleague@ACME.EXAMPLE`,
-          )}&state=${encodeURIComponent(memberState)}`,
-          { redirect: "manual" },
-        );
+        const memberCallback = await signInWithMintedState(requestHelper, env, `test-code:${organization.organization.id}:Colleague@ACME.EXAMPLE`, JSON.parse(atob(memberState)), { origin: "https://app.shiplet.cc" });
         expect(memberCallback.status).toBe(302);
         expect(memberCallback.headers.get("location")).toBe(accessGate);
         const memberCookie = cookieHeaderFromSetCookie(
@@ -1555,12 +1545,7 @@ describe("artifact and app security model", () => {
         );
 
         const outsiderState = btoa(JSON.stringify({ returnTo: accessGate }));
-        const outsiderCallback = await requestHelper(
-          `https://app.shiplet.cc/auth/callback?code=${encodeURIComponent(
-            "test-code::outsider@gmail.com",
-          )}&state=${encodeURIComponent(outsiderState)}`,
-          { redirect: "manual" },
-        );
+        const outsiderCallback = await signInWithMintedState(requestHelper, env, "test-code::outsider@gmail.com", JSON.parse(atob(outsiderState)), { origin: "https://app.shiplet.cc" });
         expect(outsiderCallback.status).toBe(302);
         const outsiderCookie = cookieHeaderFromSetCookie(
           setCookieHeader(outsiderCallback),
@@ -1580,10 +1565,7 @@ describe("artifact and app security model", () => {
   it("rejects artifact-origin platform cookie requests while preserving app-origin review access", async () => {
     await withCustomDomain("shiplet.cc", async () => {
       await withAppUrl("https://shiplet.cc", async () => {
-        const callback = await requestHelper(
-          "https://shiplet.cc/auth/callback?code=test-code%3A%3Aorigin%2540example.com",
-          { redirect: "manual" },
-        );
+        const callback = await signInWithCode(requestHelper, "test-code::origin%40example.com", { origin: "https://shiplet.cc" });
         const cookie = cookieHeaderFromSetCookie(setCookieHeader(callback));
         const organization = await createOrganization(cookie);
         const { project } = await publishShiplet(organization.organization.id, {
@@ -1797,10 +1779,7 @@ describe("artifact and app security model", () => {
   it("serves the trusted review host without serializing signing authority", async () => {
     await withCustomDomain("shiplet.cc", async () => {
       await withAppUrl("https://shiplet.cc", async () => {
-        const callback = await requestHelper(
-          "https://shiplet.cc/auth/callback?code=test-code%3A%3Areview-secret%2540example.com",
-          { redirect: "manual" },
-        );
+        const callback = await signInWithCode(requestHelper, "test-code::review-secret%40example.com", { origin: "https://shiplet.cc" });
         const cookie = cookieHeaderFromSetCookie(setCookieHeader(callback));
         const organization = await createOrganization(cookie);
         const { project } = await publishShiplet(organization.organization.id, {
@@ -1987,7 +1966,7 @@ describe("artifact and app security model", () => {
           "/docs/?mode=review",
           `${requested.shipletUrl}/`,
         ).toString();
-        const { state } = await startRestrictedInvitationConsent(returnTo);
+        const { state, flowCookie } = await startRestrictedInvitationConsent(returnTo);
         const tamperedStateValue = JSON.parse(atob(state)) as Record<
           string,
           unknown
@@ -1995,11 +1974,31 @@ describe("artifact and app security model", () => {
         tamperedStateValue.returnTo = unrelated.shipletUrl;
         const tamperedState = btoa(JSON.stringify(tamperedStateValue));
 
-        const callback = await requestHelper(
+        const tampered = await requestHelper(
           `https://app.shiplet.cc/auth/callback?code=${encodeURIComponent(
             `test-code::${encodeURIComponent(email)}`,
           )}&state=${encodeURIComponent(tamperedState)}`,
-          { redirect: "manual" },
+          { headers: { Cookie: flowCookie }, redirect: "manual" },
+        );
+        expect(tampered.status).toBe(400);
+        expect(setCookieHeader(tampered)).not.toContain("shiplet_session=");
+        const untouched = await (env as unknown as TestEnv).DB.prepare(
+          `SELECT status FROM app_invitations WHERE id IN (?, ?)`,
+        )
+          .bind(requested.invitation.id, unrelated.invitation.id)
+          .all<{ status: string }>();
+        expect(untouched.results?.map((row) => row.status)).toEqual([
+          "pending",
+          "pending",
+        ]);
+
+        // The refused callback spent that flow; the browser starts a new one.
+        const fresh = await startRestrictedInvitationConsent(returnTo);
+        const callback = await requestHelper(
+          `https://app.shiplet.cc/auth/callback?code=${encodeURIComponent(
+            `test-code::${encodeURIComponent(email)}`,
+          )}&state=${encodeURIComponent(fresh.state)}`,
+          { headers: { Cookie: fresh.flowCookie }, redirect: "manual" },
         );
 
         expect(callback.status).toBe(302);
@@ -2056,10 +2055,7 @@ describe("artifact and app security model", () => {
         const state = btoa(JSON.stringify({ returnTo: setup.shipletUrl }));
         const code = `test-code:${setup.organization.id}:${encodeURIComponent(email)}`;
 
-        const callback = await requestHelper(
-          `https://app.shiplet.cc/auth/callback?code=${encodeURIComponent(code)}&state=${encodeURIComponent(state)}`,
-          { redirect: "manual" },
-        );
+        const callback = await signInWithMintedState(requestHelper, env, code, JSON.parse(atob(state)), { origin: "https://app.shiplet.cc" });
         expect(callback.status).toBe(302);
 
         const invitation = await (env as unknown as TestEnv).DB.prepare(
@@ -2087,7 +2083,7 @@ describe("artifact and app security model", () => {
         const invitedEmail = `invited-${crypto.randomUUID()}@corp.example`;
         const otherEmail = `other-${crypto.randomUUID()}@corp.example`;
         const setup = await bootstrapRestrictedInvitation(invitedEmail);
-        const { state } = await startRestrictedInvitationConsent(
+        const { state, flowCookie } = await startRestrictedInvitationConsent(
           setup.shipletUrl,
         );
 
@@ -2095,7 +2091,7 @@ describe("artifact and app security model", () => {
           `https://app.shiplet.cc/auth/callback?code=${encodeURIComponent(
             `test-code::${encodeURIComponent(otherEmail)}`,
           )}&state=${encodeURIComponent(state)}`,
-          { redirect: "manual" },
+          { headers: { Cookie: flowCookie }, redirect: "manual" },
         );
         expect(callback.status).toBe(403);
         const failure = await callback.text();
@@ -2134,7 +2130,7 @@ describe("artifact and app security model", () => {
         const consentPage = await requestHelper(
           removeToken.headers.get("location")!,
         );
-        const state = await submitRestrictedInvitationConsent(
+        const { state, flowCookie } = await submitRestrictedInvitationConsent(
           await consentPage.text(),
         );
 
@@ -2146,7 +2142,7 @@ describe("artifact and app security model", () => {
             `https://app.shiplet.cc/auth/callback?code=${encodeURIComponent(
               `test-code::${encodeURIComponent(otherEmail)}`,
             )}&state=${encodeURIComponent(state)}`,
-            { redirect: "manual" },
+            { headers: { Cookie: flowCookie }, redirect: "manual" },
           );
           expect(callback.status).toBe(403);
           const logs = errorLog.mock.calls.flat().map(String).join("\n");
@@ -2238,7 +2234,7 @@ describe("artifact and app security model", () => {
         )
           .bind(setup.invitation.id)
           .run();
-        const { state } = await startRestrictedInvitationConsent(
+        const { state, flowCookie } = await startRestrictedInvitationConsent(
           setup.shipletUrl,
         );
 
@@ -2246,7 +2242,7 @@ describe("artifact and app security model", () => {
           `https://app.shiplet.cc/auth/callback?code=${encodeURIComponent(
             `test-code::${encodeURIComponent(email)}`,
           )}&state=${encodeURIComponent(state)}`,
-          { redirect: "manual" },
+          { headers: { Cookie: flowCookie }, redirect: "manual" },
         );
         expect(callback.status).toBe(502);
         expect(await callback.text()).toBe("Invitation acceptance failed");
@@ -2266,7 +2262,7 @@ describe("artifact and app security model", () => {
       await withAppUrl("https://app.shiplet.cc", async () => {
         const email = `observability-${crypto.randomUUID()}@example.com`;
         const setup = await bootstrapRestrictedInvitation(email);
-        const { state } = await startRestrictedInvitationConsent(
+        const { state, flowCookie } = await startRestrictedInvitationConsent(
           setup.shipletUrl,
         );
         const info = vi
@@ -2277,7 +2273,7 @@ describe("artifact and app security model", () => {
             `https://app.shiplet.cc/auth/callback?code=${encodeURIComponent(
               `test-code::${encodeURIComponent(email)}`,
             )}&state=${encodeURIComponent(state)}`,
-            { redirect: "manual" },
+            { headers: { Cookie: flowCookie }, redirect: "manual" },
           );
           expect(callback.status).toBe(302);
           const logs = info.mock.calls.flat().map(String).join("\n");
@@ -2331,12 +2327,12 @@ describe("artifact and app security model", () => {
         expect(html).toContain(setup.project.name);
         expect(html).toContain(setup.organization.name);
         expect(html).not.toContain(email);
-        const state = await submitRestrictedInvitationConsent(html);
+        const { state, flowCookie } = await submitRestrictedInvitationConsent(html);
         const callback = await requestHelper(
           `https://app.shiplet.cc/auth/callback?code=${encodeURIComponent(
             `test-code::${encodeURIComponent(email)}`,
           )}&state=${encodeURIComponent(state)}`,
-          { redirect: "manual" },
+          { headers: { Cookie: flowCookie }, redirect: "manual" },
         );
         expect(callback.status).toBe(302);
         const invitation = await (env as unknown as TestEnv).DB.prepare(

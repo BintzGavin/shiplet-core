@@ -1,7 +1,13 @@
 import { expect, test, type Page } from "@playwright/test";
 
+import { loginAs, userIdForEmail } from "./helpers";
+
 async function openHeader(page: Page, variant: "public" | "authenticated" = "public") {
-	await page.goto(variant === "authenticated" ? "/auth/callback?code=test-code::theme-switch%40example.test" : "/docs/quickstart");
+	if (variant === "authenticated") {
+		await loginAs(page, { email: "theme-switch@example.test", id: userIdForEmail("theme-switch@example.test") });
+	} else {
+		await page.goto("/docs/quickstart");
+	}
 	const header = page.getByRole("banner");
 	await expect(header).toHaveAttribute("data-header-variant", variant);
 	return { header, themeSwitch: header.getByRole("switch", { name: "Dark mode" }) };

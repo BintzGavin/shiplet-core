@@ -18,6 +18,7 @@ import {
   validateReviewFeedbackPayload,
 } from "../src/review";
 import { ensureSchema } from "../src/schema";
+import { signInWithCode, signInWithMintedState } from "./helpers/auth-flow";
 import {
   absolutizeCssUrlsForSnapshot,
   clampExpandedBubbleFrame,
@@ -347,10 +348,7 @@ async function createTestOrganizationMember(
   email: string,
 ) {
   const normalizedEmail = email.toLowerCase();
-  const callback = await requestHelper(
-    `/auth/callback?code=${encodeURIComponent(`test-code:${organizationId}:${encodeURIComponent(normalizedEmail)}`)}`,
-    { redirect: "manual" },
-  );
+  const callback = await signInWithCode(requestHelper, `test-code:${organizationId}:${encodeURIComponent(normalizedEmail)}`);
   expect(callback.status).toBe(302);
   const userId = `user_${normalizedEmail
     .replace(/[^a-z0-9]+/g, "-")
@@ -2433,10 +2431,7 @@ describe("Shiplet", () => {
     it("should support browser sessions in local test auth mode", async () => {
       await withCustomDomain("shiplet.cc", async () => {
         await withAppUrl("http://localhost", async () => {
-          const callback = await requestHelper(
-            "/auth/callback?code=test-code%3A%3Abrowser-ui%2540example.com",
-            { redirect: "manual" },
-          );
+          const callback = await signInWithCode(requestHelper, "test-code::browser-ui%40example.com");
           expect(callback.status).toBe(302);
           const cookie = callback.headers.get("set-cookie");
           expect(cookie).toContain("shiplet_session=");
@@ -2491,10 +2486,7 @@ describe("Shiplet", () => {
         project: { id: string };
       };
 
-      const callback = await requestHelper(
-        `/auth/callback?code=${encodeURIComponent(`test-code::${encodeURIComponent(email)}`)}`,
-        { redirect: "manual" },
-      );
+      const callback = await signInWithCode(requestHelper, `test-code::${encodeURIComponent(email)}`);
       expect(callback.status).toBe(302);
       const cookie = cookieHeaderFromResponse(callback);
 
@@ -2550,10 +2542,7 @@ describe("Shiplet", () => {
     });
 
     it("should assign and update user avatars", async () => {
-      const callback = await requestHelper(
-        "/auth/callback?code=test-code%3A%3Aavatar%2540example.com",
-        { redirect: "manual" },
-      );
+      const callback = await signInWithCode(requestHelper, "test-code::avatar%40example.com");
       const cookie = cookieHeaderFromResponse(callback);
       const me = await requestHelper("/api/me", { headers: { cookie } });
       expect(me.status).toBe(200);
@@ -2639,10 +2628,7 @@ describe("Shiplet", () => {
 
     it("should keep account switching disabled by default", async () => {
       await withFeatureFlags("", async () => {
-        const callback = await requestHelper(
-          "/auth/callback?code=test-code%3A%3Adefault-account%2540example.com",
-          { redirect: "manual" },
-        );
+        const callback = await signInWithCode(requestHelper, "test-code::default-account%40example.com");
         const cookie = cookieHeaderFromResponse(callback);
         expect(callback.headers.get("set-cookie")).toContain(
           "__Host-shiplet_session=",
@@ -2678,10 +2664,7 @@ describe("Shiplet", () => {
 
     it("should group and switch active email accounts when the flag is enabled", async () => {
       await withFeatureFlags("account-email-switching", async () => {
-        const firstCallback = await requestHelper(
-          "/auth/callback?code=test-code%3A%3Aalice%2540example.com",
-          { redirect: "manual" },
-        );
+        const firstCallback = await signInWithCode(requestHelper, "test-code::alice%40example.com");
         expect(firstCallback.status).toBe(302);
         const firstCookie = cookieHeaderFromResponse(firstCallback);
         expect(firstCallback.headers.get("set-cookie")).toContain(
@@ -2691,15 +2674,10 @@ describe("Shiplet", () => {
           "__Host-shiplet_account_group=",
         );
 
-        const addAccountState = btoa(
-          JSON.stringify({
-            returnTo: "/account",
-            accountAction: "add",
-          }),
-        );
-        const secondCallback = await requestHelper(
-          `/auth/callback?code=${encodeURIComponent("test-code::bob@example.com")}&state=${encodeURIComponent(addAccountState)}`,
-          { headers: { cookie: firstCookie }, redirect: "manual" },
+        const secondCallback = await signInWithCode(
+          requestHelper,
+          "test-code::bob@example.com",
+          { returnTo: "/account", accountAction: "add", cookie: firstCookie },
         );
         expect(secondCallback.status).toBe(302);
         expect(secondCallback.headers.get("location")).toBe("/account");
@@ -3871,12 +3849,7 @@ describe("Shiplet", () => {
       );
       expect(invitationResponse.status).toBe(201);
 
-      const callback = await requestHelper(
-        `/auth/callback?code=${encodeURIComponent(
-          `test-code:${organization.organization.id}:${encodeURIComponent(adminEmail)}`,
-        )}`,
-        { redirect: "manual" },
-      );
+      const callback = await signInWithCode(requestHelper, `test-code:${organization.organization.id}:${encodeURIComponent(adminEmail)}`);
       expect(callback.status).toBe(302);
 
       const tokenList = await requestHelper(
@@ -4049,12 +4022,7 @@ describe("Shiplet", () => {
         )
         .run();
 
-      const callback = await requestHelper(
-        `/auth/callback?code=${encodeURIComponent(
-          `test-code:${organization.id}:${encodeURIComponent(invitedEmail)}`,
-        )}`,
-        { redirect: "manual" },
-      );
+      const callback = await signInWithCode(requestHelper, `test-code:${organization.id}:${encodeURIComponent(invitedEmail)}`);
       expect(callback.status).toBe(302);
 
       const membership = await (env as unknown as TestEnv).DB.prepare(
@@ -4088,12 +4056,7 @@ describe("Shiplet", () => {
       );
       expect(invitationResponse.status).toBe(201);
 
-      const callback = await requestHelper(
-        `/auth/callback?code=${encodeURIComponent(
-          `test-code:${organization.id}:${encodeURIComponent(member.email)}`,
-        )}`,
-        { redirect: "manual" },
-      );
+      const callback = await signInWithCode(requestHelper, `test-code:${organization.id}:${encodeURIComponent(member.email)}`);
       expect(callback.status).toBe(302);
 
       const membership = await (env as unknown as TestEnv).DB.prepare(
@@ -9862,12 +9825,7 @@ describe("Shiplet", () => {
         organization: { id: string };
       };
       const unknownOrganizationId = `org_external_${crypto.randomUUID()}`;
-      const callback = await requestHelper(
-        `/auth/callback?code=${encodeURIComponent(
-          `test-code:${unknownOrganizationId}:${encodeURIComponent(email)}`,
-        )}`,
-        { redirect: "manual" },
-      );
+      const callback = await signInWithCode(requestHelper, `test-code:${unknownOrganizationId}:${encodeURIComponent(email)}`);
       expect(callback.status).toBe(302);
       const identityResponse = await requestHelper("/api/me", {
         headers: { cookie: cookieHeaderFromResponse(callback) },
@@ -9908,12 +9866,7 @@ describe("Shiplet", () => {
       const { organization } = (await createResponse.json()) as {
         organization: { id: string };
       };
-      const callback = await requestHelper(
-        `/auth/callback?code=${encodeURIComponent(
-          `test-code:${organization.id}:${encodeURIComponent(email)}`,
-        )}`,
-        { redirect: "manual" },
-      );
+      const callback = await signInWithCode(requestHelper, `test-code:${organization.id}:${encodeURIComponent(email)}`);
       expect(callback.status).toBe(302);
 
       const membership = await (env as unknown as TestEnv).DB.prepare(
@@ -10091,14 +10044,9 @@ describe("Shiplet", () => {
         }),
       );
       const invitedUserId = "user_gavin-swirlwebdesign-com";
-      const callback = await requestHelper(
-        `/auth/callback?code=${encodeURIComponent(
-          `test-code:${body.organization.id}:${encodeURIComponent(
+      const callback = await signInWithMintedState(requestHelper, env, `test-code:${body.organization.id}:${encodeURIComponent(
             body.invitation.email,
-          )}`,
-        )}&state=${encodeURIComponent(state)}`,
-        { redirect: "manual" },
-      );
+          )}`, JSON.parse(atob(state)));
       expect(callback.status).toBe(302);
       expect(callback.headers.get("location")).toBe(body.shipletUrl);
 
@@ -10149,10 +10097,7 @@ describe("Shiplet", () => {
 
       const state = btoa(JSON.stringify({ returnTo: body.shipletUrl }));
       const code = `test-code:${body.organization.id}:${encodeURIComponent("invited@example.com")}`;
-      const callback = await requestHelper(
-        `/auth/callback?code=${encodeURIComponent(code)}&state=${encodeURIComponent(state)}`,
-        { redirect: "manual" },
-      );
+      const callback = await signInWithMintedState(requestHelper, env, code, JSON.parse(atob(state)));
       expect(callback.status).toBe(302);
       expect(callback.headers.get("location")).toBe(body.shipletUrl);
 
@@ -10402,12 +10347,7 @@ describe("Shiplet", () => {
         }),
       );
 
-      const callback = await requestHelper(
-        `/auth/callback?code=${encodeURIComponent(
-          "test-code::different-reviewer@example.com",
-        )}&state=${encodeURIComponent(state)}`,
-        { redirect: "manual" },
-      );
+      const callback = await signInWithMintedState(requestHelper, env, "test-code::different-reviewer@example.com", JSON.parse(atob(state)));
       expect(callback.status).toBe(302);
 
       const unauthorizedArtifact = await requestHelper(
@@ -10448,12 +10388,7 @@ describe("Shiplet", () => {
       ].join(":");
       const state = btoa(JSON.stringify({ invitationToken }));
 
-      const callback = await requestHelper(
-        `/auth/callback?code=${encodeURIComponent(
-          `test-code::${encodeURIComponent(authenticatedEmail)}`,
-        )}&state=${encodeURIComponent(state)}`,
-        { redirect: "manual" },
-      );
+      const callback = await signInWithMintedState(requestHelper, env, `test-code::${encodeURIComponent(authenticatedEmail)}`, JSON.parse(atob(state)));
       expect(callback.status).toBe(302);
 
       const unauthorizedMembership = await (
@@ -10543,12 +10478,7 @@ describe("Shiplet", () => {
           invitationToken: pendingInvitation!.workos_invitation_token,
         }),
       );
-      const callback = await requestHelper(
-        `/auth/callback?code=${encodeURIComponent(
-          `test-code::${encodeURIComponent(editorEmail)}`,
-        )}&state=${encodeURIComponent(state)}`,
-        { redirect: "manual" },
-      );
+      const callback = await signInWithMintedState(requestHelper, env, `test-code::${encodeURIComponent(editorEmail)}`, JSON.parse(atob(state)));
       expect(callback.status).toBe(302);
 
       const acceptedShare = await requestHelper(
@@ -10659,10 +10589,7 @@ describe("Shiplet", () => {
       email: string,
     ) {
       const normalizedEmail = email.toLowerCase();
-      const callback = await requestHelper(
-        `/auth/callback?code=${encodeURIComponent(`test-code:${organizationId}:${encodeURIComponent(normalizedEmail)}`)}`,
-        { redirect: "manual" },
-      );
+      const callback = await signInWithCode(requestHelper, `test-code:${organizationId}:${encodeURIComponent(normalizedEmail)}`);
       expect(callback.status).toBe(302);
       const userId = `user_${normalizedEmail
         .replace(/[^a-z0-9]+/g, "-")
