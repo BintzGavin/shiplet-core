@@ -1325,18 +1325,17 @@ test.describe("trusted review collaboration controls", () => {
     await page.locator(".shiplet-review-mentions summary").click();
     await mentionSelect.selectOption(owner.id);
     await page.locator("#shiplet-review-comment").fill(comment);
-    const popupPromise = page.waitForEvent("popup");
+    // The hosted review host saves new feedback directly, without a popup.
+    const pagesBeforeSubmit = page.context().pages().length;
+    const composer = page.locator("#shiplet-annotation-composer");
     await page
       .getByRole("button", { name: "Send annotation", exact: true })
       .click();
-    const confirmation = await popupPromise;
-    await confirmation.waitForLoadState("domcontentloaded");
-    await confirmation
-      .getByRole("button", { name: "Confirm and send feedback" })
-      .click();
     await expect(
-      confirmation.getByRole("heading", { name: "Feedback sent" }),
-    ).toBeVisible();
+      composer.locator(".shiplet-review-composer-message"),
+    ).toHaveText("Feedback sent");
+    await expect(composer).toBeHidden();
+    expect(page.context().pages()).toHaveLength(pagesBeforeSubmit);
 
     await loginAs(page, owner);
     await page.goto("/inbox", { waitUntil: "networkidle" });
