@@ -204,9 +204,6 @@ describe("framework-independent widget installation", () => {
       "data-shiplet-private",
     ])
       expect(docs).toContain(text);
-    expect((await request("/docs/wordpress")).headers.get("location")).toBe(
-      "/docs/embed",
-    );
   });
   it("registers, lists, reuses, and revokes an editor-owned installation without exposing a secret", async () => {
     const id = await project();

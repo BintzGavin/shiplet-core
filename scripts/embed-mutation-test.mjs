@@ -101,7 +101,7 @@ const mutations = [
         to: 'if (method !== "GET" && pathname === "/embed/install") return false;',
       },
     ],
-    from: 'if (c.req.header("origin") !== url.origin)\n        return c.text("Same-origin setup required", 403);',
+    from: 'if (!hasTrustedTopLevelFormProvenance(c.req.raw, [url.origin]))\n        return c.text("Same-origin setup required", 403);',
     to: 'if (false) return c.text("Same-origin setup required", 403);',
   },
   {
@@ -147,12 +147,6 @@ const mutations = [
     to: "  if (false && (!sessionPage || !requestPage || sessionPage !== requestPage)) {",
   },
   {
-    name: "installation secrets are stored in plaintext",
-    file: "src/embed.ts",
-    from: "secret_hash: secretHash,",
-    to: "secret_hash: secret,",
-  },
-  {
     name: "expired exchange codes use a past clock",
     file: "src/embed.ts",
     from: "const codeHash = await hashToken(code);\n  const now = timestamps.now();",
@@ -194,7 +188,7 @@ function copyHarness(destination) {
   });
   mkdirSync(path.join(destination, "test"), { recursive: true });
   for (const file of [
-    "wordpress-embed.spec.ts",
+    "embed-review.spec.ts",
     "embed-install.spec.ts",
     "embed-confirmation-api.spec.ts",
     "embed-auth-client.spec.ts",
@@ -233,7 +227,7 @@ function runEmbedTests(workdir) {
     [
       "vitest",
       "run",
-      "test/wordpress-embed.spec.ts",
+      "test/embed-review.spec.ts",
       "test/embed-install.spec.ts",
       "test/embed-confirmation-api.spec.ts",
       "test/embed-auth-client.spec.ts",

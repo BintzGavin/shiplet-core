@@ -500,24 +500,17 @@ import {
   type KernelApprovalBinding,
 } from "./mcp-kernel-approval";
 import {
-  appendEmbedRedirectParams,
-  authenticateEmbedInstallation,
+  BROWSER_INSTALLATION_FILTER,
   consumeEmbedExchangeCode,
-  createEmbedConnectionCode,
-  createEmbedInstallation,
   createEmbedReviewSession,
   createEmbedReviewGrant,
   createEmbedReviewSessionCookieHeader,
   digestEmbedReviewOperationReceiptHandle,
-  embedClientScript,
   getEmbedReviewSession,
   getEmbedInstallation,
-  normalizeEmbedConnectionRequest,
   normalizeEmbedReturnUrl,
   normalizeEmbedSiteUrl,
-  publicEmbedInstallation,
   readEmbedReviewSessionHandle,
-  revokeEmbedInstallation,
   validateEmbedReviewSessionBinding,
   type EmbedInstallationRecord,
 } from "./embed";
@@ -627,10 +620,7 @@ function allowedReviewCorsOrigin(
 
 function isEmbedApiPath(pathname: string) {
   return (
-    pathname === "/api/embed/client.js" ||
-    pathname === "/api/embed/installations/exchange" ||
-    pathname === "/api/embed/session/exchange" ||
-    pathname.startsWith("/api/embed/installations/")
+    pathname === "/api/embed/session/exchange"
   );
 }
 
@@ -717,7 +707,6 @@ function isPlatformCookieAuthRoute(pathname: string, method: string) {
   )
     return true;
   if (method !== "GET" && pathname === "/auth/login") return true;
-  if (method !== "GET" && pathname === "/embed/connect") return true;
   if (method !== "GET" && pathname === "/embed/install") return true;
   if (method !== "GET" && pathname === "/capture") return true;
   if (method !== "GET" && pathname === "/auth/switch-account") return true;
@@ -731,9 +720,7 @@ function isPlatformCookieAuthRoute(pathname: string, method: string) {
 function isNoReferrerTopLevelFormRoute(pathname: string, method: string) {
   return (
     method === "POST" &&
-    (pathname === "/auth/login" ||
-      pathname === "/embed/install" ||
-      pathname === "/embed/connect")
+    (pathname === "/auth/login" || pathname === "/embed/install")
   );
 }
 
@@ -782,7 +769,7 @@ app.use("*", async (c, next) => {
   const path = new URL(c.req.url).pathname;
   const authPage = path.startsWith("/auth/") ||
     path === "/cli/authorize" || path === "/cli/authorize/complete" ||
-    path === "/embed/connect" || path === "/embed/install";
+    path === "/embed/install";
   if (!authPage || !c.req.header("accept")?.includes("text/html")) return;
   c.header("cache-control", "no-store");
   c.header("referrer-policy", "no-referrer");
@@ -1302,55 +1289,7 @@ function embedProjectSubdomain(siteName: string, siteUrl: string) {
     .replace(/[^a-z0-9]+/g, "-")
     .replace(/^-+|-+$/g, "")
     .slice(0, 45);
-  return `${stem || "wordpress"}-${crypto.randomUUID().slice(0, 8)}`;
-}
-
-function renderEmbedConnectPage(options: {
-  connection: ReturnType<typeof normalizeEmbedConnectionRequest> & {};
-  organizations: Array<{ id: string; name: string }>;
-  projects: Project[];
-}) {
-  const { connection, organizations, projects } = options;
-  const selectedProjectId = connection.projectId || "new";
-  const projectOptions = [
-    `<option value="new"${selectedProjectId === "new" ? " selected" : ""}>Create a new Shiplet project</option>`,
-    ...projects.map(
-      (project) =>
-        `<option value="${escapeEmbedHtml(project.id)}"${selectedProjectId === project.id ? " selected" : ""}>${escapeEmbedHtml(project.name)}</option>`,
-    ),
-  ].join("");
-  const organizationOptions = organizations
-    .map(
-      (organization) =>
-        `<option value="${escapeEmbedHtml(organization.id)}">${escapeEmbedHtml(organization.name)}</option>`,
-    )
-    .join("");
-
-  return `<section class="success-card" style="max-width:720px;margin-inline:auto">
-	<span class="success-card-label">WordPress connection</span>
-	<h1>Connect ${escapeEmbedHtml(connection.siteName)}</h1>
-	<p style="margin-top:10px">Allow this WordPress site to load Shiplet review mode on <code>${escapeEmbedHtml(connection.siteOrigin)}</code>.</p>
-	<form method="post" action="/embed/connect" style="display:grid;gap:16px;margin-top:24px">
-		<input type="hidden" name="site_url" value="${escapeEmbedHtml(connection.siteUrl)}">
-		<input type="hidden" name="site_name" value="${escapeEmbedHtml(connection.siteName)}">
-		<input type="hidden" name="return_url" value="${escapeEmbedHtml(connection.returnUrl)}">
-		<input type="hidden" name="state" value="${escapeEmbedHtml(connection.state)}">
-		<label style="display:grid;gap:6px">
-			<strong>Shiplet project</strong>
-			<select name="project_id">${projectOptions}</select>
-			<small>Use one project for the whole site; feedback stays grouped by page URL.</small>
-		</label>
-		<label style="display:grid;gap:6px">
-			<strong>Workspace for a new project</strong>
-			<select name="organization_id"${organizations.length ? "" : " disabled"}>
-				${organizationOptions || '<option value="">A default workspace will be created</option>'}
-			</select>
-		</label>
-		<div class="dashboard-actions">
-			<button class="btn btn-primary" type="submit">Connect WordPress site</button>
-		</div>
-	</form>
-</section>`;
+  return `${stem || "website"}-${crypto.randomUUID().slice(0, 8)}`;
 }
 
 function projectSubdomainFromReturnTo(env: Env, returnTo: string) {
@@ -12062,7 +12001,6 @@ app.get("/docs/:slug", (c) => {
   const retiredPublicDocRedirects: Record<string, string> = {
     "packages-revisions": "/docs/publishing",
     deployment: "/docs/publishing",
-    wordpress: "/docs/embed",
     "external-setup": "/docs/security",
   };
   const retiredRedirect = retiredPublicDocRedirects[slug];
@@ -12819,7 +12757,7 @@ app.on(["GET", "POST"], "/embed/install", async (c) => {
     const installations = selectedProjectId
       ? (
           await c.env.DB.prepare(
-            "SELECT * FROM embed_installations WHERE project_id = ? AND revoked_on IS NULL ORDER BY created_on DESC",
+            `SELECT * FROM embed_installations WHERE project_id = ? AND revoked_on IS NULL AND ${BROWSER_INSTALLATION_FILTER} ORDER BY created_on DESC`,
           )
             .bind(selectedProjectId)
             .all<EmbedInstallationRecord>()
@@ -12879,131 +12817,6 @@ app.get(
       },
     }),
 );
-
-app.get("/embed/connect", async (c) => {
-  try {
-    const url = new URL(c.req.url);
-    const connection = normalizeEmbedConnectionRequest({
-      site_url: url.searchParams.get("site_url"),
-      site_name: url.searchParams.get("site_name"),
-      return_url: url.searchParams.get("return_url"),
-      state: url.searchParams.get("state"),
-      project_id: url.searchParams.get("project_id"),
-    });
-    if (!connection || !connection.state) {
-      return c.text("Invalid WordPress connection request", 400);
-    }
-
-    const user = await getCurrentUser(c.req.raw, c.env);
-    if (!user) {
-      return c.redirect(
-        authLoginRedirectUrl(c.env, c.req.url, embedRouteReturnTo(c.req.url)),
-      );
-    }
-
-    const organizations = await listOrganizationsForUser(c.env.DB, user.id);
-    const accessibleProjects = await listProjectsForUser(c.env.DB, user.id);
-    const editableProjects: Project[] = [];
-    for (const project of accessibleProjects) {
-      if (
-        project.organization_id &&
-        !project.archived_on &&
-        (await canEditProject(c.env.DB, project, user))
-      ) {
-        editableProjects.push(project);
-      }
-    }
-
-    return c.html(
-      renderPage(
-        renderEmbedConnectPage({
-          connection,
-          organizations,
-          projects: editableProjects,
-        }),
-        {
-          nonce: kernelDocumentNonce(c),
-          customDomain: c.env.CUSTOM_DOMAIN,
-          appUrl: appBaseUrl(c.env, c.req.url),
-          user,
-          title: `Connect ${connection.siteName} | Shiplet`,
-          description: "Connect a WordPress site to Shiplet review mode.",
-          canonicalPath: null,
-          indexing: "noindex",
-        },
-      ),
-    );
-  } catch (error) {
-    if (isResponse(error)) return error;
-    const message = error instanceof Error ? error.message : "Unknown error";
-    return c.text(`Failed to start WordPress connection: ${message}`, 500);
-  }
-});
-
-app.post("/embed/connect", async (c) => {
-  try {
-    const contentLength = Number(c.req.header("content-length") || "0");
-    if (contentLength > 16_384) {
-      return c.text("WordPress connection request is too large", 413);
-    }
-    const user = await requireCurrentUser(c);
-    const formData = await c.req.raw.formData();
-    const form: Record<string, unknown> = {};
-    formData.forEach((value, key) => {
-      if (typeof value === "string") form[key] = value;
-    });
-    const connection = normalizeEmbedConnectionRequest(form);
-    if (!connection || !connection.state) {
-      return c.text("Invalid WordPress connection request", 400);
-    }
-
-    let project: Project;
-    if (!connection.projectId || connection.projectId === "new") {
-      const result = await publishShiplet(c.env, c.var.db, user, {
-        name: connection.siteName,
-        organization_id: normalizeOptionalString(form.organization_id),
-        subdomain: embedProjectSubdomain(
-          connection.siteName,
-          connection.siteUrl,
-        ),
-        external_url: connection.siteUrl,
-        visibility: "organization",
-      });
-      project = result.project;
-    } else {
-      const existingProject = await getProjectById(
-        c.env.DB,
-        connection.projectId,
-      );
-      if (!existingProject || existingProject.archived_on) {
-        return c.text("Shiplet project not found", 404);
-      }
-      if (!(await canEditProject(c.env.DB, existingProject, user))) {
-        return c.text("Shiplet project edit access required", 403);
-      }
-      project = existingProject;
-    }
-
-    const code = await createEmbedConnectionCode(c.env.DB, {
-      project,
-      user,
-      siteOrigin: connection.siteOrigin,
-      siteUrl: connection.siteUrl,
-      siteName: connection.siteName,
-      returnUrl: connection.returnUrl,
-    });
-    return c.redirect(
-      appendEmbedRedirectParams(connection.returnUrl, {
-        shiplet_code: code,
-        state: connection.state,
-      }),
-    );
-  } catch (error) {
-    if (isResponse(error)) return error;
-    const message = error instanceof Error ? error.message : "Unknown error";
-    return c.text(`Failed to connect WordPress site: ${message}`, 500);
-  }
-});
 
 type ActiveReviewWidget = {
   revisionId: string;
@@ -15858,13 +15671,6 @@ app.get("/embed/review/host", async (c) => {
   try {
     const { session, project, pageUrl } = await requireEmbedReviewSession(c);
     const origin = new URL(c.req.url).origin;
-    const installation = await getEmbedInstallation(
-      c.env.DB,
-      session.installationId,
-    );
-    const widget = installation?.secret_hash.startsWith("browser-only:")
-      ? null
-      : await activeReviewWidget(c.env, project);
     const bindingQuery = new URLSearchParams({
       installation_id: session.installationId,
       page_url: pageUrl,
@@ -15874,9 +15680,7 @@ app.get("/embed/review/host", async (c) => {
       revisionId: session.revisionId,
       title: project.name,
       artifactUrl: `${origin}/embed/review/context?${bindingQuery}`,
-      widgetUrl: widget
-        ? `${origin}/embed/review/widget?${bindingQuery}`
-        : null,
+      widgetUrl: null,
       hostScriptUrl: `${origin}/api/review/host.js`,
       reviewApiUrl: `${origin}/embed/review/feedback?${bindingQuery}`,
       reviewPageUrl: pageUrl,
@@ -15910,21 +15714,6 @@ app.get("/embed/review/context", async (c) => {
     if (isResponse(error)) return error;
     const message = error instanceof Error ? error.message : "Unknown error";
     return c.text(`Failed to load embedded review context: ${message}`, 500);
-  }
-});
-
-app.get("/embed/review/widget", async (c) => {
-  try {
-    const { session, project } = await requireEmbedReviewSession(c);
-    return serveActiveReviewWidget(
-      c.env,
-      project,
-      session.revisionId,
-      new URL(c.req.url).origin,
-    );
-  } catch (error) {
-    if (isResponse(error)) return error;
-    return c.text("Failed to load embedded review widget", 503);
   }
 });
 
@@ -16116,76 +15905,8 @@ app.post("/embed/review/feedback", async (c) => {
   }
 });
 
-app.get("/api/embed/client.js", () => {
-  return new Response(embedClientScript(), {
-    headers: {
-      "content-type": "application/javascript; charset=utf-8",
-      "cache-control": "public, max-age=300",
-      "x-content-type-options": "nosniff",
-    },
-  });
-});
-
-app.post("/api/embed/installations/exchange", async (c) => {
-  try {
-    const body = await readJson(c);
-    if (!isRecord(body)) return c.text("Invalid exchange request", 400);
-    const site = normalizeEmbedSiteUrl(body.siteUrl);
-    if (!site) return c.text("Invalid WordPress site URL", 400);
-    const code = await consumeEmbedExchangeCode(c.env.DB, {
-      code: body.code,
-      purpose: "connection",
-      siteOrigin: site.siteOrigin,
-    });
-    if (!code) return c.text("Connection code is invalid or expired", 401);
-    const project = await getProjectById(c.env.DB, code.project_id);
-    if (!project || project.archived_on) {
-      return c.text("Shiplet project not found", 404);
-    }
-    const connected = await createEmbedInstallation(c.env.DB, code);
-    return json(
-      {
-        installation: {
-          ...connected.installation,
-          projectName: project.name,
-        },
-        secret: connected.secret,
-      },
-      201,
-    );
-  } catch (error) {
-    if (isResponse(error)) return error;
-    const message = error instanceof Error ? error.message : "Unknown error";
-    return c.text(`Failed to exchange WordPress connection: ${message}`, 500);
-  }
-});
-
 app.post("/api/embed/session/exchange", async (c) => {
   return c.text("Embedded review exchange is retired", 410);
-});
-
-app.delete("/api/embed/installations/:installationId", async (c) => {
-  try {
-    const installation = await authenticateEmbedInstallation(
-      c.env.DB,
-      c.req.param("installationId"),
-      c.req.header("authorization"),
-    );
-    if (!installation) {
-      return c.text("WordPress installation access required", 401);
-    }
-    await revokeEmbedInstallation(c.env.DB, installation.id);
-    return json({
-      installation: {
-        ...publicEmbedInstallation(installation),
-        revokedOn: timestamps.now(),
-      },
-    });
-  } catch (error) {
-    if (isResponse(error)) return error;
-    const message = error instanceof Error ? error.message : "Unknown error";
-    return c.text(`Failed to disconnect WordPress site: ${message}`, 500);
-  }
 });
 
 app.get("/api/me", async (c) => {
