@@ -1062,13 +1062,9 @@ async function publishReviewArtifact(options) {
 	);
 	const body = parseJsonResponse(responseText);
 	if (!response.ok) {
-		if (
-			response.status === 400 &&
-			typeof body === "string" &&
-			body.trim() === MISSING_ORGANIZATION_MESSAGE
-		) {
-			throw missingOrganizationError(endpoint);
-		}
+		const choices =
+			response.status === 400 ? missingOrganizationChoices(body) : null;
+		if (choices) throw missingOrganizationError(endpoint, choices);
 		const safe = sanitizeApiValue(body);
 		const detail =
 			typeof safe === "string"
@@ -1082,11 +1078,59 @@ async function publishReviewArtifact(options) {
 	return body ?? { ok: true };
 }
 
-// No CLI-session route lists workspaces, so point at the Workspace page on
-// the same Shiplet origin the publish went to.
-function missingOrganizationError(endpoint) {
+// Shiplet answers a publish that names no workspace, from an account in
+// several, with the caller's own workspaces as JSON, or with the bare message
+// from servers that predate the list. Returns null for any other response.
+function missingOrganizationChoices(body) {
+	if (typeof body === "string") {
+		return body.trim() === MISSING_ORGANIZATION_MESSAGE ? [] : null;
+	}
+	if (
+		!body ||
+		typeof body !== "object" ||
+		Array.isArray(body) ||
+		body.code !== "organization_required"
+	) {
+		return null;
+	}
+	const listed = Array.isArray(body.organizations) ? body.organizations : [];
+	return listed.flatMap((entry) =>
+		entry &&
+		typeof entry === "object" &&
+		typeof entry.id === "string" &&
+		ORGANIZATION_ID_PATTERN.test(entry.id)
+			? [{ id: entry.id, name: printableWorkspaceName(entry.name) }]
+			: [],
+	);
+}
+
+// Workspace names are chosen by people, so only printable text reaches the
+// terminal.
+function printableWorkspaceName(value) {
+	const printable = (typeof value === "string" ? value : "")
+		.replace(
+			/[\u0000-\u001f\u007f-\u009f\u200b-\u200f\u202a-\u202e\u2066-\u2069]/gu,
+			" ",
+		)
+		.replace(/\s+/gu, " ")
+		.trim();
+	return Array.from(printable).slice(0, 120).join("");
+}
+
+// Without a usable list, point at the Workspace page on the same Shiplet
+// origin the publish went to.
+function missingOrganizationError(endpoint, choices) {
+	const hint = `Shiplet API returned 400: ${MISSING_ORGANIZATION_MESSAGE}. Your Shiplet account belongs to more than one workspace, so Shiplet needs to know which one to publish into. Rerun with --organization <id> or set SHIPLET_ORGANIZATION_ID`;
+	if (choices.length === 0) {
+		return new CliError(
+			`${hint}. Workspace IDs start with org_, and your workspaces are listed on the Workspace page: ${new URL(endpoint).origin}/workspace`,
+		);
+	}
+	const lines = choices.map(({ id, name }) =>
+		name ? `  ${name}  ${id}` : `  ${id}`,
+	);
 	return new CliError(
-		`Shiplet API returned 400: ${MISSING_ORGANIZATION_MESSAGE}. Your Shiplet account belongs to more than one workspace, so Shiplet needs to know which one to publish into. Rerun with --organization <id> or set SHIPLET_ORGANIZATION_ID. Workspace IDs start with org_, and your workspaces are listed on the Workspace page: ${new URL(endpoint).origin}/workspace`,
+		`${hint} to one of these workspace IDs:\n${lines.join("\n")}`,
 	);
 }
 

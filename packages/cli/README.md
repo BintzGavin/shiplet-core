@@ -26,7 +26,8 @@ by default; use `--no-session-cache` for approval on every command. The CLI and
 browser must run on the same computer. Credentials are never printed.
 
 If your account belongs to more than one workspace, choose where to publish with
-`--organization <id>` or `SHIPLET_ORGANIZATION_ID`. Workspace IDs start with `org_`.
+`--organization <id>` or `SHIPLET_ORGANIZATION_ID`. Without either, the error
+lists your workspaces and their IDs, which start with `org_`.
 
 Draft writes require the expected `--version`; activation requires
 `--expected-active` and `--approve`. Packaging does not change these checks.

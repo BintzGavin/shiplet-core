@@ -1108,6 +1108,71 @@ describe("Shiplet CLI", () => {
 			expect(result.stderr).toContain("https://cli.shiplet.test/workspace");
 		});
 
+		const organizationRequired = (organizations: unknown) => () =>
+			new Response(
+				JSON.stringify({
+					ok: false,
+					code: "organization_required",
+					error: "Missing required fields: organization_id",
+					organizations,
+				}),
+				{ status: 400, headers: { "content-type": "application/json" } },
+			);
+
+		it("Given Shiplet lists the caller's workspaces, when the publish names none, then each name and ID is printed under the hint", async () => {
+			const result = await prepareArtifact(["--json"], {
+				respond: organizationRequired([
+					{ id: "org_design", name: "Design Team" },
+					{ id: "org_research", name: "Research" },
+				]),
+			});
+
+			expect(result.exitCode).toBe(1);
+			expect(result.network).toHaveBeenCalledOnce();
+			expect(result.stdout).toBe("");
+			expect(result.stderr).toMatch(/more than one workspace/);
+			expect(result.stderr).toContain("--organization <id>");
+			expect(result.stderr).toContain("SHIPLET_ORGANIZATION_ID");
+			expect(result.stderr).toContain(
+				"\n  Design Team  org_design\n  Research  org_research\n",
+			);
+			expect(result.stderr).not.toContain("/workspace");
+			expect(result.stderr).not.toContain('"organizations"');
+		});
+
+		it("Given listed workspaces carry control characters or unusable IDs, when printed, then names are made printable and unusable entries are skipped", async () => {
+			const result = await prepareArtifact([], {
+				respond: organizationRequired([
+					{ id: "org_design", name: "\u001b[31mDesign\u001b[0m\nTeam" },
+					{ id: "org_mirror", name: "\u202eRorrim" },
+					{ id: "org_unnamed" },
+					{ id: "project_123", name: "Not a workspace" },
+					{ id: "org_bad id", name: "Spaced" },
+					"org_plain_string",
+				]),
+			});
+
+			expect(result.exitCode).toBe(1);
+			expect(result.stderr).toContain("\n  [31mDesign [0m Team  org_design\n");
+			expect(result.stderr).toContain("\n  Rorrim  org_mirror\n");
+			expect(result.stderr).toContain("\n  org_unnamed\n");
+			expect(result.stderr).not.toMatch(/[\u0000-\u0009\u000b-\u001f\u007f\u202e]/u);
+			expect(result.stderr).not.toContain("Not a workspace");
+			expect(result.stderr).not.toContain("Spaced");
+			expect(result.stderr).not.toContain("org_plain_string");
+		});
+
+		it("Given Shiplet lists no usable workspace, when the publish names none, then the Workspace page is the fallback", async () => {
+			const result = await prepareArtifact(["--api-url", "https://cli.shiplet.test"], {
+				respond: organizationRequired([{ id: "project_123", name: "Not a workspace" }]),
+			});
+
+			expect(result.exitCode).toBe(1);
+			expect(result.stderr).toMatch(/more than one workspace/);
+			expect(result.stderr).toContain("https://cli.shiplet.test/workspace");
+			expect(result.stderr).not.toContain("Not a workspace");
+		});
+
 		it("Given another 400, when prepare fails, then the server message is reported without workspace guidance", async () => {
 			const result = await prepareArtifact([], {
 				respond: () =>

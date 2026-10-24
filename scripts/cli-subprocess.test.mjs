@@ -218,7 +218,7 @@ test("the shipped CLI publishes into the chosen workspace when the account has s
   if (process.platform === "win32") t.skip("Windows browser launcher is covered by unit contract only");
   const authorizations = [];
   const live = new Set();
-  const workspaces = new Set(["org_design", "org_research"]);
+  const workspaces = new Map([["org_design", "Design"], ["org_research", "Research"]]);
   const published = [];
   const server = http.createServer(async (request, response) => {
     const url = new URL(request.url || "/", "http://127.0.0.1");
@@ -248,9 +248,20 @@ test("the shipped CLI publishes into the chosen workspace when the account has s
       let body = "";
       for await (const chunk of request) body += chunk;
       const parsed = JSON.parse(body);
-      // Like Shiplet, pick a workspace only for an account that has exactly one.
+      // Like Shiplet, pick a workspace only for an account that has exactly one,
+      // and list the caller's own workspaces to clients that ask for JSON.
       if (!parsed.organization_id) {
-        response.writeHead(400, { "content-type": "text/plain" }).end("Missing required fields: organization_id");
+        if (!String(request.headers.accept || "").includes("application/json")) {
+          response.writeHead(400, { "content-type": "text/plain" }).end("Missing required fields: organization_id");
+          return;
+        }
+        response.writeHead(400, { "content-type": "application/json" });
+        response.end(JSON.stringify({
+          ok: false,
+          code: "organization_required",
+          error: "Missing required fields: organization_id",
+          organizations: [...workspaces].map(([id, name]) => ({ id, name })),
+        }));
         return;
       }
       if (!workspaces.has(parsed.organization_id)) {
@@ -288,7 +299,7 @@ test("the shipped CLI publishes into the chosen workspace when the account has s
     assert.match(error.stderr, /more than one workspace/);
     assert.match(error.stderr, /--organization <id>/);
     assert.match(error.stderr, /SHIPLET_ORGANIZATION_ID/);
-    assert.ok(error.stderr.includes(`${apiUrl}/workspace`), error.stderr);
+    assert.ok(error.stderr.includes("\n  Design  org_design\n  Research  org_research\n"), error.stderr);
     return true;
   });
   assert.deepEqual(published, []);

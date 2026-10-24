@@ -536,24 +536,30 @@ describe("CLI browser authorization session", () => {
     }
   });
 
-  it("asks a CLI session in two workspaces to name one, then publishes into the named workspace", async () => {
+  async function createWorkspace(headers: Record<string, string>, label: string) {
+    const name = `CLI ${label} ${crypto.randomUUID()}`;
+    const created = await request("/api/organizations", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...headers },
+      body: JSON.stringify({ name }),
+    });
+    expect(created.status).toBe(201);
+    const { organization } = (await created.json()) as {
+      organization: { id: string };
+    };
+    return { id: organization.id, name };
+  }
+
+  async function twoWorkspaceMember(port: number) {
     const member = {
       "x-shiplet-user-id": `user_cli_two_workspaces_${crypto.randomUUID().replace(/-/g, "")}`,
       "x-shiplet-user-email": `cli-two-workspaces-${crypto.randomUUID()}@example.com`,
     };
-    const workspaceIds: string[] = [];
-    for (const label of ["Design", "Research"]) {
-      const created = await request("/api/organizations", {
-        method: "POST",
-        headers: { "Content-Type": "application/json", ...member },
-        body: JSON.stringify({ name: `CLI ${label} ${crypto.randomUUID()}` }),
-      });
-      expect(created.status).toBe(201);
-      workspaceIds.push(
-        ((await created.json()) as { organization: { id: string } }).organization.id,
-      );
-    }
-    const { session } = await approvedSession("7200", 43200, member);
+    const workspaces = [
+      await createWorkspace(member, "Design"),
+      await createWorkspace(member, "Research"),
+    ];
+    const { session } = await approvedSession("7200", port, member);
     const html = "<h1>Two workspace review</h1>";
     // The body `shiplet prepare` sends, before and after it names a workspace.
     const payload = {
@@ -562,27 +568,93 @@ describe("CLI browser authorization session", () => {
       visibility: "organization",
       assets: [{ path: "index.html", content: btoa(html), size: html.length }],
     };
-    const publish = (body: Record<string, unknown>) =>
+    const publish = (
+      body: Record<string, unknown>,
+      headers: Record<string, string> = {},
+      bearer = session.accessToken,
+    ) =>
       request("/api/shiplets", {
         method: "POST",
         headers: {
-          Authorization: `Bearer ${session.accessToken}`,
+          Authorization: `Bearer ${bearer}`,
           "Content-Type": "application/json",
+          ...headers,
         },
         body: JSON.stringify(body),
       });
+    return { member, workspaces, payload, publish };
+  }
+
+  const byId = (left: { id: string }, right: { id: string }) =>
+    left.id.localeCompare(right.id);
+
+  it("asks a CLI session in two workspaces to name one, then publishes into the named workspace", async () => {
+    const { workspaces, payload, publish } = await twoWorkspaceMember(43200);
 
     const unnamed = await publish(payload);
     expect(unnamed.status).toBe(400);
-    // The CLI turns exactly this message into its --organization guidance.
+    // Browsers and older CLIs that do not ask for JSON keep exactly this text.
     expect(await unnamed.text()).toBe("Missing required fields: organization_id");
 
-    const named = await publish({ ...payload, organization_id: workspaceIds[1] });
+    const named = await publish({ ...payload, organization_id: workspaces[1].id });
     expect(named.status).toBe(201);
     const published = (await named.json()) as {
       project: { organization_id: string };
     };
-    expect(published.project.organization_id).toBe(workspaceIds[1]);
+    expect(published.project.organization_id).toBe(workspaces[1].id);
+  });
+
+  it("lists exactly the caller's own workspaces when a session asking for JSON publishes without naming one", async () => {
+    const outsider = {
+      "x-shiplet-user-id": `user_cli_outsider_${crypto.randomUUID().replace(/-/g, "")}`,
+      "x-shiplet-user-email": `cli-outsider-${crypto.randomUUID()}@example.com`,
+    };
+    const unrelated = await createWorkspace(outsider, "Unrelated");
+    const { workspaces, payload, publish } = await twoWorkspaceMember(43201);
+
+    const unnamed = await publish(payload, { Accept: "application/json" });
+    expect(unnamed.status).toBe(400);
+    expect(unnamed.headers.get("content-type")).toContain("application/json");
+    const body = (await unnamed.json()) as {
+      ok: boolean;
+      code: string;
+      error: string;
+      organizations: Array<{ id: string; name: string }>;
+    };
+    expect(body).toMatchObject({
+      ok: false,
+      code: "organization_required",
+      error: "Missing required fields: organization_id",
+    });
+    expect([...body.organizations].sort(byId)).toEqual(
+      [...workspaces].sort(byId),
+    );
+    expect(JSON.stringify(body)).not.toContain(unrelated.id);
+    expect(JSON.stringify(body)).not.toContain(unrelated.name);
+  });
+
+  it("never lists workspaces to an organization key, which publishes into its own", async () => {
+    const { member, workspaces, payload, publish } = await twoWorkspaceMember(43202);
+    const minted = await request(`/api/organizations/${workspaces[0].id}/api-tokens`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...member },
+      body: JSON.stringify({
+        name: `CLI key ${crypto.randomUUID().slice(0, 8)}`,
+        scopes: ["shiplets:read", "shiplets:write"],
+        projectAccessMode: "all",
+      }),
+    });
+    expect(minted.status).toBe(201);
+    const { token } = (await minted.json()) as { token: string };
+
+    const published = await publish(payload, { Accept: "application/json" }, token);
+    expect(published.status).toBe(201);
+    const body = (await published.json()) as {
+      organizations?: unknown;
+      project: { organization_id: string };
+    };
+    expect(body.project.organization_id).toBe(workspaces[0].id);
+    expect(body.organizations).toBeUndefined();
   });
 
   it.each([

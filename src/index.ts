@@ -7033,13 +7033,46 @@ function defaultOrganizationName(user: ShipletUser) {
   return "My Shiplet Workspace";
 }
 
-async function resolvePublishOrganizationId(env: Env, user: ShipletUser) {
+type PublishShipletOptions = {
+  /** The caller asked for JSON, so a missing workspace lists its choices. */
+  listOrganizationChoices?: boolean;
+};
+
+const ORGANIZATION_REQUIRED_MESSAGE = "Missing required fields: organization_id";
+
+// Only a signed-in person gets here, and the list is their own memberships,
+// so it shows nothing they cannot already see. Clients that do not ask for
+// JSON, such as the browser forms, keep the plain message.
+function organizationRequiredResponse(
+  organizations: Array<{ id: string; name: string }>,
+  options: PublishShipletOptions,
+) {
+  if (!options.listOrganizationChoices) {
+    return new Response(ORGANIZATION_REQUIRED_MESSAGE, { status: 400 });
+  }
+  return json(
+    {
+      ok: false,
+      code: "organization_required",
+      error: ORGANIZATION_REQUIRED_MESSAGE,
+      organizations: organizations.map((organization) => ({
+        id: organization.id,
+        name: organization.name,
+      })),
+    },
+    400,
+  );
+}
+
+async function resolvePublishOrganizationId(
+  env: Env,
+  user: ShipletUser,
+  options: PublishShipletOptions = {},
+) {
   const organizations = await listOrganizationsForUser(env.DB, user.id);
   if (organizations.length === 1) return organizations[0].id;
   if (organizations.length > 1) {
-    throw new Response("Missing required fields: organization_id", {
-      status: 400,
-    });
+    throw organizationRequiredResponse(organizations, options);
   }
 
   const { organization } = await createOrganizationForUser(
@@ -7055,10 +7088,11 @@ async function publishShiplet(
   db: D1QB,
   user: ShipletUser,
   payload: PublishShipletPayload,
+  options: PublishShipletOptions = {},
 ) {
   const organizationId =
     normalizeOptionalString(payload.organization_id) ||
-    (await resolvePublishOrganizationId(env, user));
+    (await resolvePublishOrganizationId(env, user, options));
 
   await requireOrganizationMembership(env.DB, organizationId, user.id);
   return await publishShipletForOrganization(
@@ -16915,7 +16949,11 @@ app.post("/api/shiplets", async (c) => {
     }
 
     const user = await requireCurrentUser(c);
-    const result = await publishShiplet(c.env, c.var.db, user, body);
+    const result = await publishShiplet(c.env, c.var.db, user, body, {
+      listOrganizationChoices: Boolean(
+        c.req.header("accept")?.includes("application/json"),
+      ),
+    });
     return json(publishResultPayload(c.env, c.req.url, result), 201);
   } catch (error) {
     if (isResponse(error)) return error;
