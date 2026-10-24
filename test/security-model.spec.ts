@@ -2224,6 +2224,109 @@ describe("artifact and app security model", () => {
     });
   });
 
+  it("accepts a same-origin top-level consent form whose no-referrer Origin is null", async () => {
+    await withCustomDomain("shiplet.cc", async () => {
+      await withAppUrl("https://app.shiplet.cc", async () => {
+        const email = `null-origin-${crypto.randomUUID()}@example.com`;
+        const setup = await bootstrapRestrictedInvitation(email);
+        const loginUrl = new URL("https://app.shiplet.cc/auth/login");
+        loginUrl.searchParams.set("return_to", setup.shipletUrl);
+        const consentPage = await requestHelper(loginUrl.toString(), {
+          headers: { Accept: "text/html" },
+        });
+        expect(consentPage.headers.get("referrer-policy")).toBe("no-referrer");
+        const consentToken = hiddenInput(await consentPage.text(), "consent_token")!;
+        expect(consentToken).toBeTruthy();
+
+        const submit = (fetchMetadata: Record<string, string>) =>
+          requestHelper("https://app.shiplet.cc/auth/login", {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/x-www-form-urlencoded",
+              Origin: "null",
+              ...fetchMetadata,
+            },
+            body: new URLSearchParams({ consent_token: consentToken }),
+            redirect: "manual",
+          });
+        const topLevelSameOrigin = {
+          "Sec-Fetch-Site": "same-origin",
+          "Sec-Fetch-Mode": "navigate",
+          "Sec-Fetch-Dest": "document",
+        };
+
+        const accepted = await submit(topLevelSameOrigin);
+        expect(accepted.status).toBe(302);
+        const authorizationUrl = new URL(accepted.headers.get("location") || "");
+        expect(authorizationUrl.origin).toBe("https://authkit.test");
+        expect(authorizationUrl.searchParams.get("state")).toBeTruthy();
+
+        const invitation = await (env as unknown as TestEnv).DB.prepare(
+          `SELECT status FROM app_invitations WHERE id = ?`,
+        )
+          .bind(setup.invitation.id)
+          .first<{ status: string }>();
+        expect(invitation?.status).toBe("pending");
+      });
+    });
+  });
+
+  it("rejects null-Origin consent submissions that are not same-origin top-level navigations", async () => {
+    await withCustomDomain("shiplet.cc", async () => {
+      await withAppUrl("https://app.shiplet.cc", async () => {
+        const email = `null-origin-reject-${crypto.randomUUID()}@example.com`;
+        const setup = await bootstrapRestrictedInvitation(email);
+        const loginUrl = new URL("https://app.shiplet.cc/auth/login");
+        loginUrl.searchParams.set("return_to", setup.shipletUrl);
+        const consentPage = await requestHelper(loginUrl.toString());
+        const consentToken = hiddenInput(await consentPage.text(), "consent_token")!;
+        expect(consentToken).toBeTruthy();
+
+        const topLevelSameOrigin = {
+          "Sec-Fetch-Site": "same-origin",
+          "Sec-Fetch-Mode": "navigate",
+          "Sec-Fetch-Dest": "document",
+        };
+        const variants: Array<[string, Record<string, string>]> = [
+          ["no fetch metadata", {}],
+          // A sandboxed artifact frame has an opaque origin, so the browser
+          // labels its form submission cross-site even on Shiplet's host.
+          [
+            "sandboxed or foreign frame",
+            { ...topLevelSameOrigin, "Sec-Fetch-Site": "cross-site" },
+          ],
+          ["same-site", { ...topLevelSameOrigin, "Sec-Fetch-Site": "same-site" }],
+          ["iframe", { ...topLevelSameOrigin, "Sec-Fetch-Dest": "iframe" }],
+          ["fetch", { ...topLevelSameOrigin, "Sec-Fetch-Mode": "cors" }],
+        ];
+        for (const [label, fetchMetadata] of variants) {
+          const response = await requestHelper(
+            "https://app.shiplet.cc/auth/login",
+            {
+              method: "POST",
+              headers: {
+                "Content-Type": "application/x-www-form-urlencoded",
+                Origin: "null",
+                ...fetchMetadata,
+              },
+              body: new URLSearchParams({ consent_token: consentToken }),
+              redirect: "manual",
+            },
+          );
+          expect(response.status, label).toBe(403);
+          expect(response.headers.get("location"), label).toBeNull();
+        }
+
+        const invitation = await (env as unknown as TestEnv).DB.prepare(
+          `SELECT status FROM app_invitations WHERE id = ?`,
+        )
+          .bind(setup.invitation.id)
+          .first<{ status: string }>();
+        expect(invitation?.status).toBe("pending");
+      });
+    });
+  });
+
   it("keeps local access pending when WorkOS invitation acceptance fails", async () => {
     await withCustomDomain("shiplet.cc", async () => {
       await withAppUrl("https://app.shiplet.cc", async () => {

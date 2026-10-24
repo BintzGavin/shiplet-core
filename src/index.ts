@@ -727,6 +727,19 @@ function isPlatformCookieAuthRoute(pathname: string, method: string) {
   return false;
 }
 
+// Shiplet's own sign-in and website setup pages are served with
+// `Referrer-Policy: no-referrer`, so browsers serialize the Origin of their
+// same-origin form submissions as "null". Only these top-level HTML form
+// routes may present that provenance instead of a control-plane Origin.
+function isNoReferrerTopLevelFormRoute(pathname: string, method: string) {
+  return (
+    method === "POST" &&
+    (pathname === "/auth/login" ||
+      pathname === "/embed/install" ||
+      pathname === "/embed/connect")
+  );
+}
+
 function hasBearerAuthorization(request: Request) {
   return /^Bearer\s+.+/i.test(request.headers.get("authorization") || "");
 }
@@ -847,7 +860,12 @@ app.use("*", async (c, next) => {
     !isControlPlaneOrigin(c.env, c.req.url, c.req.header("origin") || null, {
       method: c.req.method,
       hasCookie: Boolean(c.req.header("cookie")),
-    })
+    }) &&
+    !(
+      (isNoReferrerTopLevelFormRoute(url.pathname, c.req.method) ||
+        isNoReferrerTopLevelFormRoute(routedPathname(c.req.url), c.req.method)) &&
+      hasTrustedTopLevelFormProvenance(c.req.raw, [])
+    )
   ) {
     return c.text("Control-plane origin required", 403);
   }
@@ -12444,7 +12462,8 @@ app.post("/auth/login", async (c) => {
       !isControlPlaneOrigin(c.env, c.req.url, c.req.header("origin") || null, {
         method: "POST",
         hasCookie: true,
-      })
+      }) &&
+      !hasTrustedTopLevelFormProvenance(c.req.raw, [])
     ) {
       return c.text("Invitation consent origin denied", 403);
     }
@@ -12789,7 +12808,7 @@ app.on(["GET", "POST"], "/embed/install", async (c) => {
   let message = "";
   try {
     if (c.req.method === "POST") {
-      if (c.req.header("origin") !== url.origin)
+      if (!hasTrustedTopLevelFormProvenance(c.req.raw, [url.origin]))
         return c.text("Same-origin setup required", 403);
       if (Number(c.req.header("content-length") || "0") > 16_384)
         return c.text("Request too large", 413);
