@@ -176,6 +176,8 @@ export async function ensureSchema(db: D1Database) {
 				`CREATE TABLE IF NOT EXISTS workos_membership_sync_state (
 					id TEXT PRIMARY KEY,
 					cursor_user_id TEXT NOT NULL,
+					failing_user_id TEXT,
+					failure_count INTEGER NOT NULL DEFAULT 0,
 					updated_on TEXT NOT NULL
 				)`,
 			),

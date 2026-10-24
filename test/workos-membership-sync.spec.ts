@@ -146,7 +146,10 @@ async function setSweepCursor(cursor: string) {
     .prepare(
       `INSERT INTO workos_membership_sync_state (id, cursor_user_id, updated_on)
 			 VALUES ('organization_memberships', ?, ?)
-			 ON CONFLICT(id) DO UPDATE SET cursor_user_id = excluded.cursor_user_id`,
+			 ON CONFLICT(id) DO UPDATE SET
+			   cursor_user_id = excluded.cursor_user_id,
+			   failing_user_id = NULL,
+			   failure_count = 0`,
     )
     .bind(cursor, new Date().toISOString())
     .run();
@@ -160,6 +163,15 @@ async function sweepCursor() {
     )
     .first<{ cursor_user_id: string }>();
   return row?.cursor_user_id ?? null;
+}
+
+async function sweepFailureState() {
+  return db()
+    .prepare(
+      `SELECT failing_user_id, failure_count FROM workos_membership_sync_state
+			 WHERE id = 'organization_memberships'`,
+    )
+    .first<{ failing_user_id: string | null; failure_count: number }>();
 }
 
 /** A workspace with an owner and a member who joined through WorkOS. */
@@ -313,6 +325,23 @@ describe("WorkOS membership reconciliation at sign-in", () => {
       workosTestDouble.setMembershipLookupFailure(member.id, false);
     }
   });
+
+  it("Given WorkOS never answers, When a removed member signs in, Then sign-in finishes within the reconcile bound and the membership is kept", async () => {
+    const { organization, member } = await workspaceWithMember("hang");
+    workosTestDouble.removeOrganizationMembership(organization.id, member.id);
+    workosTestDouble.setMembershipListingHang(member.id, true);
+    try {
+      const started = Date.now();
+      const again = await signIn(member.actor["x-shiplet-user-email"]);
+      const elapsed = Date.now() - started;
+      expect(again.response.status).toBe(302);
+      expect(again.cookie).toContain("shiplet_session=");
+      expect(elapsed).toBeLessThan(6_000);
+      expect(await membershipRole(organization.id, member.id)).toBe("member");
+    } finally {
+      workosTestDouble.setMembershipListingHang(member.id, false);
+    }
+  });
 });
 
 describe("scheduled WorkOS membership sweep", () => {
@@ -432,5 +461,66 @@ describe("scheduled WorkOS membership sweep", () => {
     });
     expect(resumed?.stoppedReason).toBeNull();
     expect(await membershipRole(organization.id, member.id)).toBeNull();
+  });
+  it("Given one person's WorkOS reads keep failing, When the sweep fails on them three runs in a row, Then it passes over them unchanged and the next run reconciles later people", async () => {
+    const key = suffix();
+    const owner = await signIn(`sweep-stuck-${key}-0@example.com`);
+    const organization = await createOrganization(owner.actor);
+    const stuck = await signIn(
+      `sweep-stuck-${key}-1@example.com`,
+      organization.id,
+    );
+    const later = await signIn(
+      `sweep-stuck-${key}-2@example.com`,
+      organization.id,
+    );
+    workosTestDouble.removeOrganizationMembership(organization.id, stuck.id);
+    workosTestDouble.removeOrganizationMembership(organization.id, later.id);
+    const sweepEnv = env as unknown as Env;
+
+    // A failure that clears resets the count.
+    await setSweepCursor(owner.id);
+    workosTestDouble.setMembershipListingFailure(stuck.id, true);
+    await sweepWorkOSMemberships(sweepEnv, { limit: 5 });
+    await sweepWorkOSMemberships(sweepEnv, { limit: 5 });
+    workosTestDouble.setMembershipListingFailure(stuck.id, false);
+    await sweepWorkOSMemberships(sweepEnv, { limit: 1 });
+    expect(await membershipRole(organization.id, stuck.id)).toBeNull();
+    expect(await sweepFailureState()).toEqual({
+      failing_user_id: null,
+      failure_count: 0,
+    });
+
+    // Restore the stuck person's membership locally and make them fail again.
+    await signIn(stuck.actor["x-shiplet-user-email"], organization.id);
+    expect(await membershipRole(organization.id, stuck.id)).toBe("member");
+    workosTestDouble.removeOrganizationMembership(organization.id, stuck.id);
+    workosTestDouble.setMembershipListingFailure(stuck.id, true);
+    try {
+      await setSweepCursor(owner.id);
+      for (const run of [1, 2]) {
+        const result = await sweepWorkOSMemberships(sweepEnv, { limit: 5 });
+        expect(result).toMatchObject({ visited: 0, cursor: owner.id });
+        expect(await sweepFailureState()).toEqual({
+          failing_user_id: stuck.id,
+          failure_count: run,
+        });
+      }
+      const third = await sweepWorkOSMemberships(sweepEnv, { limit: 5 });
+      expect(third).toMatchObject({ visited: 0, cursor: stuck.id });
+      expect(await sweepFailureState()).toEqual({
+        failing_user_id: null,
+        failure_count: 0,
+      });
+      expect(await membershipRole(organization.id, stuck.id)).toBe("member");
+      expect(await membershipRole(organization.id, later.id)).toBe("member");
+
+      const fourth = await sweepWorkOSMemberships(sweepEnv, { limit: 5 });
+      expect(fourth?.stoppedReason).toBeNull();
+      expect(await membershipRole(organization.id, later.id)).toBeNull();
+      expect(await membershipRole(organization.id, stuck.id)).toBe("member");
+    } finally {
+      workosTestDouble.setMembershipListingFailure(stuck.id, false);
+    }
   });
 });

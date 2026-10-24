@@ -13,7 +13,7 @@ import app, { schemaInitializationTest } from "../src/index";
 // CURRENT_KERNEL_SCHEMA_EPOCH in src/index.ts and update both values here.
 const PINNED_KERNEL_SCHEMA = {
   epoch: 4,
-  digest: "34c0cac2693b0024393d7f111113574b12a29df4e9eab01bedd41e771ab6de12",
+  digest: "9c42566a65cbd31f92fc4a9319771561fe70a56da74c7306bd3e51f28cd8b9b6",
 };
 
 // Releases up to v0.1.43 recorded epoch 1 before the invite link tables existed.

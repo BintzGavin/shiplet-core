@@ -68,6 +68,7 @@ const testRemovedOrganizationMemberships = new Set<string>();
 const testOrganizationMembershipRoles = new Map<string, string>();
 const testFailingMembershipListings = new Set<string>();
 const testFailingMembershipLookups = new Set<string>();
+const testHangingMembershipListings = new Set<string>();
 const testMembershipListings: string[] = [];
 
 function testOrganizationMembershipKey(organizationId: string, userId: string) {
@@ -485,6 +486,9 @@ export async function listWorkOSOrganizationMembershipsPage(
     if (testFailingMembershipListings.has(options.userId)) {
       throw new Response("WorkOS is unavailable", { status: 503 });
     }
+    if (testHangingMembershipListings.has(options.userId)) {
+      return new Promise<never>(() => {});
+    }
     const identity = await env.DB.prepare(
       `SELECT user_id FROM workos_user_identities
 			 WHERE workos_user_id = ? LIMIT 1`,
@@ -684,6 +688,11 @@ export const workosTestDouble = {
   setMembershipListingFailure(userId: string, failing: boolean) {
     if (failing) testFailingMembershipListings.add(userId);
     else testFailingMembershipListings.delete(userId);
+  },
+  /** Makes WorkOS never answer a listing of the person's memberships. */
+  setMembershipListingHang(userId: string, hanging: boolean) {
+    if (hanging) testHangingMembershipListings.add(userId);
+    else testHangingMembershipListings.delete(userId);
   },
   /** Makes WorkOS fail to look up the person's membership of one organization. */
   setMembershipLookupFailure(userId: string, failing: boolean) {

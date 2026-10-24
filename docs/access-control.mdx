@@ -83,9 +83,12 @@ Organization API keys belong to the organization, not to the person who
 created them, and keep working; revoke any key the person should no longer
 control.
 
-If WorkOS cannot be reached or returns an error, Shiplet keeps every
-membership and tries again at the next sign-in or sweep. It removes a
-membership only after two WorkOS reads agree that it is gone.
+If WorkOS cannot be reached, takes more than a few seconds to answer during
+sign-in, or returns an error, Shiplet keeps every membership and tries again at
+the next sign-in or sweep. A person whose WorkOS reads fail three sweep runs in
+a row is left unchanged until the next pass, so the sweep still reaches
+everyone after them. Shiplet removes a membership only after two WorkOS reads
+agree that it is gone.
 
 ### Who can view
 

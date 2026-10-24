@@ -35,6 +35,19 @@ export const MEMBERSHIP_SWEEP_BATCH_SIZE = 20;
 export const MEMBERSHIP_SWEEP_WORKOS_REQUEST_BUDGET = 40;
 /** WorkOS requests one sign-in may spend on reconciliation. */
 const SIGN_IN_WORKOS_REQUEST_BUDGET = 10;
+/**
+ * Time all of one sign-in's WorkOS reads may take together. Past it the
+ * reconciliation gives up like on any other WorkOS failure, so a slow or hung
+ * WorkOS never holds up sign-in.
+ */
+export const SIGN_IN_WORKOS_TIMEOUT_MS = 3_000;
+/** Time all of one person's WorkOS reads may take during a sweep. */
+export const SWEEP_WORKOS_TIMEOUT_MS = 10_000;
+/**
+ * Consecutive sweep runs that may stop on the same person's failing WorkOS
+ * reads before the sweep passes over them, unchanged, until the next pass.
+ */
+export const MEMBERSHIP_SWEEP_MAX_CONSECUTIVE_FAILURES = 3;
 /** Pages of 100 memberships read per WorkOS identity before giving up. */
 const MAX_MEMBERSHIP_PAGES = 10;
 
@@ -74,6 +87,8 @@ class WorkOSReadFailed extends Error {
 
 type RequestBudget = { remaining: number };
 
+type ReadLimits = { budget: RequestBudget; deadline: number };
+
 function spend(budget: RequestBudget) {
   if (budget.remaining <= 0) throw new WorkOSRequestBudgetExhausted();
   budget.remaining -= 1;
@@ -91,13 +106,25 @@ function describeWorkOSError(error: unknown) {
   return { detail: "workos_error", retryable: true };
 }
 
-async function readWorkOS<T>(budget: RequestBudget, read: () => Promise<T>) {
-  spend(budget);
+async function readWorkOS<T>(limits: ReadLimits, read: () => Promise<T>) {
+  spend(limits.budget);
+  const remaining = limits.deadline - Date.now();
+  if (remaining <= 0) throw new WorkOSReadFailed("timeout", true);
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timedOut = new Promise<never>((_resolve, reject) => {
+    timer = setTimeout(
+      () => reject(new WorkOSReadFailed("timeout", true)),
+      remaining,
+    );
+  });
   try {
-    return await read();
+    return await Promise.race([read(), timedOut]);
   } catch (error) {
+    if (error instanceof WorkOSReadFailed) throw error;
     const { detail, retryable } = describeWorkOSError(error);
     throw new WorkOSReadFailed(detail, retryable);
+  } finally {
+    clearTimeout(timer);
   }
 }
 
@@ -113,7 +140,7 @@ function isAdministratorRole(role: string) {
 async function readWorkOSOrganizations(
   env: Env,
   workosUserIds: string[],
-  budget: RequestBudget,
+  limits: ReadLimits,
 ) {
   const organizations = new Map<string, boolean | null>();
   for (const workosUserId of workosUserIds) {
@@ -122,7 +149,7 @@ async function readWorkOSOrganizations(
       if (page >= MAX_MEMBERSHIP_PAGES) {
         throw new WorkOSReadFailed("too_many_membership_pages", false);
       }
-      const result = await readWorkOS(budget, () =>
+      const result = await readWorkOS(limits, () =>
         listWorkOSOrganizationMembershipsPage(env, {
           userId: workosUserId,
           after,
@@ -173,10 +200,13 @@ export async function reconcileWorkOSMembershipsForUser(
   options: {
     source: MembershipReconcileSource;
     budget?: RequestBudget;
+    /** Time all of this person's WorkOS reads may take together. */
+    timeoutMs?: number;
   },
 ): Promise<MembershipReconcileOutcome> {
-  const budget = options.budget ?? {
-    remaining: SIGN_IN_WORKOS_REQUEST_BUDGET,
+  const limits: ReadLimits = {
+    budget: options.budget ?? { remaining: SIGN_IN_WORKOS_REQUEST_BUDGET },
+    deadline: Date.now() + (options.timeoutMs ?? SIGN_IN_WORKOS_TIMEOUT_MS),
   };
   // Only rows recorded before the WorkOS reads may be removed or demoted, so
   // a membership a concurrent join records after the reads is left alone.
@@ -221,7 +251,7 @@ export async function reconcileWorkOSMembershipsForUser(
     const workosOrganizations = await readWorkOSOrganizations(
       env,
       workosUserIds,
-      budget,
+      limits,
     );
 
     const removedOrganizationIds: string[] = [];
@@ -233,7 +263,7 @@ export async function reconcileWorkOSMembershipsForUser(
         // so a truncated or blank list never removes anyone on its own.
         let confirmedAbsent = true;
         for (const workosUserId of workosUserIds) {
-          const found = await readWorkOS(budget, () =>
+          const found = await readWorkOS(limits, () =>
             findWorkOSOrganizationMembership(env, {
               organizationId: membership.organization_id,
               userId: workosUserId,
@@ -338,7 +368,9 @@ export type MembershipSweepResult = {
  * share it, and running a batch twice changes nothing more. When WorkOS is
  * unavailable, rate limits, or the request budget runs out, the run stops and
  * the next one resumes with the same person. A person WorkOS refuses for good
- * (any other 4xx) is logged and passed over until the next pass.
+ * (any other 4xx) is logged and passed over until the next pass, and so is a
+ * person whose reads stopped MEMBERSHIP_SWEEP_MAX_CONSECUTIVE_FAILURES runs in
+ * a row; either way nothing about them changes.
  */
 export async function sweepWorkOSMemberships(
   env: Env,
@@ -352,10 +384,15 @@ export async function sweepWorkOSMemberships(
   };
 
   const state = await env.DB.prepare(
-    `SELECT cursor_user_id FROM workos_membership_sync_state WHERE id = ?`,
+    `SELECT cursor_user_id, failing_user_id, failure_count
+		 FROM workos_membership_sync_state WHERE id = ?`,
   )
     .bind(SWEEP_STATE_ID)
-    .first<{ cursor_user_id: string }>();
+    .first<{
+      cursor_user_id: string;
+      failing_user_id: string | null;
+      failure_count: number;
+    }>();
   const startCursor = state?.cursor_user_id ?? "";
   const batch = await env.DB.prepare(
     `SELECT DISTINCT membership.user_id
@@ -375,10 +412,13 @@ export async function sweepWorkOSMemberships(
   let cursor = startCursor;
   let visited = 0;
   let stoppedReason: string | null = null;
+  let failingUserId = state?.failing_user_id ?? null;
+  let failureCount = state?.failure_count ?? 0;
   for (const userId of userIds) {
     const outcome = await reconcileWorkOSMembershipsForUser(env, userId, {
       source: "sweep",
       budget,
+      timeoutMs: SWEEP_WORKOS_TIMEOUT_MS,
     });
     // A person who needs more requests than a whole run allows would block
     // the sweep forever, so they are passed over instead of retried.
@@ -388,22 +428,56 @@ export async function sweepWorkOSMemberships(
       !(outcome.reason === "workos_request_budget_exhausted" && visited === 0)
     ) {
       stoppedReason = outcome.detail ?? outcome.reason;
+      if (outcome.reason === "workos_read_failed") {
+        failureCount = failingUserId === userId ? failureCount + 1 : 1;
+        failingUserId = userId;
+        if (failureCount >= MEMBERSHIP_SWEEP_MAX_CONSECUTIVE_FAILURES) {
+          // Pass over this person so everyone after them is still reached.
+          logMembershipSync("error", {
+            outcome: "passed_over",
+            reason: "repeated_workos_read_failures",
+            detail: stoppedReason,
+            failures: failureCount,
+            source: "sweep",
+          });
+          cursor = userId;
+          failingUserId = null;
+          failureCount = 0;
+        }
+      }
       break;
+    }
+    if (userId === failingUserId) {
+      failingUserId = null;
+      failureCount = 0;
     }
     cursor = userId;
     visited += 1;
   }
   const passComplete = stoppedReason === null && userIds.length < limit;
-  if (passComplete) cursor = "";
+  if (passComplete) {
+    cursor = "";
+    failingUserId = null;
+    failureCount = 0;
+  }
 
   await env.DB.prepare(
-    `INSERT INTO workos_membership_sync_state (id, cursor_user_id, updated_on)
-		 VALUES (?, ?, ?)
+    `INSERT INTO workos_membership_sync_state
+		   (id, cursor_user_id, failing_user_id, failure_count, updated_on)
+		 VALUES (?, ?, ?, ?, ?)
 		 ON CONFLICT(id) DO UPDATE SET
 		   cursor_user_id = excluded.cursor_user_id,
+		   failing_user_id = excluded.failing_user_id,
+		   failure_count = excluded.failure_count,
 		   updated_on = excluded.updated_on`,
   )
-    .bind(SWEEP_STATE_ID, cursor, new Date().toISOString())
+    .bind(
+      SWEEP_STATE_ID,
+      cursor,
+      failingUserId,
+      failureCount,
+      new Date().toISOString(),
+    )
     .run();
   return { visited, passComplete, stoppedReason, cursor };
 }
