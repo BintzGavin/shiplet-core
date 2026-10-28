@@ -1,7 +1,13 @@
 import { expect, test, type Locator, type Page } from "@playwright/test";
 
+import { loginAs, userIdForEmail } from "./helpers";
+
 async function openHeader(page: Page, variant: "public" | "authenticated") {
-	await page.goto(variant === "authenticated" ? "/auth/callback?code=test-code::header-motion%40example.test" : "/docs/quickstart");
+	if (variant === "authenticated") {
+		await loginAs(page, { email: "header-motion@example.test", id: userIdForEmail("header-motion@example.test") });
+	} else {
+		await page.goto("/docs/quickstart");
+	}
 	const header = page.getByRole("banner");
 	await expect(header).toHaveAttribute("data-header-variant", variant);
 	return header;

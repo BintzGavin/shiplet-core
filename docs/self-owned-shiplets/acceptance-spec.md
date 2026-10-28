@@ -514,7 +514,7 @@ session that is revoked when the command completes.
 
 Given representative legacy static-with-index, static-without-index, external
 URL, advanced Worker, private/org/unlisted/public, custom-hostname, archived,
-review-history, API-token, and WordPress rows, when additive migration runs,
+review-history, API-token, and embed installation rows, when additive migration runs,
 then existing URLs/content/access/review/inbox/embed/lifecycle behavior remains
 equivalent and a compatibility revision is active.
 

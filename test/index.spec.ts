@@ -19,6 +19,11 @@ import {
 } from "../src/review";
 import { ensureSchema } from "../src/schema";
 import {
+  acceptOfferedInvitationConsent,
+  signInWithCode,
+  signInWithMintedState,
+} from "./helpers/auth-flow";
+import {
   absolutizeCssUrlsForSnapshot,
   clampExpandedBubbleFrame,
   layoutReviewBubbles,
@@ -342,15 +347,35 @@ async function reviewAssetKeys() {
   return keys.sort();
 }
 
+async function shipletAssetKeys() {
+  const keys: string[] = [];
+  let cursor: string | undefined;
+  do {
+    const page = await (env as unknown as TestEnv).SHIPLET_ASSETS.list({
+      cursor,
+      limit: 1_000,
+    });
+    keys.push(...page.objects.map((object) => object.key));
+    cursor = page.truncated ? page.cursor : undefined;
+  } while (cursor);
+  return keys.sort();
+}
+
+async function projectCountForSubdomain(subdomain: string) {
+  const row = await (env as unknown as TestEnv).DB.prepare(
+    "SELECT COUNT(*) AS count FROM projects WHERE subdomain = ?",
+  )
+    .bind(subdomain)
+    .first<{ count: number }>();
+  return Number(row?.count || 0);
+}
+
 async function createTestOrganizationMember(
   organizationId: string,
   email: string,
 ) {
   const normalizedEmail = email.toLowerCase();
-  const callback = await requestHelper(
-    `/auth/callback?code=${encodeURIComponent(`test-code:${organizationId}:${encodeURIComponent(normalizedEmail)}`)}`,
-    { redirect: "manual" },
-  );
+  const callback = await signInWithCode(requestHelper, `test-code:${organizationId}:${encodeURIComponent(normalizedEmail)}`);
   expect(callback.status).toBe(302);
   const userId = `user_${normalizedEmail
     .replace(/[^a-z0-9]+/g, "-")
@@ -1379,9 +1404,10 @@ describe("Shiplet", () => {
       expect(introduction).not.toContain("immutable revision");
       expect(mcp).not.toContain("custom_shiplet_scope_required");
 
-      const wordpress = await requestHelper("/docs/wordpress");
-      expect(wordpress.status).toBe(301);
-      expect(wordpress.headers.get("location")).toBe("/docs/embed");
+      // The retired plugin guide is deleted, not redirected.
+      const retiredPluginGuide = await requestHelper("/docs/wordpress");
+      expect(retiredPluginGuide.status).toBe(404);
+      expect(retiredPluginGuide.headers.get("location")).toBeNull();
     });
 
     it("Given a visitor opens Why Shiplet, When the article renders, Then its product argument and future-facing ownership idea are canonical", async () => {
@@ -2433,10 +2459,7 @@ describe("Shiplet", () => {
     it("should support browser sessions in local test auth mode", async () => {
       await withCustomDomain("shiplet.cc", async () => {
         await withAppUrl("http://localhost", async () => {
-          const callback = await requestHelper(
-            "/auth/callback?code=test-code%3A%3Abrowser-ui%2540example.com",
-            { redirect: "manual" },
-          );
+          const callback = await signInWithCode(requestHelper, "test-code::browser-ui%40example.com");
           expect(callback.status).toBe(302);
           const cookie = callback.headers.get("set-cookie");
           expect(cookie).toContain("shiplet_session=");
@@ -2491,10 +2514,7 @@ describe("Shiplet", () => {
         project: { id: string };
       };
 
-      const callback = await requestHelper(
-        `/auth/callback?code=${encodeURIComponent(`test-code::${encodeURIComponent(email)}`)}`,
-        { redirect: "manual" },
-      );
+      const callback = await signInWithCode(requestHelper, `test-code::${encodeURIComponent(email)}`);
       expect(callback.status).toBe(302);
       const cookie = cookieHeaderFromResponse(callback);
 
@@ -2550,10 +2570,7 @@ describe("Shiplet", () => {
     });
 
     it("should assign and update user avatars", async () => {
-      const callback = await requestHelper(
-        "/auth/callback?code=test-code%3A%3Aavatar%2540example.com",
-        { redirect: "manual" },
-      );
+      const callback = await signInWithCode(requestHelper, "test-code::avatar%40example.com");
       const cookie = cookieHeaderFromResponse(callback);
       const me = await requestHelper("/api/me", { headers: { cookie } });
       expect(me.status).toBe(200);
@@ -2639,10 +2656,7 @@ describe("Shiplet", () => {
 
     it("should keep account switching disabled by default", async () => {
       await withFeatureFlags("", async () => {
-        const callback = await requestHelper(
-          "/auth/callback?code=test-code%3A%3Adefault-account%2540example.com",
-          { redirect: "manual" },
-        );
+        const callback = await signInWithCode(requestHelper, "test-code::default-account%40example.com");
         const cookie = cookieHeaderFromResponse(callback);
         expect(callback.headers.get("set-cookie")).toContain(
           "__Host-shiplet_session=",
@@ -2678,10 +2692,7 @@ describe("Shiplet", () => {
 
     it("should group and switch active email accounts when the flag is enabled", async () => {
       await withFeatureFlags("account-email-switching", async () => {
-        const firstCallback = await requestHelper(
-          "/auth/callback?code=test-code%3A%3Aalice%2540example.com",
-          { redirect: "manual" },
-        );
+        const firstCallback = await signInWithCode(requestHelper, "test-code::alice%40example.com");
         expect(firstCallback.status).toBe(302);
         const firstCookie = cookieHeaderFromResponse(firstCallback);
         expect(firstCallback.headers.get("set-cookie")).toContain(
@@ -2691,15 +2702,10 @@ describe("Shiplet", () => {
           "__Host-shiplet_account_group=",
         );
 
-        const addAccountState = btoa(
-          JSON.stringify({
-            returnTo: "/account",
-            accountAction: "add",
-          }),
-        );
-        const secondCallback = await requestHelper(
-          `/auth/callback?code=${encodeURIComponent("test-code::bob@example.com")}&state=${encodeURIComponent(addAccountState)}`,
-          { headers: { cookie: firstCookie }, redirect: "manual" },
+        const secondCallback = await signInWithCode(
+          requestHelper,
+          "test-code::bob@example.com",
+          { returnTo: "/account", accountAction: "add", cookie: firstCookie },
         );
         expect(secondCallback.status).toBe(302);
         expect(secondCallback.headers.get("location")).toBe("/account");
@@ -3836,7 +3842,12 @@ describe("Shiplet", () => {
       expect(memberTokenRevokeResponse.status).toBe(403);
     });
 
-    it("should preserve organization administrator access during WorkOS membership reconciliation", async () => {
+    // Sign-in reconciles memberships with WorkOS, which owns the role. A
+    // member-role invitation, or the organization AuthKit chose for the
+    // session, says nothing about the role and must not demote anyone; only
+    // WorkOS reporting a non-administrator role does (covered in
+    // test/workos-membership-sync.spec.ts).
+    it("should keep an administrator's role at sign-in when a member-role invitation and the sign-in organization imply member but WorkOS still reports administrator", async () => {
       const suffix = crypto.randomUUID().slice(0, 8);
       const adminEmail = `org-admin-${suffix}@example.com`;
       const adminHeaders = {
@@ -3871,13 +3882,12 @@ describe("Shiplet", () => {
       );
       expect(invitationResponse.status).toBe(201);
 
-      const callback = await requestHelper(
-        `/auth/callback?code=${encodeURIComponent(
-          `test-code:${organization.organization.id}:${encodeURIComponent(adminEmail)}`,
-        )}`,
-        { redirect: "manual" },
-      );
+      const listedBefore = workosTestDouble.membershipListings().length;
+      const callback = await signInWithCode(requestHelper, `test-code:${organization.organization.id}:${encodeURIComponent(adminEmail)}`);
       expect(callback.status).toBe(302);
+      expect(
+        workosTestDouble.membershipListings().slice(listedBefore),
+      ).toContain(adminHeaders["x-shiplet-user-id"]);
 
       const tokenList = await requestHelper(
         `/api/organizations/${organization.organization.id}/api-tokens`,
@@ -4049,12 +4059,7 @@ describe("Shiplet", () => {
         )
         .run();
 
-      const callback = await requestHelper(
-        `/auth/callback?code=${encodeURIComponent(
-          `test-code:${organization.id}:${encodeURIComponent(invitedEmail)}`,
-        )}`,
-        { redirect: "manual" },
-      );
+      const callback = await signInWithCode(requestHelper, `test-code:${organization.id}:${encodeURIComponent(invitedEmail)}`);
       expect(callback.status).toBe(302);
 
       const membership = await (env as unknown as TestEnv).DB.prepare(
@@ -4088,12 +4093,7 @@ describe("Shiplet", () => {
       );
       expect(invitationResponse.status).toBe(201);
 
-      const callback = await requestHelper(
-        `/auth/callback?code=${encodeURIComponent(
-          `test-code:${organization.id}:${encodeURIComponent(member.email)}`,
-        )}`,
-        { redirect: "manual" },
-      );
+      const callback = await signInWithCode(requestHelper, `test-code:${organization.id}:${encodeURIComponent(member.email)}`);
       expect(callback.status).toBe(302);
 
       const membership = await (env as unknown as TestEnv).DB.prepare(
@@ -8323,6 +8323,61 @@ describe("Shiplet", () => {
       expect(text).toContain("Unsafe asset path");
     });
 
+    it.each([
+      ["a reserved device name", ["con.html"], "Unsupported asset path: con.html"],
+      [
+        "a character portable packages reject",
+        ["index.html", "notes?.txt"],
+        "Unsupported asset path: notes?.txt",
+      ],
+      [
+        "paths that differ only by letter case",
+        ["index.html", "A.css", "a.css"],
+        "Asset paths collide: A.css and a.css",
+      ],
+      [
+        "paths that differ only by Unicode form",
+        ["index.html", "caf\u00e9.css", "cafe\u0301.css"],
+        "Asset paths collide: caf\u00e9.css and cafe\u0301.css",
+      ],
+      [
+        "the same path after normalization",
+        ["index.html", "./index.html"],
+        "Asset paths collide: index.html and ./index.html",
+      ],
+    ])(
+      "Given static files with %s, When they are published, Then the upload fails with 400 before anything is saved and the subdomain stays free",
+      async (_label, paths, message) => {
+        const organization = await createTestOrganization(makeRequest);
+        const subdomain = `unportable-${crypto.randomUUID().slice(0, 8)}`;
+        const assetKeysBefore = await shipletAssetKeys();
+
+        const response = await makeRequest("/projects", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            name: "Unportable Static Upload",
+            organization_id: organization.id,
+            subdomain,
+            assets: paths.map((path, index) => ({
+              path,
+              content: btoa(`<!doctype html><h1>File ${index}</h1>`),
+            })),
+          }),
+        });
+
+        expect(response.status).toBe(400);
+        expect(await response.text()).toContain(message);
+        expect(await projectCountForSubdomain(subdomain)).toBe(0);
+        expect(await shipletAssetKeys()).toEqual(assetKeysBefore);
+
+        const retry = await publishStaticShiplet(makeRequest, organization.id, {
+          subdomain,
+        });
+        expect(retry.project.subdomain).toBe(subdomain);
+      },
+    );
+
     it("should reject risky or unsupported static asset types", async () => {
       const organization = await createTestOrganization(makeRequest);
       const response = await makeRequest("/projects", {
@@ -8430,6 +8485,129 @@ describe("Shiplet", () => {
       expect(text).toContain("Asset is too large");
     });
 
+    it("Given static files over the total upload limit, When they are published, Then the upload fails with 413 before anything is saved and the subdomain stays free", async () => {
+      const organization = await createTestOrganization(makeRequest);
+      const subdomain = `over-limit-${crypto.randomUUID().slice(0, 8)}`;
+      const stylesheet = btoa("x".repeat(9_500_000));
+      const assetKeysBefore = await shipletAssetKeys();
+
+      const response = await makeRequest("/projects", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          name: "Over Limit Static Upload",
+          organization_id: organization.id,
+          subdomain,
+          assets: [
+            {
+              path: "index.html",
+              content: btoa("<!doctype html><h1>Large</h1>"),
+              size: 29,
+            },
+            ...[0, 1, 2].map((index) => ({
+              path: `styles/part-${index}.css`,
+              content: stylesheet,
+              size: 9_500_000,
+            })),
+          ],
+        }),
+      });
+
+      expect(response.status).toBe(413);
+      expect(await response.text()).toBe(
+        "Static upload is too large. Total files are limited to 24 MB.",
+      );
+      expect(await projectCountForSubdomain(subdomain)).toBe(0);
+      expect(await shipletAssetKeys()).toEqual(assetKeysBefore);
+
+      const retry = await publishStaticShiplet(makeRequest, organization.id, {
+        subdomain,
+      });
+      expect(retry.project.subdomain).toBe(subdomain);
+    }, 60_000);
+
+    it("Given text files without an index.html whose escaped previews push the package over its limit, When they are published, Then the upload fails with 413 before anything is saved", async () => {
+      const organization = await createTestOrganization(makeRequest);
+      const subdomain = `review-page-limit-${crypto.randomUUID().slice(0, 8)}`;
+      // Each quote becomes &quot; in the generated file review page.
+      const notes = btoa('"'.repeat(7_999_000));
+      const assetKeysBefore = await shipletAssetKeys();
+
+      const response = await makeRequest("/projects", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          name: "Generated Review Page Limit",
+          organization_id: organization.id,
+          subdomain,
+          assets: [0, 1, 2].map((index) => ({
+            path: `notes/part-${index}.txt`,
+            content: notes,
+            size: 7_999_000,
+          })),
+        }),
+      });
+
+      expect(response.status).toBe(413);
+      expect(await response.text()).toBe(
+        "Static upload is too large. Total files are limited to 24 MB, including the file review page Shiplet creates when index.html is absent.",
+      );
+      expect(await projectCountForSubdomain(subdomain)).toBe(0);
+      expect(await shipletAssetKeys()).toEqual(assetKeysBefore);
+
+      const retry = await publishStaticShiplet(makeRequest, organization.id, {
+        subdomain,
+      });
+      expect(retry.project.subdomain).toBe(subdomain);
+    }, 60_000);
+
+    it("Given static files at the advertised total upload limit, When they are published, Then the Shiplet gets a revision and serves every file", async () => {
+      const organization = await createTestOrganization(makeRequest);
+      const subdomain = `at-limit-${crypto.randomUUID().slice(0, 8)}`;
+      const html =
+        '<!doctype html><link rel="stylesheet" href="/styles/part-0.css">';
+      const partSizes = [8_000_000, 8_000_000, 8_000_000 - html.length];
+      expect(html.length + partSizes.reduce((sum, size) => sum + size)).toBe(
+        24_000_000,
+      );
+
+      const response = await makeRequest("/projects", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          name: "At Limit Static Upload",
+          organization_id: organization.id,
+          subdomain,
+          assets: [
+            { path: "index.html", content: btoa(html), size: html.length },
+            ...partSizes.map((size, index) => ({
+              path: `styles/part-${index}.css`,
+              content: btoa("x".repeat(size)),
+              size,
+            })),
+          ],
+        }),
+      });
+
+      expect(response.status, await response.clone().text()).toBe(201);
+      const body = (await response.json()) as { project: { id: string } };
+      const project = await (env as unknown as TestEnv).DB.prepare(
+        "SELECT active_revision_id FROM projects WHERE id = ?",
+      )
+        .bind(body.project.id)
+        .first<{ active_revision_id: string | null }>();
+      expect(project?.active_revision_id).toBeTruthy();
+
+      for (const [index, size] of partSizes.entries()) {
+        const assetResponse = await makeRequest(
+          `/${subdomain}/styles/part-${index}.css`,
+        );
+        expect(assetResponse.status).toBe(200);
+        expect(assetResponse.headers.get("content-length")).toBe(String(size));
+        expect((await assetResponse.arrayBuffer()).byteLength).toBe(size);
+      }
+    }, 120_000);
+
     it("should publish and serve large screenshot-sized static assets from object storage", async () => {
       const organization = await createTestOrganization(makeRequest);
       const subdomain = `large-image-${crypto.randomUUID().slice(0, 8)}`;
@@ -8468,6 +8646,137 @@ describe("Shiplet", () => {
       expect(assetResponse.headers.get("content-length")).toBe("5000000");
       expect(assetResponse.headers.get("x-shiplet-static-fallback")).toBe("r2");
     }, 15_000);
+
+    async function publishPreviewCookieShiplet(organizationId: string) {
+      const { project } = await publishStaticShiplet(
+        makeRequest,
+        organizationId,
+        {
+          visibility: "organization",
+          assets: [
+            {
+              path: "index.html",
+              content: btoa(
+                '<!doctype html><link rel="stylesheet" href="styles/site.css">',
+              ),
+            },
+            { path: "styles/site.css", content: btoa("body{color:#172243}") },
+          ],
+        },
+      );
+      return project;
+    }
+
+    // The cookie the review host sets for the opaque artifact frame.
+    async function previewCookie(projectId: string, issuedAt = new Date()) {
+      const token = await createReviewCapabilityToken({
+        secret:
+          (env as unknown as { SHIPLET_REVIEW_TOKEN_SECRET?: string })
+            .SHIPLET_REVIEW_TOKEN_SECRET ||
+          "shiplet-test-review-capability-secret",
+        projectId,
+        viewer: { id: "user_test", email: "test@example.com", name: "Test" },
+        scopes: ["feedback:read", "feedback:write", "presence:join", "watch:write"],
+        expiresInSeconds: 5 * 60,
+        now: issuedAt,
+      });
+      return `shiplet_artifact_access=${encodeURIComponent(token)}`;
+    }
+
+    function frameFileUrl(projectId: string) {
+      return `/shiplets/${projectId}/artifact-frame/styles/site.css`;
+    }
+
+    it("Given only the preview cookie, When the in-app artifact frame loads a file of the bound Shiplet, Then GET and HEAD serve it", async () => {
+      const organization = await createTestOrganization(makeRequest);
+      const project = await publishPreviewCookieShiplet(organization.id);
+      const cookie = await previewCookie(project.id);
+
+      const anonymous = await requestHelper(frameFileUrl(project.id));
+      expect(anonymous.status).toBe(302);
+
+      const served = await requestHelper(frameFileUrl(project.id), {
+        headers: { Cookie: cookie },
+      });
+      expect(served.status).toBe(200);
+      expect(await served.text()).toBe("body{color:#172243}");
+
+      const head = await requestHelper(frameFileUrl(project.id), {
+        method: "HEAD",
+        headers: { Cookie: cookie },
+      });
+      expect(head.status).toBe(200);
+      expect(head.headers.get("content-type")).toContain("text/css");
+    });
+
+    it("Given the preview cookie of one Shiplet, When the in-app artifact frame of another Shiplet loads a file, Then it is refused", async () => {
+      const organization = await createTestOrganization(makeRequest);
+      const project = await publishPreviewCookieShiplet(organization.id);
+      const otherProject = await publishPreviewCookieShiplet(organization.id);
+
+      const response = await requestHelper(frameFileUrl(otherProject.id), {
+        headers: { Cookie: await previewCookie(project.id) },
+      });
+
+      expect(response.status).toBe(302);
+      expect(response.headers.get("location")).toContain("/auth/login");
+    });
+
+    it("Given an expired preview cookie, When the in-app artifact frame loads a file, Then it is refused", async () => {
+      const organization = await createTestOrganization(makeRequest);
+      const project = await publishPreviewCookieShiplet(organization.id);
+
+      const response = await requestHelper(frameFileUrl(project.id), {
+        headers: {
+          Cookie: await previewCookie(
+            project.id,
+            new Date(Date.now() - (5 * 60 + 1) * 1000),
+          ),
+        },
+      });
+
+      expect(response.status).toBe(302);
+      expect(response.headers.get("location")).toContain("/auth/login");
+    });
+
+    it("Given a valid preview cookie, When a request other than GET or HEAD reaches the in-app artifact frame, Then it is refused", async () => {
+      const organization = await createTestOrganization(makeRequest);
+      const project = await publishPreviewCookieShiplet(organization.id);
+      const cookie = await previewCookie(project.id);
+
+      const crossSite = await requestHelper(frameFileUrl(project.id), {
+        method: "POST",
+        headers: { Cookie: cookie },
+      });
+      expect(crossSite.status).toBe(403);
+      expect(await crossSite.text()).not.toContain("body{color:#172243}");
+
+      const sameOrigin = await requestHelper(frameFileUrl(project.id), {
+        method: "POST",
+        headers: { Cookie: cookie, Origin: "http://localhost" },
+      });
+      expect(sameOrigin.status).toBe(404);
+      expect(await sameOrigin.text()).not.toContain("body{color:#172243}");
+    });
+
+    it("Given a valid preview cookie, When it is sent to routes outside the artifact frame, Then it grants nothing", async () => {
+      const organization = await createTestOrganization(makeRequest);
+      const project = await publishPreviewCookieShiplet(organization.id);
+      const cookie = await previewCookie(project.id);
+
+      const reviewHost = await requestHelper(
+        `/shiplets/${project.id}/review-host`,
+        { headers: { Cookie: cookie } },
+      );
+      expect(reviewHost.status).toBe(302);
+      expect(reviewHost.headers.get("location")).toContain("/auth/login");
+
+      const feedback = await requestHelper(
+        `/api/projects/${project.id}/review-feedback`,
+        { headers: { Cookie: cookie } },
+      );
+      expect(feedback.status).toBe(401);
+    });
 
     it("should keep root-relative static image URLs inside the authenticated preview route", async () => {
       const organization = await createTestOrganization(makeRequest);
@@ -8569,7 +8878,7 @@ describe("Shiplet", () => {
       ["SVG image", "diagram.svg", "image/svg+xml"],
       ["video", "walkthrough.webm", "video/webm"],
     ])(
-      "should render a standalone uploaded %s without an authenticated subresource request",
+      "should render a standalone uploaded %s from its stored file",
       async (_label, fileName, mediaType) => {
         const organization = await createTestOrganization(makeRequest);
         const subdomain = `standalone-media-${crypto.randomUUID().slice(0, 8)}`;
@@ -8598,15 +8907,121 @@ describe("Shiplet", () => {
         );
         expect(artifact.status).toBe(200);
         const html = await artifact.text();
-        expect(html).toContain(
-          `src="data:${mediaType};base64,${btoa(mediaBytes)}"`,
-        );
+        const storedHref = `./${encodeURIComponent(fileName)}`;
+        expect(html).toContain(`src="${storedHref}"`);
+        expect(html).not.toContain(`data:${mediaType}`);
         expect(html).toContain("height: 100dvh");
         expect(html).toContain("object-fit: contain");
         expect(html).not.toContain(`src="/shiplets/${body.project.id}/`);
         expect(html).not.toContain('class="asset-card"');
+
+        const media = await makeRequest(
+          new URL(
+            storedHref,
+            `http://localhost/shiplets/${body.project.id}/artifact-frame/`,
+          ).toString(),
+        );
+        expect(media.status).toBe(200);
+        expect(media.headers.get("content-type")).toContain(mediaType);
+        expect(new TextDecoder().decode(await media.arrayBuffer())).toBe(
+          mediaBytes,
+        );
       },
     );
+
+    it("Given a standalone 4 MB PNG, When it is published, Then its review page shows the stored image instead of a copy", async () => {
+      const organization = await createTestOrganization(makeRequest);
+      const subdomain = `standalone-png-${crypto.randomUUID().slice(0, 8)}`;
+      const response = await makeRequest("/projects", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          name: "Standalone Screenshot",
+          organization_id: organization.id,
+          subdomain,
+          assets: [
+            {
+              path: "screenshot.png",
+              content: btoa("x".repeat(4_000_000)),
+              size: 4_000_000,
+            },
+          ],
+        }),
+      });
+
+      expect(response.status, await response.clone().text()).toBe(201);
+      const body = (await response.json()) as { project: { id: string } };
+      const reviewPage = await makeRequest(
+        `/shiplets/${body.project.id}/artifact-frame/`,
+      );
+      expect(reviewPage.status).toBe(200);
+      const html = await reviewPage.text();
+      expect(html).toContain('src="./screenshot.png"');
+      expect(html).not.toContain("data:");
+      expect(html.length).toBeLessThan(100_000);
+
+      const image = await makeRequest(
+        `/shiplets/${body.project.id}/artifact-frame/screenshot.png`,
+      );
+      expect(image.status).toBe(200);
+      expect(image.headers.get("content-type")).toContain("image/png");
+      expect((await image.arrayBuffer()).byteLength).toBe(4_000_000);
+    }, 60_000);
+
+    it("Given a standalone 8 MB PDF, When it is published, Then its review page downloads the stored file", async () => {
+      const organization = await createTestOrganization(makeRequest);
+      const subdomain = `standalone-pdf-${crypto.randomUUID().slice(0, 8)}`;
+      const response = await makeRequest("/projects", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          name: "Standalone Report",
+          organization_id: organization.id,
+          subdomain,
+          assets: [
+            {
+              path: "reports/Q3 report.pdf",
+              content: btoa("x".repeat(8_000_000)),
+              size: 8_000_000,
+            },
+          ],
+        }),
+      });
+
+      expect(response.status, await response.clone().text()).toBe(201);
+      const body = (await response.json()) as { project: { id: string } };
+      const reviewPage = await makeRequest(
+        `/shiplets/${body.project.id}/artifact-frame/`,
+      );
+      const html = await reviewPage.text();
+      expect(html).toContain('class="asset-binary-preview"');
+      expect(html).toContain(
+        'href="./reports/Q3%20report.pdf?shiplet_download=1"',
+      );
+      expect(html).not.toContain("data:");
+
+      for (const frame of [
+        `/shiplets/${body.project.id}/artifact-frame`,
+        `/${subdomain}/__shiplet/artifact-frame`,
+      ]) {
+        const download = await makeRequest(
+          `${frame}/reports/Q3%20report.pdf?shiplet_download=1`,
+        );
+        expect(download.status).toBe(200);
+        expect(download.headers.get("content-type")).toContain(
+          "application/pdf",
+        );
+        expect(download.headers.get("content-disposition")).toBe(
+          "attachment; filename=\"Q3 report.pdf\"; filename*=UTF-8''Q3%20report.pdf",
+        );
+        expect((await download.arrayBuffer()).byteLength).toBe(8_000_000);
+
+        const opened = await makeRequest(`${frame}/reports/Q3%20report.pdf`);
+        expect(opened.status).toBe(200);
+        expect(opened.headers.get("content-disposition")).toBeNull();
+        await opened.arrayBuffer();
+      }
+    }, 60_000);
 
     it("should safely accept and preview common code, document, data, and GIS formats", async () => {
       const organization = await createTestOrganization(makeRequest);
@@ -8676,8 +9091,8 @@ describe("Shiplet", () => {
       expect(html).toContain('class="asset-text-preview"');
       expect(html).toContain('class="asset-binary-preview"');
       expect(html).toContain("Shapefile set");
-      expect(html).toContain("data:application/pdf;base64,");
-      expect(html).not.toContain('href="./report.pdf"');
+      expect(html).toContain('href="./report.pdf?shiplet_download=1"');
+      expect(html).not.toContain("data:");
 
       const contentTypes = [
         ["app.ts", "text/plain"],
@@ -9862,12 +10277,7 @@ describe("Shiplet", () => {
         organization: { id: string };
       };
       const unknownOrganizationId = `org_external_${crypto.randomUUID()}`;
-      const callback = await requestHelper(
-        `/auth/callback?code=${encodeURIComponent(
-          `test-code:${unknownOrganizationId}:${encodeURIComponent(email)}`,
-        )}`,
-        { redirect: "manual" },
-      );
+      const callback = await signInWithCode(requestHelper, `test-code:${unknownOrganizationId}:${encodeURIComponent(email)}`);
       expect(callback.status).toBe(302);
       const identityResponse = await requestHelper("/api/me", {
         headers: { cookie: cookieHeaderFromResponse(callback) },
@@ -9908,12 +10318,7 @@ describe("Shiplet", () => {
       const { organization } = (await createResponse.json()) as {
         organization: { id: string };
       };
-      const callback = await requestHelper(
-        `/auth/callback?code=${encodeURIComponent(
-          `test-code:${organization.id}:${encodeURIComponent(email)}`,
-        )}`,
-        { redirect: "manual" },
-      );
+      const callback = await signInWithCode(requestHelper, `test-code:${organization.id}:${encodeURIComponent(email)}`);
       expect(callback.status).toBe(302);
 
       const membership = await (env as unknown as TestEnv).DB.prepare(
@@ -10091,16 +10496,24 @@ describe("Shiplet", () => {
         }),
       );
       const invitedUserId = "user_gavin-swirlwebdesign-com";
-      const callback = await requestHelper(
-        `/auth/callback?code=${encodeURIComponent(
-          `test-code:${body.organization.id}:${encodeURIComponent(
+      const callback = await signInWithMintedState(requestHelper, env, `test-code:${body.organization.id}:${encodeURIComponent(
             body.invitation.email,
-          )}`,
-        )}&state=${encodeURIComponent(state)}`,
-        { redirect: "manual" },
-      );
+          )}`, JSON.parse(atob(state)));
       expect(callback.status).toBe(302);
-      expect(callback.headers.get("location")).toBe(body.shipletUrl);
+      // The emailed token signs the invitee in; the team and Shiplet access
+      // wait for the consent step that sign-in offers.
+      const pendingAfterSignIn = await (env as unknown as TestEnv).DB.prepare(
+        `SELECT status FROM app_invitations WHERE id = ?`,
+      )
+        .bind(body.invitation.id)
+        .first<{ status: string }>();
+      expect(pendingAfterSignIn?.status).toBe("pending");
+      const { accepted } = await acceptOfferedInvitationConsent(
+        requestHelper,
+        callback,
+      );
+      expect(accepted.status).toBe(302);
+      expect(accepted.headers.get("location")).toBe(body.shipletUrl);
 
       const orgMembership = await (env as unknown as TestEnv).DB.prepare(
         `SELECT id FROM organization_memberships
@@ -10149,12 +10562,15 @@ describe("Shiplet", () => {
 
       const state = btoa(JSON.stringify({ returnTo: body.shipletUrl }));
       const code = `test-code:${body.organization.id}:${encodeURIComponent("invited@example.com")}`;
-      const callback = await requestHelper(
-        `/auth/callback?code=${encodeURIComponent(code)}&state=${encodeURIComponent(state)}`,
-        { redirect: "manual" },
-      );
+      const callback = await signInWithMintedState(requestHelper, env, code, JSON.parse(atob(state)));
       expect(callback.status).toBe(302);
-      expect(callback.headers.get("location")).toBe(body.shipletUrl);
+      // Sign-in offers the invitation's consent step instead of accepting it.
+      const consentUrl = new URL(
+        callback.headers.get("location") || "",
+        "http://localhost",
+      );
+      expect(consentUrl.pathname).toBe("/auth/login");
+      expect(consentUrl.searchParams.get("consent")).toBeTruthy();
 
       const appInvitation = await (env as unknown as TestEnv).DB.prepare(
         `SELECT status, accepted_on
@@ -10332,6 +10748,7 @@ describe("Shiplet", () => {
       };
       expect(body.grant.target_type).toBe("team");
       expect(body.grant.target_id).toBe(team.id);
+      expect((body as { delivery?: string }).delivery).toBe("granted");
       expect(body.grant.role).toBe("reviewer");
     });
 
@@ -10402,12 +10819,7 @@ describe("Shiplet", () => {
         }),
       );
 
-      const callback = await requestHelper(
-        `/auth/callback?code=${encodeURIComponent(
-          "test-code::different-reviewer@example.com",
-        )}&state=${encodeURIComponent(state)}`,
-        { redirect: "manual" },
-      );
+      const callback = await signInWithMintedState(requestHelper, env, "test-code::different-reviewer@example.com", JSON.parse(atob(state)));
       expect(callback.status).toBe(302);
 
       const unauthorizedArtifact = await requestHelper(
@@ -10448,12 +10860,7 @@ describe("Shiplet", () => {
       ].join(":");
       const state = btoa(JSON.stringify({ invitationToken }));
 
-      const callback = await requestHelper(
-        `/auth/callback?code=${encodeURIComponent(
-          `test-code::${encodeURIComponent(authenticatedEmail)}`,
-        )}&state=${encodeURIComponent(state)}`,
-        { redirect: "manual" },
-      );
+      const callback = await signInWithMintedState(requestHelper, env, `test-code::${encodeURIComponent(authenticatedEmail)}`, JSON.parse(atob(state)));
       expect(callback.status).toBe(302);
 
       const unauthorizedMembership = await (
@@ -10538,18 +10945,18 @@ describe("Shiplet", () => {
         ).not.toContain(publishBody.project.id);
       }
 
-      const state = btoa(
-        JSON.stringify({
-          invitationToken: pendingInvitation!.workos_invitation_token,
-        }),
-      );
-      const callback = await requestHelper(
-        `/auth/callback?code=${encodeURIComponent(
-          `test-code::${encodeURIComponent(editorEmail)}`,
-        )}&state=${encodeURIComponent(state)}`,
-        { redirect: "manual" },
+      const callback = await signInWithMintedState(
+        requestHelper,
+        env,
+        `test-code::${encodeURIComponent(editorEmail)}`,
+        { returnTo: `/shiplets/${publishBody.project.id}` },
       );
       expect(callback.status).toBe(302);
+      const { accepted } = await acceptOfferedInvitationConsent(
+        requestHelper,
+        callback,
+      );
+      expect(accepted.status).toBe(302);
 
       const acceptedShare = await requestHelper(
         `/api/projects/${publishBody.project.id}/invitations`,
@@ -10659,10 +11066,7 @@ describe("Shiplet", () => {
       email: string,
     ) {
       const normalizedEmail = email.toLowerCase();
-      const callback = await requestHelper(
-        `/auth/callback?code=${encodeURIComponent(`test-code:${organizationId}:${encodeURIComponent(normalizedEmail)}`)}`,
-        { redirect: "manual" },
-      );
+      const callback = await signInWithCode(requestHelper, `test-code:${organizationId}:${encodeURIComponent(normalizedEmail)}`);
       expect(callback.status).toBe(302);
       const userId = `user_${normalizedEmail
         .replace(/[^a-z0-9]+/g, "-")
@@ -11216,7 +11620,7 @@ describe("Shiplet", () => {
       expect(expanded.width).toBe(320);
     });
 
-    it("should autocomplete org mentions, invite mentioned reviewers, and create inbox notifications", async () => {
+    it("should autocomplete org mentions, let an editor's mention invite reviewers, and create inbox notifications", async () => {
       const { organization, project } = await createReviewShiplet();
       const reviewer = await createOrganizationMember(
         organization.id,
@@ -11345,6 +11749,349 @@ describe("Shiplet", () => {
       expect(mentionedFeedback.feedback.map((item) => item.id)).toContain(
         created.feedback.id,
       );
+    });
+
+    async function createPrivateMentionShiplet() {
+      const organization = await createTestOrganization(makeRequest);
+      const response = await makeRequest("/projects", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          name: "Private mention Shiplet",
+          organization_id: organization.id,
+          subdomain: `mention-${crypto.randomUUID().slice(0, 8)}`,
+          visibility: "private",
+          assets: [
+            {
+              path: "index.html",
+              content: btoa("<!doctype html><h1>Private</h1>"),
+              size: 31,
+            },
+          ],
+        }),
+      });
+      expect(response.status).toBe(201);
+      const body = (await response.json()) as {
+        project: { id: string; organization_id: string };
+      };
+      const member = (label: string) =>
+        createOrganizationMember(
+          organization.id,
+          `${label}-${crypto.randomUUID().slice(0, 8)}@example.com`,
+        );
+      const grant = (userId: string, email: string, role: string) =>
+        (env as unknown as TestEnv).DB.prepare(
+          `INSERT INTO shiplet_access_grants
+           (id, project_id, organization_id, target_type, target_id, email, role,
+            invited_by_user_id, workos_invitation_id, created_on, accepted_on)
+           VALUES (?, ?, ?, 'user', ?, ?, ?, ?, NULL, ?, ?)`,
+        )
+          .bind(
+            `grant_${crypto.randomUUID().replace(/-/g, "")}`,
+            body.project.id,
+            organization.id,
+            userId,
+            email,
+            role,
+            AUTH_HEADERS["x-shiplet-user-id"],
+            new Date().toISOString(),
+            new Date().toISOString(),
+          )
+          .run();
+      await muteOwnerWatch(body.project.id);
+      return { organization, project: body.project, member, grant };
+    }
+
+    // Non-owner authors would otherwise notify the owner as the default
+    // watcher, and later tests expect the shared owner's inbox to be empty.
+    async function muteOwnerWatch(projectId: string) {
+      const now = new Date().toISOString();
+      await (env as unknown as TestEnv).DB.prepare(
+        `INSERT INTO shiplet_watch_subscriptions
+         (project_id, user_id, status, created_by_user_id, created_on, updated_on)
+         VALUES (?, ?, 'muted', ?, ?, ?)`,
+      )
+        .bind(
+          projectId,
+          AUTH_HEADERS["x-shiplet-user-id"],
+          AUTH_HEADERS["x-shiplet-user-id"],
+          now,
+          now,
+        )
+        .run();
+    }
+
+    async function mentionSideEffects(projectId: string, userId: string) {
+      return (env as unknown as TestEnv).DB.prepare(
+        `SELECT
+         (SELECT COUNT(*) FROM shiplet_access_grants
+          WHERE project_id = ? AND target_type = 'user' AND target_id = ?) AS grants,
+         (SELECT COUNT(*) FROM review_notifications
+          WHERE project_id = ? AND recipient_user_id = ?) AS notifications,
+         (SELECT COUNT(*) FROM review_feedback_mentions
+          WHERE project_id = ? AND mentioned_user_id = ?) AS mentions`,
+      )
+        .bind(projectId, userId, projectId, userId, projectId, userId)
+        .first<{ grants: number; notifications: number; mentions: number }>();
+    }
+
+    it("Given a private Shiplet, When a viewer mentions a member without access, Then only people who can already view are notified and nothing reveals the skipped member", async () => {
+      const { project, member, grant } = await createPrivateMentionShiplet();
+      const viewer = await member("mention-viewer");
+      const target = await member("mention-target");
+      const colleague = await member("mention-colleague");
+      await grant(viewer.id, viewer.email, "viewer");
+      await grant(colleague.id, colleague.email, "reviewer");
+
+      const before = await requestHelper(`/shiplets/${project.id}`, {
+        headers: target.headers,
+        redirect: "manual",
+      });
+      expect(before.status).toBe(302);
+      expect(before.headers.get("location")).toContain(
+        `/shiplets/${project.id}/access`,
+      );
+
+      const postFeedback = (mentions: unknown[]) =>
+        requestHelper(`/api/projects/${project.id}/review-feedback`, {
+          method: "POST",
+          headers: { ...viewer.headers, "Content-Type": "application/json" },
+          body: JSON.stringify({
+            comment: "Viewer mention",
+            pageUrl: "http://localhost/review/viewer-mentions",
+            clientFeedbackId: `client-${crypto.randomUUID()}`,
+            mentions,
+          }),
+        });
+      type CreatedFeedback = {
+        feedback: {
+          id: string;
+          mentions: Array<{ mentioned_user_id: string; access_status: string }>;
+        };
+      };
+      const skipped = await postFeedback([
+        { userId: target.id },
+        { email: target.email },
+      ]);
+      expect(skipped.status).toBe(201);
+      const skippedText = await skipped.text();
+      const skippedBody = JSON.parse(skippedText) as CreatedFeedback;
+      expect(skippedBody.feedback.mentions).toEqual([]);
+      expect(skippedText).not.toContain(target.id);
+      expect(skippedText).not.toContain(target.email);
+      const unknown = await postFeedback([
+        { userId: `user_unknown_${crypto.randomUUID()}` },
+        { email: `unknown-${crypto.randomUUID()}@example.com` },
+      ]);
+      expect(unknown.status).toBe(201);
+      expect(((await unknown.json()) as CreatedFeedback).feedback.mentions).toEqual(
+        [],
+      );
+
+      const notified = await postFeedback([
+        { userId: colleague.id },
+        { userId: target.id },
+      ]);
+      expect(notified.status).toBe(201);
+      const notifiedBody = (await notified.json()) as CreatedFeedback;
+      expect(
+        notifiedBody.feedback.mentions.map((mention) => mention.mentioned_user_id),
+      ).toEqual([colleague.id]);
+      expect(notifiedBody.feedback.mentions[0].access_status).toBe("active");
+
+      const reply = await requestHelper(
+        `/api/projects/${project.id}/review-feedback/${notifiedBody.feedback.id}/replies`,
+        {
+          method: "POST",
+          headers: { ...viewer.headers, "Content-Type": "application/json" },
+          body: JSON.stringify({
+            comment: "Viewer reply mention",
+            mentions: [{ email: target.email }],
+          }),
+        },
+      );
+      expect(reply.status).toBe(201);
+      expect(await reply.text()).not.toContain(target.email);
+
+      expect(await mentionSideEffects(project.id, target.id)).toEqual({
+        grants: 0,
+        notifications: 0,
+        mentions: 0,
+      });
+      expect(await mentionSideEffects(project.id, colleague.id)).toEqual({
+        grants: 1,
+        notifications: 1,
+        mentions: 1,
+      });
+      const after = await requestHelper(`/shiplets/${project.id}`, {
+        headers: target.headers,
+        redirect: "manual",
+      });
+      expect(after.status).toBe(302);
+
+      const invited = await makeRequest(
+        `/api/projects/${project.id}/review-feedback`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            comment: "Owner invites the target",
+            pageUrl: "http://localhost/review/editor-mentions",
+            clientFeedbackId: `client-${crypto.randomUUID()}`,
+            mentions: [{ userId: target.id }],
+          }),
+        },
+      );
+      expect(invited.status).toBe(201);
+      const invitedBody = (await invited.json()) as CreatedFeedback;
+      expect(invitedBody.feedback.mentions[0]).toMatchObject({
+        mentioned_user_id: target.id,
+        access_status: "invited",
+      });
+      expect(await mentionSideEffects(project.id, target.id)).toEqual({
+        grants: 1,
+        notifications: 1,
+        mentions: 1,
+      });
+      const invitedView = await requestHelper(`/shiplets/${project.id}`, {
+        headers: target.headers,
+        redirect: "manual",
+      });
+      expect(invitedView.status).toBe(200);
+    });
+
+    it("Given a private Shiplet, When an agent credential mentions members, Then it notifies viewers and never invites", async () => {
+      const { organization, project, member, grant } =
+        await createPrivateMentionShiplet();
+      const target = await member("agent-target");
+      const colleague = await member("agent-colleague");
+      await grant(colleague.id, colleague.email, "reviewer");
+      const { token } = await createOrganizationApiToken(
+        makeRequest,
+        organization.id,
+      );
+      const response = await requestHelper(
+        `/api/projects/${project.id}/review-feedback`,
+        {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${token}`,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            comment: "Agent mention",
+            pageUrl: "http://localhost/review/agent-mentions",
+            clientFeedbackId: `client-${crypto.randomUUID()}`,
+            mentions: [{ userId: colleague.id }, { email: target.email }],
+          }),
+        },
+      );
+      expect(response.status).toBe(201);
+      const text = await response.text();
+      expect(text).not.toContain(target.email);
+      expect(await mentionSideEffects(project.id, target.id)).toEqual({
+        grants: 0,
+        notifications: 0,
+        mentions: 0,
+      });
+      expect(await mentionSideEffects(project.id, colleague.id)).toEqual({
+        grants: 1,
+        notifications: 1,
+        mentions: 1,
+      });
+    });
+
+    it("Given a public Shiplet, When a non-member mentions workspace members by email, Then no grant, notification, or enumeration signal is produced", async () => {
+      const { organization, project } = await createPublicPresenceShiplet();
+      await muteOwnerWatch(project.id);
+      const target = await createOrganizationMember(
+        organization.id,
+        `public-target-${crypto.randomUUID().slice(0, 8)}@example.com`,
+      );
+      const outsiderOrganization = await createTestOrganization(makeRequest);
+      const outsider = await createOrganizationMember(
+        outsiderOrganization.id,
+        `public-outsider-${crypto.randomUUID().slice(0, 8)}@example.com`,
+      );
+      const post = (mentions: unknown[]) =>
+        requestHelper(`/api/projects/${project.id}/review-feedback`, {
+          method: "POST",
+          headers: { ...outsider.headers, "Content-Type": "application/json" },
+          body: JSON.stringify({
+            comment: "Outsider mention",
+            pageUrl: "http://localhost/review/public-mentions",
+            clientFeedbackId: `client-${crypto.randomUUID()}`,
+            mentions,
+          }),
+        });
+      const member = await post([{ email: target.email }, { userId: target.id }]);
+      const unknown = await post([
+        { email: `nobody-${crypto.randomUUID()}@example.com` },
+      ]);
+      expect(member.status).toBe(201);
+      expect(unknown.status).toBe(201);
+      const memberText = await member.text();
+      expect(memberText).not.toContain(target.email);
+      expect(memberText).not.toContain(target.id);
+      const memberBody = JSON.parse(memberText) as {
+        feedback: { mentions: unknown[] };
+      };
+      const unknownBody = (await unknown.json()) as {
+        feedback: { mentions: unknown[] };
+      };
+      expect(memberBody.feedback.mentions).toEqual([]);
+      expect(unknownBody.feedback.mentions).toEqual([]);
+
+      const autocomplete = await requestHelper(
+        `/api/projects/${project.id}/review-mention-users?q=${encodeURIComponent(target.email)}`,
+        { headers: outsider.headers },
+      );
+      expect(autocomplete.status).toBe(403);
+      expect(await mentionSideEffects(project.id, target.id)).toEqual({
+        grants: 0,
+        notifications: 0,
+        mentions: 0,
+      });
+    });
+
+    it("Given a private Shiplet, When mention candidates are listed, Then only editors are offered members without access", async () => {
+      const { project, member, grant } = await createPrivateMentionShiplet();
+      const viewer = await member("candidate-viewer");
+      const target = await member("candidate-target");
+      const colleague = await member("candidate-colleague");
+      await grant(viewer.id, viewer.email, "viewer");
+      await grant(colleague.id, colleague.email, "reviewer");
+
+      const modern = async (headers: Record<string, string>) => {
+        const response = await requestHelper(
+          `/api/projects/${project.id}/review-mention-users?q=candidate-`,
+          { headers },
+        );
+        expect(response.status).toBe(200);
+        const body = (await response.json()) as { users: Array<{ id: string }> };
+        return body.users.map((user) => user.id).sort();
+      };
+      const legacy = async (headers: Record<string, string>) => {
+        const response = await requestHelper(
+          `/api/projects/${project.id}/review-mention-users?limit=50`,
+          { headers },
+        );
+        expect(response.status).toBe(200);
+        const body = (await response.json()) as { users: Array<{ id: string }> };
+        return body.users.map((user) => user.id);
+      };
+
+      expect(await modern(AUTH_HEADERS)).toEqual(
+        [viewer.id, target.id, colleague.id].sort(),
+      );
+      expect(await modern(viewer.headers)).toEqual(
+        [viewer.id, colleague.id].sort(),
+      );
+      expect(await legacy(AUTH_HEADERS)).toContain(target.id);
+      const viewerLegacy = await legacy(viewer.headers);
+      expect(viewerLegacy).toContain(colleague.id);
+      expect(viewerLegacy).toContain(AUTH_HEADERS["x-shiplet-user-id"]);
+      expect(viewerLegacy).not.toContain(target.id);
     });
 
     it("should send configured mention notification emails without blocking feedback creation", async () => {

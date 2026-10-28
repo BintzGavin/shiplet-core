@@ -35,7 +35,7 @@ const VALID_VISIBILITIES = new Set([
 const SUBDOMAIN_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 const MAX_STATIC_ASSET_FILES = 200;
 const MAX_STATIC_ASSET_FILE_BYTES = 10_000_000;
-const MAX_STATIC_ASSET_TOTAL_BYTES = 50_000_000;
+const MAX_STATIC_ASSET_TOTAL_BYTES = 24_000_000;
 const MAX_STATIC_ASSET_PATH_LENGTH = 512;
 const MAX_PACKAGE_FILES = 1_024;
 const MAX_PACKAGE_FILE_BYTES = 4 * 1024 * 1024;
@@ -50,6 +50,12 @@ const PACKAGE_MEDIA_TYPE = "application/vnd.shiplet.package+json;version=1";
 const PACKAGE_SCHEMA_VERSION = "shiplet.package/v1";
 const RUNTIME_COMPATIBILITY = "shiplet.runtime/v1";
 const IDENTIFIER_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,255}$/;
+// Every workspace ID Shiplet issues is an org_ identifier, in both WorkOS and
+// test modes, so anything else cannot name a workspace.
+const ORGANIZATION_ID_PATTERN = /^org_[A-Za-z0-9._:-]{1,252}$/;
+// Shiplet answers with exactly this when the signed-in account belongs to
+// several workspaces and the publish named none.
+const MISSING_ORGANIZATION_MESSAGE = "Missing required fields: organization_id";
 const REQUIRED_PACKAGE_ENTRYPOINTS = [
 	"artifact",
 	"widget",
@@ -425,6 +431,7 @@ Commands:
 Configuration:
   SHIPLET_API_URL   Optional API base URL. Can be replaced by --api-url.
   SHIPLET_API_KEY   Optional least-privilege organization key injected by a secret store.
+  SHIPLET_ORGANIZATION_ID    Workspace ID for publish and prepare. Can be replaced by --organization.
   SHIPLET_CLI_SESSION_TTL    Reusable session lifetime, such as 2h or 90m (max 8h).
   SHIPLET_CLI_SESSION_CACHE  Set to 0 to approve every command separately.
   SHIPLET_CLI_SESSION_STORE  auto (keychain, else file), keychain, or file.
@@ -438,6 +445,7 @@ Flags:
   --name <name>          Artifact display name. Defaults to the file or folder name.
   --subdomain <slug>    DNS-safe review link slug. Defaults to a slug from the name.
   --visibility <mode>   private, organization, unlisted, or public. Defaults to organization.
+  --organization <id>   Workspace ID to publish into, such as org_123, when you belong to several.
   --api-url <url>        API base URL. Defaults to SHIPLET_API_URL or https://shiplet.cc.
   --token <token>        Organization key supplied by an established secret-store workflow.
   --dry-run             Build and print artifact metadata without making a network request.
@@ -482,6 +490,7 @@ function parseArguments(argv) {
 		name: "",
 		subdomain: "",
 		visibility: DEFAULT_VISIBILITY,
+		organization: "",
 		apiUrl: "",
 		token: "",
 		dryRun: false,
@@ -544,6 +553,7 @@ function parseArguments(argv) {
 			if (flag === "--name") options.name = value;
 			else if (flag === "--subdomain") options.subdomain = value;
 			else if (flag === "--visibility") options.visibility = value;
+			else if (flag === "--organization") options.organization = value;
 			else if (flag === "--api-url") options.apiUrl = value;
 			else if (flag === "--token") options.token = value;
 			else if (flag === "--target") {
@@ -595,6 +605,7 @@ function assertApplicableFlags(options) {
 		"--name": new Set(["publish", "prepare"]),
 		"--subdomain": new Set(["publish", "prepare"]),
 		"--visibility": new Set(["publish", "prepare"]),
+		"--organization": new Set(["publish", "prepare"]),
 		"--dry-run": new Set(["publish", "prepare", ...APPROVAL_COMMANDS]),
 		"--approve": APPROVAL_COMMANDS,
 		"--force": new Set(["pull", "eject"]),
@@ -670,6 +681,23 @@ function endpointFromOptions(options, env) {
 
 function apiKeyFromOptions(options, env) {
 	return String(options.token || env.SHIPLET_API_KEY || "").trim();
+}
+
+// The workspace a publish goes into. Left empty, Shiplet uses the account's
+// only workspace or the organization key's own, so it is required only when
+// the signed-in account belongs to several. The rejected value is not echoed
+// in case a credential was pasted in its place.
+function organizationIdFromOptions(options, env) {
+	const source = options.organization ? "--organization" : "SHIPLET_ORGANIZATION_ID";
+	const organizationId = String(
+		options.organization || env.SHIPLET_ORGANIZATION_ID || "",
+	).trim();
+	if (organizationId && !ORGANIZATION_ID_PATTERN.test(organizationId)) {
+		throw new CliError(
+			`Invalid ${source} value. Use the workspace ID, which starts with org_ (for example org_123), not the workspace name.`,
+		);
+	}
+	return organizationId;
 }
 
 // Reusable session lifetime. The server clamps to the same 5 minute to
@@ -910,15 +938,21 @@ function formatBytes(value) {
 	return `${value} bytes`;
 }
 
-async function buildPublishPayload(options, cwd = process.cwd()) {
+async function buildPublishPayload(
+	options,
+	cwd = process.cwd(),
+	env = process.env,
+) {
 	const absoluteArtifactPath = path.resolve(cwd, options.artifactPath);
 	const name = options.name.trim() || humanNameFromPath(absoluteArtifactPath);
 	const subdomain = options.subdomain.trim() || slugify(name);
 	assertDnsSafeSubdomain(subdomain);
+	const organizationId = organizationIdFromOptions(options, env);
 	return {
 		name,
 		subdomain,
 		visibility: options.visibility,
+		...(organizationId ? { organization_id: organizationId } : {}),
 		assets: await collectArtifactFiles(absoluteArtifactPath),
 	};
 }
@@ -1028,6 +1062,9 @@ async function publishReviewArtifact(options) {
 	);
 	const body = parseJsonResponse(responseText);
 	if (!response.ok) {
+		const choices =
+			response.status === 400 ? missingOrganizationChoices(body) : null;
+		if (choices) throw missingOrganizationError(endpoint, choices);
 		const safe = sanitizeApiValue(body);
 		const detail =
 			typeof safe === "string"
@@ -1039,6 +1076,62 @@ async function publishReviewArtifact(options) {
 	}
 
 	return body ?? { ok: true };
+}
+
+// Shiplet answers a publish that names no workspace, from an account in
+// several, with the caller's own workspaces as JSON, or with the bare message
+// from servers that predate the list. Returns null for any other response.
+function missingOrganizationChoices(body) {
+	if (typeof body === "string") {
+		return body.trim() === MISSING_ORGANIZATION_MESSAGE ? [] : null;
+	}
+	if (
+		!body ||
+		typeof body !== "object" ||
+		Array.isArray(body) ||
+		body.code !== "organization_required"
+	) {
+		return null;
+	}
+	const listed = Array.isArray(body.organizations) ? body.organizations : [];
+	return listed.flatMap((entry) =>
+		entry &&
+		typeof entry === "object" &&
+		typeof entry.id === "string" &&
+		ORGANIZATION_ID_PATTERN.test(entry.id)
+			? [{ id: entry.id, name: printableWorkspaceName(entry.name) }]
+			: [],
+	);
+}
+
+// Workspace names are chosen by people, so only printable text reaches the
+// terminal.
+function printableWorkspaceName(value) {
+	const printable = (typeof value === "string" ? value : "")
+		.replace(
+			/[\u0000-\u001f\u007f-\u009f\u200b-\u200f\u202a-\u202e\u2066-\u2069]/gu,
+			" ",
+		)
+		.replace(/\s+/gu, " ")
+		.trim();
+	return Array.from(printable).slice(0, 120).join("");
+}
+
+// Without a usable list, point at the Workspace page on the same Shiplet
+// origin the publish went to.
+function missingOrganizationError(endpoint, choices) {
+	const hint = `Shiplet API returned 400: ${MISSING_ORGANIZATION_MESSAGE}. Your Shiplet account belongs to more than one workspace, so Shiplet needs to know which one to publish into. Rerun with --organization <id> or set SHIPLET_ORGANIZATION_ID`;
+	if (choices.length === 0) {
+		return new CliError(
+			`${hint}. Workspace IDs start with org_, and your workspaces are listed on the Workspace page: ${new URL(endpoint).origin}/workspace`,
+		);
+	}
+	const lines = choices.map(({ id, name }) =>
+		name ? `  ${name}  ${id}` : `  ${id}`,
+	);
+	return new CliError(
+		`${hint} to one of these workspace IDs:\n${lines.join("\n")}`,
+	);
 }
 
 function parseJsonResponse(value) {
@@ -1063,6 +1156,7 @@ function writeDryRun(stdout, payload, endpoint, summary, json) {
 		name: payload.name,
 		subdomain: payload.subdomain,
 		visibility: payload.visibility,
+		organizationId: payload.organization_id || null,
 		assetCount: summary.assetCount,
 		totalBytes: summary.totalBytes,
 		paths: summary.paths,
@@ -1073,6 +1167,11 @@ function writeDryRun(stdout, payload, endpoint, summary, json) {
 	}
 	stdout.write(`Dry run prepared review artifact "${payload.name}".\n`);
 	stdout.write(`Endpoint: ${endpoint}\n`);
+	stdout.write(
+		payload.organization_id
+			? `Workspace: ${payload.organization_id}\n`
+			: "Workspace: not set (pass --organization <id> if your account has several)\n",
+	);
 	stdout.write(`Files: ${summary.assetCount} (${summary.totalBytes} bytes)\n`);
 	stdout.write("No network request made.\n");
 }
@@ -3508,7 +3607,7 @@ async function runCli({
 		}
 
 		const endpoint = endpointFromOptions(options, env);
-		const payload = await buildPublishPayload(options, cwd);
+		const payload = await buildPublishPayload(options, cwd, env);
 		const summary = payloadSummary(payload);
 
 		if (options.dryRun) {

@@ -14,6 +14,7 @@ import {
 	upsertUser,
 } from "./store";
 import { authenticateCliSession } from "./cli-session";
+import { timingSafeSecretMatches } from "./timing-safe-secret";
 
 export const SESSION_COOKIE = "__Host-shiplet_session";
 export const ACCOUNT_GROUP_COOKIE = "__Host-shiplet_account_group";
@@ -100,6 +101,97 @@ export function clearSessionCookie(env?: Env) {
 
 export function clearAccountGroupCookie(env?: Env) {
 	return `${activeAccountGroupCookieName(env)}=; Path=/; HttpOnly${secureCookieAttribute(env)}; SameSite=Lax; Max-Age=0`;
+}
+
+// Sign-in state is honored only by the browser that started it. Each AuthKit
+// redirect gets its own short-lived cookie, keyed by a random flow ID carried
+// in the state, so concurrent tabs do not overwrite each other's flows. The
+// cookie value is a digest of the exact state, so a changed state no longer
+// matches. Host-prefixed cookies keep sibling artifact hosts from planting one.
+const AUTH_FLOW_COOKIE_PREFIX = "shiplet_auth_flow_";
+const AUTH_FLOW_TTL_SECONDS = 10 * 60;
+const AUTH_FLOW_ID_PATTERN = /^[A-Za-z0-9_-]{22}$/;
+
+export type AuthFlowState = Record<string, unknown>;
+
+export type AuthFlowVerification =
+	| { ok: true; state: AuthFlowState; clearCookie: string }
+	| {
+			ok: false;
+			/** missing: no state; unbound: no flow cookie for it; mismatch: cookie and state disagree. */
+			reason: "missing" | "unbound" | "mismatch";
+			state: AuthFlowState;
+			clearCookie?: string;
+	  };
+
+function base64UrlBytes(bytes: Uint8Array) {
+	let binary = "";
+	for (const byte of bytes) binary += String.fromCharCode(byte);
+	return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/g, "");
+}
+
+function authFlowCookieName(flowId: string, env?: Env) {
+	return `${useHostPrefixedCookies(env) ? "__Host-" : ""}${AUTH_FLOW_COOKIE_PREFIX}${flowId}`;
+}
+
+function authFlowCookie(flowId: string, value: string, maxAge: number, env?: Env) {
+	return `${authFlowCookieName(flowId, env)}=${value}; Path=/; HttpOnly${secureCookieAttribute(env)}; SameSite=Lax; Max-Age=${maxAge}`;
+}
+
+async function authFlowBinding(state: string) {
+	return base64UrlBytes(
+		new Uint8Array(
+			await crypto.subtle.digest("SHA-256", new TextEncoder().encode(state)),
+		),
+	);
+}
+
+function parseAuthFlowState(state: string): AuthFlowState | null {
+	try {
+		const value = JSON.parse(atob(state));
+		return value && typeof value === "object" && !Array.isArray(value)
+			? (value as AuthFlowState)
+			: null;
+	} catch {
+		return null;
+	}
+}
+
+/** Mints AuthKit state for one sign-in and the cookie that binds it to this browser. */
+export async function createAuthFlowState(env: Env, payload: AuthFlowState) {
+	const flowId = base64UrlBytes(crypto.getRandomValues(new Uint8Array(16)));
+	const state = btoa(JSON.stringify({ ...payload, flow: flowId }));
+	return {
+		state,
+		cookie: authFlowCookie(
+			flowId,
+			await authFlowBinding(state),
+			AUTH_FLOW_TTL_SECONDS,
+			env,
+		),
+	};
+}
+
+/** Checks that AuthKit state was minted for the browser presenting it. */
+export async function verifyAuthFlowState(
+	request: Request,
+	env: Env,
+	state: string | null,
+): Promise<AuthFlowVerification> {
+	if (!state) return { ok: false, reason: "missing", state: {} };
+	const parsed = parseAuthFlowState(state);
+	if (!parsed) return { ok: false, reason: "unbound", state: {} };
+	const flowId = parsed.flow;
+	if (typeof flowId !== "string" || !AUTH_FLOW_ID_PATTERN.test(flowId)) {
+		return { ok: false, reason: "unbound", state: parsed };
+	}
+	const binding = getCookie(request, authFlowCookieName(flowId, env));
+	if (!binding) return { ok: false, reason: "unbound", state: parsed };
+	const clearCookie = authFlowCookie(flowId, "", 0, env);
+	if (!(await timingSafeSecretMatches(await authFlowBinding(state), binding))) {
+		return { ok: false, reason: "mismatch", state: parsed, clearCookie };
+	}
+	return { ok: true, state: parsed, clearCookie };
 }
 
 export function clearLegacySessionCookie(env?: Env) {

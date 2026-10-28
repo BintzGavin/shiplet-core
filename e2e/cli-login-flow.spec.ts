@@ -50,7 +50,9 @@ for (const existingSession of [false, true]) {
       const callback = new URL(login.searchParams.get("redirect_uri")!);
       callback.searchParams.set("code", `test-code::${encodeURIComponent(user.email)}`);
       callback.searchParams.set("state", login.searchParams.get("state")!);
-      await route.fulfill({ status: 302, headers: { location: callback.toString() } });
+      // Keep the flow cookie that binds this state to the browser.
+      const setCookie = response.headers()["set-cookie"];
+      await route.fulfill({ status: 302, headers: { location: callback.toString(), ...(setCookie ? { "set-cookie": setCookie } : {}) } });
     });
     if (existingSession) await loginAs(page, user);
     const cspErrors: string[] = [];

@@ -4913,13 +4913,16 @@ export const DashboardRuntimeScript = (nonce: KernelDocumentNonce) => `
           payload.email = qs("shareEmail").value.trim();
           if (!payload.email) return;
         }
-        await requestJson("/api/projects/" + encodeURIComponent(projectId) + "/invitations", {
+        var shared = await requestJson("/api/projects/" + encodeURIComponent(projectId) + "/invitations", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify(payload)
         });
         if (qs("shareEmail")) qs("shareEmail").value = "";
-        if (qs("shareResult")) qs("shareResult").innerHTML = "<div class=\\"banner banner-success\\">Invite sent. The reviewer can open the shared shiplet and leave feedback.</div>";
+        var shareMessage = shared && shared.delivery === "invited"
+          ? "Invite sent. The reviewer can open the shared shiplet and leave feedback."
+          : "Access granted. They can open the shared shiplet and leave feedback now.";
+        if (qs("shareResult")) qs("shareResult").innerHTML = "<div class=\\"banner banner-success\\">" + shareMessage + "</div>";
         setStatus("Shiplet access updated.", "success");
       } catch (error) {
         showError(error, "shareResult");

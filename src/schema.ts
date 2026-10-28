@@ -173,6 +173,16 @@ export async function ensureSchema(db: D1Database) {
 			),
 		db
 			.prepare(
+				`CREATE TABLE IF NOT EXISTS workos_membership_sync_state (
+					id TEXT PRIMARY KEY,
+					cursor_user_id TEXT NOT NULL,
+					failing_user_id TEXT,
+					failure_count INTEGER NOT NULL DEFAULT 0,
+					updated_on TEXT NOT NULL
+				)`,
+			),
+		db
+			.prepare(
 				`CREATE TABLE IF NOT EXISTS teams (
 					id TEXT PRIMARY KEY,
 					organization_id TEXT NOT NULL,
@@ -714,6 +724,10 @@ export async function ensureSchema(db: D1Database) {
 		db.prepare(
 			`CREATE INDEX IF NOT EXISTS idx_workos_user_identities_user
 			 ON workos_user_identities(user_id, last_authenticated_on)`,
+		),
+		db.prepare(
+			`CREATE INDEX IF NOT EXISTS idx_organization_memberships_user
+			 ON organization_memberships(user_id)`,
 		),
 		db.prepare(
 			`CREATE INDEX IF NOT EXISTS idx_cli_authorization_expiry

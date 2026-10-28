@@ -4,82 +4,26 @@ import {
   runInDurableObject,
   waitOnExecutionContext,
 } from "cloudflare:test";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import app from "../src/index";
 import * as embedContracts from "../src/embed";
+import {
+  claimEmbedReviewOperationReceipt,
+  createEmbedReviewSessionCookieHeader,
+  normalizeEmbedReviewPageUrl,
+  publicEmbedReviewSession,
+  readEmbedReviewSessionHandle,
+  validateEmbedReviewSessionBinding,
+} from "../src/embed";
 
-type FutureEmbedContracts = {
-  createEmbedReviewSessionCookieHeader: (input: {
-    installationId: string;
-    sessionHandle: string;
-    now: Date;
-    expiresOn: Date;
-  }) => string;
-  readEmbedReviewSessionHandle: (
-    cookieHeader: string | null,
-    installationId: string,
-  ) => string | null;
-  normalizeEmbedReviewPageUrl: (
-    value: unknown,
-    expectedOrigin: string,
-  ) => string | null;
-  claimEmbedReviewOperationReceipt: (
-    db: D1Database,
-    input: {
-      receiptHandle: string;
-      installationId: string;
-      shipletId: string;
-      revisionId: string;
-      actorUserId: string;
-      effect: string;
-      payloadDigest: string;
-      requestId: string;
-      now: Date;
-    },
-  ) => Promise<{ ok: true } | { ok: false; reason: string }>;
-  publicEmbedReviewSession: (input: {
-    installationId: string;
-    projectId: string;
-    revisionId: string;
-    siteOrigin: string;
-    pageUrl: string;
-    actorUserId: string;
-    sessionHandle: string;
-    reviewToken: string;
-    presenceToken: string;
-    expiresOn: string;
-  }) => Record<string, unknown>;
-  validateEmbedReviewSessionBinding: (
-    session: {
-      installationId: string;
-      projectId: string;
-      revisionId: string;
-      siteOrigin: string;
-      pageUrl: string;
-      actorUserId: string;
-      expiresOn: string;
-      revokedOn: string | null;
-    },
-    request: {
-      installationId: string;
-      projectId: string;
-      revisionId: string;
-      siteOrigin: string;
-      pageUrl: string;
-      actorUserId: string;
-      now: Date;
-      operationClaimed: boolean;
-    },
-  ) => { ok: true } | { ok: false; reason: string };
-};
-
-const futureEmbedContracts = embedContracts as typeof embedContracts &
-  FutureEmbedContracts;
+// Website-widget review sessions: the shared embedded review boundary that
+// every `<shiplet-feedback>` installation registered at /embed/install uses.
 
 const OWNER_HEADERS = {
-  "x-shiplet-user-id": "user_wordpress_owner",
-  "x-shiplet-user-email": "wordpress-owner@example.com",
+  "x-shiplet-user-id": "user_embed_review_owner",
+  "x-shiplet-user-email": "embed-review-owner@example.com",
 };
+const SITE_ORIGIN = "https://client.example.com";
 
 async function request(path: string, options?: RequestInit) {
   const url = /^https?:\/\//.test(path) ? path : `http://localhost${path}`;
@@ -103,7 +47,7 @@ async function createOrganization() {
   const response = await request("/api/organizations", {
     method: "POST",
     headers: { "Content-Type": "application/json", ...OWNER_HEADERS },
-    body: JSON.stringify({ name: `WordPress ${crypto.randomUUID()}` }),
+    body: JSON.stringify({ name: `Embed review ${crypto.randomUUID()}` }),
   });
   expect(response.status).toBe(201);
   return (await response.json()) as {
@@ -116,10 +60,10 @@ async function createExternalProject(organizationId: string) {
     method: "POST",
     headers: { "Content-Type": "application/json", ...OWNER_HEADERS },
     body: JSON.stringify({
-      name: "Client WordPress site",
+      name: "Client website",
       organization_id: organizationId,
-      subdomain: `wordpress-${crypto.randomUUID().slice(0, 8)}`,
-      external_url: "https://client.example.com/",
+      subdomain: `embed-review-${crypto.randomUUID().slice(0, 8)}`,
+      external_url: `${SITE_ORIGIN}/`,
     }),
   });
   expect(response.status).toBe(201);
@@ -128,82 +72,55 @@ async function createExternalProject(organizationId: string) {
   };
 }
 
-function connectUrl(projectId: string, state = "wordpress-state") {
-  const params = new URLSearchParams({
-    site_url: "https://client.example.com/",
-    site_name: "Client site",
-    return_url:
-      "https://client.example.com/wp-admin/admin-post.php?action=shiplet_connect_callback",
-    state,
-    project_id: projectId,
-  });
-  return `/embed/connect?${params.toString()}`;
+function setupForm(projectId: string, extra: Record<string, string> = {}) {
+  return {
+    method: "POST",
+    headers: { ...OWNER_HEADERS, Origin: "http://localhost" },
+    body: new URLSearchParams({
+      project_id: projectId,
+      site_url: `${SITE_ORIGIN}/`,
+      ...extra,
+    }),
+  } satisfies RequestInit;
 }
 
-async function connectInstallation(projectId: string) {
-  const getResponse = await request(connectUrl(projectId), {
-    headers: OWNER_HEADERS,
-  });
-  expect(getResponse.status).toBe(200);
-  const connectHtml = await getResponse.text();
-  expect(connectHtml).toContain("Connect Client site");
-  expect(connectHtml).toContain("Client WordPress site");
+async function activeInstallationId(projectId: string) {
+  const row = await (env as Env).DB.prepare(
+    `SELECT id FROM embed_installations
+     WHERE project_id = ? AND site_origin = ? AND revoked_on IS NULL`,
+  )
+    .bind(projectId, SITE_ORIGIN)
+    .first<{ id: string }>();
+  return row?.id ?? null;
+}
 
-  const body = new URLSearchParams({
-    site_url: "https://client.example.com/",
-    site_name: "Client site",
-    return_url:
-      "https://client.example.com/wp-admin/admin-post.php?action=shiplet_connect_callback",
-    state: "wordpress-state",
-    project_id: projectId,
-  });
-  const confirmResponse = await request("/embed/connect", {
-    method: "POST",
-    redirect: "manual",
-    headers: {
-      "Content-Type": "application/x-www-form-urlencoded",
-      Origin: "https://shiplet.cc",
-      ...OWNER_HEADERS,
-    },
-    body,
-  });
-  expect(confirmResponse.status).toBe(302);
-  const callbackUrl = new URL(confirmResponse.headers.get("location") || "");
-  expect(callbackUrl.origin).toBe("https://client.example.com");
-  expect(callbackUrl.searchParams.get("state")).toBe("wordpress-state");
-  const code = callbackUrl.searchParams.get("shiplet_code");
-  expect(code).toMatch(/^shiplet_embed_connect_/);
+async function installWebsite(projectId: string) {
+  const response = await request("/embed/install", setupForm(projectId));
+  expect(response.status).toBe(200);
+  const installationId = await activeInstallationId(projectId);
+  expect(installationId).toBeTruthy();
+  return { installation: { id: installationId! } };
+}
 
-  const exchangeResponse = await request("/api/embed/installations/exchange", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      code,
-      siteUrl: "https://client.example.com/",
-    }),
-  });
-  expect(exchangeResponse.status).toBe(201);
-  const installation = (await exchangeResponse.json()) as {
-    installation: {
-      id: string;
-      projectId: string;
-      projectName: string;
-      siteOrigin: string;
-    };
-    secret: string;
-  };
-  expect(installation.installation).toMatchObject({
-    projectId,
-    projectName: "Client WordPress site",
-    siteOrigin: "https://client.example.com",
-  });
-  expect(installation.secret).toMatch(/^shiplet_embed_install_/);
-  return { ...installation, code };
+async function disconnectWebsite(projectId: string, installationId: string) {
+  const response = await request(
+    "/embed/install",
+    setupForm(projectId, { action: "revoke", installation_id: installationId }),
+  );
+  expect(response.status).toBe(200);
+  expect(await response.text()).toContain("Site disconnected");
+}
+
+async function installedProject() {
+  const { organization } = await createOrganization();
+  const { project } = await createExternalProject(organization.id);
+  const installed = await installWebsite(project.id);
+  return { organization, project, ...installed };
 }
 
 async function startReviewSession(
   installationId: string,
-  pageUrl = "https://client.example.com/pricing/?campaign=summer",
+  pageUrl = `${SITE_ORIGIN}/pricing/?campaign=summer`,
 ) {
   const start = await request(
     `/embed/review/start?${new URLSearchParams({
@@ -222,14 +139,7 @@ async function startReviewSession(
 
 async function installActiveWidgetRevision(
   projectId: string,
-  widgetFiles: Array<{ path: string; mediaType: string; content: string }> = [
-    {
-      path: "widget/index.html",
-      mediaType: "text/html; charset=utf-8",
-      content:
-        '<!doctype html><html lang="en"><body><p data-widget-marker="active-revision">Active revision widget</p></body></html>',
-    },
-  ],
+  widgetFiles: Array<{ path: string; mediaType: string; content: string }>,
 ) {
   const active = await (env as Env).DB.prepare(
     `SELECT active_revision_id, active_revision_generation
@@ -241,9 +151,7 @@ async function installActiveWidgetRevision(
       active_revision_generation: number;
     }>();
   if (!active?.active_revision_id) {
-    throw new Error(
-      "Published WordPress Shiplet is missing its initial revision",
-    );
+    throw new Error("Published website Shiplet is missing its initial revision");
   }
   const revisionId = `revision_widget_${crypto.randomUUID().replace(/-/g, "")}`;
   const createdOn = new Date().toISOString();
@@ -387,133 +295,169 @@ async function createFeedbackOperationReceipt(input: {
   return handle;
 }
 
-describe("WordPress embed installations", () => {
-  it("rejects insecure production sites and cross-origin callbacks", async () => {
-    const insecure = await request(
-      `/embed/connect?${new URLSearchParams({
-        site_url: "http://client.example.com/",
-        site_name: "Insecure client",
-        return_url:
-          "http://client.example.com/wp-admin/admin-post.php?action=shiplet_connect_callback",
-        state: "state",
-      })}`,
-      { headers: OWNER_HEADERS },
-    );
-    expect(insecure.status).toBe(400);
+// A row shaped like the retired server-secret installations: its secret_hash
+// is a SHA-256 digest rather than the `browser-only:` marker.
+async function insertServerSecretInstallation(
+  projectId: string,
+  organizationId: string,
+) {
+  const id = `embed_installation_${crypto.randomUUID().replace(/-/g, "")}`;
+  await (env as Env).DB.prepare(
+    `INSERT INTO embed_installations
+		 (id, project_id, organization_id, site_origin, site_url, site_name,
+		  secret_hash, created_by_user_id, created_on, last_used_on, revoked_on)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL)`,
+  )
+    .bind(
+      id,
+      projectId,
+      organizationId,
+      SITE_ORIGIN,
+      `${SITE_ORIGIN}/`,
+      "Client site",
+      await sha256Hex(`retired-secret-${crypto.randomUUID()}`),
+      OWNER_HEADERS["x-shiplet-user-id"],
+      new Date().toISOString(),
+    )
+    .run();
+  return id;
+}
 
-    const crossOrigin = await request(
-      `/embed/connect?${new URLSearchParams({
-        site_url: "https://client.example.com/",
-        site_name: "Client",
-        return_url:
-          "https://attacker.example/wp-admin/admin-post.php?action=shiplet_connect_callback",
-        state: "state",
-      })}`,
-      { headers: OWNER_HEADERS },
-    );
-    expect(crossOrigin.status).toBe(400);
+describe("retired server-secret site connections", () => {
+  it("no longer serves the connect, secret exchange, secret disconnect, legacy loader, or artifact widget routes", async () => {
+    const { project, installation } = await installedProject();
+    const connectQuery = new URLSearchParams({
+      site_url: `${SITE_ORIGIN}/`,
+      site_name: "Client site",
+      return_url: `${SITE_ORIGIN}/callback`,
+      state: "connect-state",
+      project_id: project.id,
+    });
+    const session = await startReviewSession(installation.id);
+    expect(session.start.status).toBe(302);
+    const binding = new URLSearchParams({
+      installation_id: installation.id,
+      page_url: session.pageUrl,
+    });
+    const attempts: Array<[string, string, RequestInit]> = [
+      [
+        "GET /embed/connect",
+        `/embed/connect?${connectQuery}`,
+        { headers: OWNER_HEADERS },
+      ],
+      [
+        "POST /embed/connect",
+        "/embed/connect",
+        {
+          method: "POST",
+          redirect: "manual",
+          headers: {
+            ...OWNER_HEADERS,
+            Origin: "http://localhost",
+            "Content-Type": "application/x-www-form-urlencoded",
+          },
+          body: connectQuery,
+        },
+      ],
+      [
+        "POST /api/embed/installations/exchange",
+        "/api/embed/installations/exchange",
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            code: "shiplet_embed_connect_test",
+            siteUrl: `${SITE_ORIGIN}/`,
+          }),
+        },
+      ],
+      [
+        "DELETE /api/embed/installations/:installationId",
+        `/api/embed/installations/${installation.id}`,
+        {
+          method: "DELETE",
+          headers: { Authorization: "Bearer shiplet_embed_install_test" },
+        },
+      ],
+      ["GET /api/embed/client.js", "/api/embed/client.js", {}],
+      [
+        "GET /embed/review/widget",
+        `/embed/review/widget?${binding}`,
+        { headers: { Cookie: session.cookie } },
+      ],
+    ];
+    for (const [label, path, init] of attempts) {
+      const response = await request(path, init);
+      expect(response.status, label).toBe(404);
+      expect(response.headers.get("location"), label).toBeNull();
+    }
+    expect(await activeInstallationId(project.id)).toBe(installation.id);
   });
 
-  it("connects an exact site origin through a single-use server exchange and rejects expired codes", async () => {
+  it("grants no review authority to a stored server-secret installation and lets the site reconnect as a website widget", async () => {
     const { organization } = await createOrganization();
     const { project } = await createExternalProject(organization.id);
-    const connected = await connectInstallation(project.id);
-
-    const replay = await request("/api/embed/installations/exchange", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        code: connected.code,
-        siteUrl: "https://client.example.com/",
-      }),
-    });
-    expect(replay.status).toBe(401);
-
-    await (env as Env).DB.prepare(
-      "UPDATE embed_exchange_codes SET used_on = NULL, expires_on = ? WHERE code_hash = ?",
-    ).bind("2000-01-01T00:00:00.000Z", await sha256Hex(connected.code!)).run();
-    const expired = await request("/api/embed/installations/exchange", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ code: connected.code, siteUrl: "https://client.example.com/" }),
-    });
-    expect(expired.status).toBe(401);
-
-    const row = await (env as Env).DB.prepare(
-      `SELECT secret_hash
-			 FROM embed_installations
-			 WHERE id = ?`,
+    const legacyId = await insertServerSecretInstallation(
+      project.id,
+      organization.id,
+    );
+    const returnUrl = `${SITE_ORIGIN}/pricing/`;
+    const start = await request(
+      `/embed/review/start?${new URLSearchParams({
+        installation_id: legacyId,
+        return_url: returnUrl,
+      })}`,
+      { redirect: "manual", headers: OWNER_HEADERS },
+    );
+    expect(start.status).toBe(404);
+    expect(start.headers.get("set-cookie")).toBeNull();
+    const authorize = await request(
+      `/embed/review/authorize?${new URLSearchParams({
+        installation_id: legacyId,
+        return_url: returnUrl,
+      })}`,
+      { headers: OWNER_HEADERS },
+    );
+    expect(authorize.status).toBe(403);
+    expect(await authorize.text()).not.toContain("shiplet_embed_auth_");
+    const sessions = await (env as Env).DB.prepare(
+      "SELECT COUNT(*) AS count FROM embed_review_sessions WHERE installation_id = ?",
     )
-      .bind(connected.installation.id)
-      .first<{ secret_hash: string }>();
-    expect(row?.secret_hash).toBeTruthy();
-    expect(row?.secret_hash).not.toContain(connected.secret);
-  });
+      .bind(legacyId)
+      .first<{ count: number }>();
+    expect(sessions?.count).toBe(0);
+    const setup = await request(`/embed/install?project_id=${project.id}`, {
+      headers: OWNER_HEADERS,
+    });
+    expect(setup.status).toBe(200);
+    expect(await setup.text()).not.toContain(legacyId);
 
-  it("creates one external-URL project when the administrator chooses a new project", async () => {
-    const { organization } = await createOrganization();
-    const body = new URLSearchParams({
-      site_url: "https://new-client.example.com/",
-      site_name: "New client site",
-      return_url:
-        "https://new-client.example.com/wp-admin/admin-post.php?action=shiplet_connect_callback",
-      state: "new-project-state",
-      project_id: "new",
-      organization_id: organization.id,
-    });
-    const confirm = await request("/embed/connect", {
-      method: "POST",
-      redirect: "manual",
-      headers: {
-        "Content-Type": "application/x-www-form-urlencoded",
-        Origin: "https://shiplet.cc",
-        ...OWNER_HEADERS,
-      },
-      body,
-    });
-    expect(confirm.status).toBe(302);
-    const callback = new URL(confirm.headers.get("location") || "");
-    const exchange = await request("/api/embed/installations/exchange", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        code: callback.searchParams.get("shiplet_code"),
-        siteUrl: "https://new-client.example.com/",
-      }),
-    });
-    expect(exchange.status).toBe(201);
-    const connected = (await exchange.json()) as {
-      installation: { projectId: string; projectName: string };
-    };
-    expect(connected.installation.projectName).toBe("New client site");
-    const project = await (env as Env).DB.prepare(
-      `SELECT source_type, external_origin_url
-			 FROM projects
-			 WHERE id = ?`,
+    const reconnected = await installWebsite(project.id);
+    expect(reconnected.installation.id).not.toBe(legacyId);
+    const legacyRow = await (env as Env).DB.prepare(
+      "SELECT revoked_on FROM embed_installations WHERE id = ?",
     )
-      .bind(connected.installation.projectId)
-      .first<{ source_type: string; external_origin_url: string }>();
-    expect(project).toEqual({
-      source_type: "external_url",
-      external_origin_url: "https://new-client.example.com",
-    });
+      .bind(legacyId)
+      .first<{ revoked_on: string | null }>();
+    expect(legacyRow?.revoked_on).toBeTruthy();
+    const session = await startReviewSession(reconnected.installation.id);
+    expect(session.start.status).toBe(302);
   });
+});
 
+describe("website widget review sessions", () => {
   it("establishes review authority only inside an app-origin trusted frame", async () => {
-    const { organization } = await createOrganization();
-    const { project } = await createExternalProject(organization.id);
-    const connected = await connectInstallation(project.id);
-    const returnUrl =
-      "https://client.example.com/pricing/?shiplet-review=1&campaign=summer";
+    const { installation } = await installedProject();
+    const returnUrl = `${SITE_ORIGIN}/pricing/?shiplet-review=1&campaign=summer`;
 
     const denied = await request(
       `/embed/review/start?${new URLSearchParams({
-        installation_id: connected.installation.id,
+        installation_id: installation.id,
         return_url: returnUrl,
       })}`,
       {
         headers: {
-          "x-shiplet-user-id": "user_wordpress_outsider",
+          "x-shiplet-user-id": "user_embed_review_outsider",
           "x-shiplet-user-email": "outsider@example.com",
         },
       },
@@ -522,7 +466,7 @@ describe("WordPress embed installations", () => {
 
     const start = await request(
       `/embed/review/start?${new URLSearchParams({
-        installation_id: connected.installation.id,
+        installation_id: installation.id,
         return_url: returnUrl,
       })}`,
       { redirect: "manual", headers: OWNER_HEADERS },
@@ -532,7 +476,7 @@ describe("WordPress embed installations", () => {
     expect(trustedHost.origin).toBe("http://localhost");
     expect(trustedHost.pathname).toBe("/embed/review/host");
     expect(trustedHost.searchParams.get("installation_id")).toBe(
-      connected.installation.id,
+      installation.id,
     );
     expect(trustedHost.searchParams.get("page_url")).toBe(returnUrl);
     for (const credentialParam of [
@@ -546,9 +490,7 @@ describe("WordPress embed installations", () => {
     }
 
     const cookie = start.headers.get("set-cookie") || "";
-    expect(cookie).toContain(
-      `__Host-shiplet_embed_review_${connected.installation.id}=`,
-    );
+    expect(cookie).toContain(`__Host-shiplet_embed_review_${installation.id}=`);
     expect(cookie).toContain("HttpOnly");
     expect(cookie).toContain("Secure");
     expect(cookie).toContain("SameSite=None");
@@ -563,16 +505,14 @@ describe("WordPress embed installations", () => {
     expect(publicLocation).not.toContain("presenceToken");
   });
 
-  it("never grants arbitrary installation pages direct review API CORS authority", async () => {
-    const { organization } = await createOrganization();
-    const { project } = await createExternalProject(organization.id);
-    const connected = await connectInstallation(project.id);
+  it("never grants installation pages direct review API CORS authority", async () => {
+    const { project, installation } = await installedProject();
     const feedbackPath = `/api/projects/${project.id}/review-feedback`;
 
     const clientPagePreflight = await request(feedbackPath, {
       method: "OPTIONS",
       headers: {
-        Origin: "https://client.example.com",
+        Origin: SITE_ORIGIN,
         "Access-Control-Request-Method": "POST",
         "Access-Control-Request-Headers": "content-type,authorization",
       },
@@ -593,19 +533,12 @@ describe("WordPress embed installations", () => {
       deniedPreflight.headers.get("access-control-allow-origin"),
     ).toBeNull();
 
-    const disconnected = await request(
-      `/api/embed/installations/${connected.installation.id}`,
-      {
-        method: "DELETE",
-        headers: { Authorization: `Bearer ${connected.secret}` },
-      },
-    );
-    expect(disconnected.status).toBe(200);
+    await disconnectWebsite(project.id, installation.id);
 
     const afterDisconnect = await request(feedbackPath, {
       method: "OPTIONS",
       headers: {
-        Origin: "https://client.example.com",
+        Origin: SITE_ORIGIN,
         "Access-Control-Request-Method": "POST",
       },
     });
@@ -615,8 +548,8 @@ describe("WordPress embed installations", () => {
 
     const start = await request(
       `/embed/review/start?${new URLSearchParams({
-        installation_id: connected.installation.id,
-        return_url: "https://client.example.com/?shiplet-review=1",
+        installation_id: installation.id,
+        return_url: `${SITE_ORIGIN}/?shiplet-review=1`,
       })}`,
       { headers: OWNER_HEADERS },
     );
@@ -624,20 +557,22 @@ describe("WordPress embed installations", () => {
   });
 
   it("does not place a review exchange credential in the installation page", async () => {
-    const { organization } = await createOrganization();
-    const { project } = await createExternalProject(organization.id);
-    const connected = await connectInstallation(project.id);
-    const before = await (env as Env).DB.prepare(
-      `SELECT COUNT(*) AS count
-			 FROM embed_exchange_codes
-			 WHERE installation_id = ? AND purpose = 'review'`,
-    )
-      .bind(connected.installation.id)
-      .first<{ count: number }>();
+    const { installation } = await installedProject();
+    const countReviewCodes = async () =>
+      (
+        await (env as Env).DB.prepare(
+          `SELECT COUNT(*) AS count
+           FROM embed_exchange_codes
+           WHERE installation_id = ? AND purpose = 'review'`,
+        )
+          .bind(installation.id)
+          .first<{ count: number }>()
+      )?.count;
+    const before = await countReviewCodes();
     const start = await request(
       `/embed/review/start?${new URLSearchParams({
-        installation_id: connected.installation.id,
-        return_url: "https://client.example.com/?shiplet-review=1",
+        installation_id: installation.id,
+        return_url: `${SITE_ORIGIN}/?shiplet-review=1`,
       })}`,
       { redirect: "manual", headers: OWNER_HEADERS },
     );
@@ -646,24 +581,15 @@ describe("WordPress embed installations", () => {
     expect(location.origin).toBe("http://localhost");
     expect(location.searchParams.get("shiplet_embed_code")).toBeNull();
     expect(location.searchParams.get("code")).toBeNull();
-    const after = await (env as Env).DB.prepare(
-      `SELECT COUNT(*) AS count
-			 FROM embed_exchange_codes
-			 WHERE installation_id = ? AND purpose = 'review'`,
-    )
-      .bind(connected.installation.id)
-      .first<{ count: number }>();
-    expect(after?.count).toBe(before?.count);
+    expect(await countReviewCodes()).toBe(before);
   });
 
   it("serves the trusted host only through its exact HttpOnly session and retires browser token exchange", async () => {
-    const { organization } = await createOrganization();
-    const { project } = await createExternalProject(organization.id);
-    const connected = await connectInstallation(project.id);
-    const pageUrl = "https://client.example.com/pricing/?shiplet-review=1";
+    const { project, installation } = await installedProject();
+    const pageUrl = `${SITE_ORIGIN}/pricing/?shiplet-review=1`;
     const start = await request(
       `/embed/review/start?${new URLSearchParams({
-        installation_id: connected.installation.id,
+        installation_id: installation.id,
         return_url: pageUrl,
       })}`,
       { redirect: "manual", headers: OWNER_HEADERS },
@@ -671,9 +597,7 @@ describe("WordPress embed installations", () => {
     const location = start.headers.get("location") || "";
     const cookie = (start.headers.get("set-cookie") || "").split(";")[0];
     expect(location).toContain("/embed/review/host");
-    expect(cookie).toContain(
-      `__Host-shiplet_embed_review_${connected.installation.id}=`,
-    );
+    expect(cookie).toContain(`__Host-shiplet_embed_review_${installation.id}=`);
 
     const anonymous = await request(location);
     expect(anonymous.status).toBe(401);
@@ -689,7 +613,7 @@ describe("WordPress embed installations", () => {
     const host = await request(location, { headers: { Cookie: cookie } });
     expect(host.status).toBe(200);
     expect(host.headers.get("content-security-policy")).toContain(
-      "frame-ancestors 'self' https://client.example.com",
+      `frame-ancestors 'self' ${SITE_ORIGIN}`,
     );
     const html = await host.text();
     expect(html).toContain('data-shiplet-trusted-review-host="v1"');
@@ -700,13 +624,13 @@ describe("WordPress embed installations", () => {
 
     const hostUrl = new URL(location);
     const feedbackUrl = `/embed/review/feedback?${new URLSearchParams({
-      installation_id: connected.installation.id,
+      installation_id: installation.id,
       page_url: pageUrl,
     })}`;
     const comment = "Embed boundary feedback";
     const clientFeedbackId = `client-${crypto.randomUUID()}`;
     const operationReceipt = await createFeedbackOperationReceipt({
-      installationId: connected.installation.id,
+      installationId: installation.id,
       projectId: project.id,
       pageUrl,
       comment,
@@ -749,7 +673,7 @@ describe("WordPress embed installations", () => {
         headers: { Cookie: cookie, "Content-Type": "application/json" },
         body: JSON.stringify({
           comment: "Wrong page",
-          pageUrl: "https://client.example.com/account/",
+          pageUrl: `${SITE_ORIGIN}/account/`,
           clientFeedbackId: `client-${crypto.randomUUID()}`,
         }),
       },
@@ -766,12 +690,12 @@ describe("WordPress embed installations", () => {
     );
 
     const retiredExchange = await request(
-      `/api/embed/session/exchange?installation_id=${encodeURIComponent(connected.installation.id)}`,
+      `/api/embed/session/exchange?installation_id=${encodeURIComponent(installation.id)}`,
       {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          Origin: "https://client.example.com",
+          Origin: SITE_ORIGIN,
         },
         body: JSON.stringify({}),
       },
@@ -784,126 +708,81 @@ describe("WordPress embed installations", () => {
   });
 
   it("requires exact trusted-host origin and a bound direct submission or one-time operation receipt before embedded mutation", async () => {
-    const { organization } = await createOrganization();
-    const { project } = await createExternalProject(organization.id);
-    const connected = await connectInstallation(project.id);
-    const session = await startReviewSession(connected.installation.id);
+    const { project, installation } = await installedProject();
+    const session = await startReviewSession(installation.id);
     expect(session.start.status).toBe(302);
     const feedbackPath = `/embed/review/feedback?${new URLSearchParams({
-      installation_id: connected.installation.id,
+      installation_id: installation.id,
       page_url: session.pageUrl,
     })}`;
-    const before = await (env as Env).DB.prepare(
-      `SELECT COUNT(*) AS count FROM review_feedback WHERE project_id = ?`,
-    )
-      .bind(project.id)
-      .first<{ count: number }>();
+    const countFeedback = async () =>
+      (
+        await (env as Env).DB.prepare(
+          `SELECT COUNT(*) AS count FROM review_feedback WHERE project_id = ?`,
+        )
+          .bind(project.id)
+          .first<{ count: number }>()
+      )?.count;
+    const before = await countFeedback();
+    const attempt = (
+      comment: string,
+      headers: Record<string, string>,
+    ): RequestInit => ({
+      method: "POST",
+      headers: { Cookie: session.cookie, ...headers },
+      body: JSON.stringify({
+        comment,
+        pageUrl: session.pageUrl,
+        clientFeedbackId: `client-${crypto.randomUUID()}`,
+      }),
+    });
     const attemptOptions: RequestInit[] = [
-      {
-        method: "POST",
-        headers: {
-          Cookie: session.cookie,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          comment: "No origin",
-          pageUrl: session.pageUrl,
-          clientFeedbackId: `client-${crypto.randomUUID()}`,
-        }),
-      },
-      {
-        method: "POST",
-        headers: {
-          Cookie: session.cookie,
-          Origin: "https://attacker.example",
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          comment: "Wrong origin JSON",
-          pageUrl: session.pageUrl,
-          clientFeedbackId: `client-${crypto.randomUUID()}`,
-        }),
-      },
-      {
-        method: "POST",
-        headers: {
-          Cookie: session.cookie,
-          Origin: "https://client.example.com",
-          "Content-Type": "text/plain",
-        },
-        body: JSON.stringify({
-          comment: "Simple request CSRF",
-          pageUrl: session.pageUrl,
-          clientFeedbackId: `client-${crypto.randomUUID()}`,
-        }),
-      },
-      {
-        method: "POST",
-        headers: {
-          Cookie: session.cookie,
-          Origin: "http://localhost",
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          comment: "Incomplete direct submission",
-          pageUrl: session.pageUrl,
-          clientFeedbackId: `client-${crypto.randomUUID()}`,
-        }),
-      },
-      {
-        method: "POST",
-        headers: {
-          Cookie: session.cookie,
-          Origin: "http://localhost",
-          "Content-Type": "application/json",
-          "x-shiplet-operation-receipt":
-            "malformed-test-receipt-not-a-credential",
-        },
-        body: JSON.stringify({
-          comment: "Invalid operation receipt",
-          pageUrl: session.pageUrl,
-          clientFeedbackId: `client-${crypto.randomUUID()}`,
-        }),
-      },
+      attempt("No origin", { "Content-Type": "application/json" }),
+      attempt("Wrong origin JSON", {
+        Origin: "https://attacker.example",
+        "Content-Type": "application/json",
+      }),
+      attempt("Simple request CSRF", {
+        Origin: SITE_ORIGIN,
+        "Content-Type": "text/plain",
+      }),
+      attempt("Incomplete direct submission", {
+        Origin: "http://localhost",
+        "Content-Type": "application/json",
+      }),
+      attempt("Invalid operation receipt", {
+        Origin: "http://localhost",
+        "Content-Type": "application/json",
+        "x-shiplet-operation-receipt": "malformed-test-receipt-not-a-credential",
+      }),
     ];
     const attempts: Response[] = [];
     for (const options of attemptOptions) {
       attempts.push(await request(feedbackPath, options));
     }
-    expect.soft(attempts.map((attempt) => attempt.status)).toEqual([
-      403,
-      403,
-      403,
-      400,
-      403,
+    expect.soft(attempts.map((response) => response.status)).toEqual([
+      403, 403, 403, 400, 403,
     ]);
     const incompleteSubmission = (await attempts[3].json()) as {
       error?: string;
     };
     expect(incompleteSubmission.error).toBe("review_revision_invalid");
-    const after = await (env as Env).DB.prepare(
-      `SELECT COUNT(*) AS count FROM review_feedback WHERE project_id = ?`,
-    )
-      .bind(project.id)
-      .first<{ count: number }>();
-    expect(after?.count).toBe(before?.count);
+    expect(await countFeedback()).toBe(before);
   });
 
   it("uses an accessible popup authentication bootstrap instead of navigating WorkOS inside the third-party frame", async () => {
-    const { organization } = await createOrganization();
-    const { project } = await createExternalProject(organization.id);
-    const connected = await connectInstallation(project.id);
+    const { installation } = await installedProject();
     const response = await request(
       `/embed/review/start?${new URLSearchParams({
-        installation_id: connected.installation.id,
-        return_url: "https://client.example.com/pricing/",
+        installation_id: installation.id,
+        return_url: `${SITE_ORIGIN}/pricing/`,
       })}`,
       { redirect: "manual" },
     );
     expect(response.status).toBe(200);
     expect(response.headers.get("set-cookie")).toBeNull();
     expect(response.headers.get("content-security-policy")).toContain(
-      "frame-ancestors 'self' https://client.example.com",
+      `frame-ancestors 'self' ${SITE_ORIGIN}`,
     );
     const html = await response.text();
     expect(html).toContain('data-shiplet-embed-auth-bootstrap="v1"');
@@ -914,12 +793,10 @@ describe("WordPress embed installations", () => {
   });
 
   it("binds the embed-auth bootstrap script to a fresh route nonce", async () => {
-    const { organization } = await createOrganization();
-    const { project } = await createExternalProject(organization.id);
-    const connected = await connectInstallation(project.id);
+    const { installation } = await installedProject();
     const path = `/embed/review/start?${new URLSearchParams({
-      installation_id: connected.installation.id,
-      return_url: "https://client.example.com/pricing/",
+      installation_id: installation.id,
+      return_url: `${SITE_ORIGIN}/pricing/`,
     })}`;
     const firstResponse = await request(path, { redirect: "manual" });
     const firstHtml = await firstResponse.text();
@@ -950,7 +827,38 @@ describe("WordPress embed installations", () => {
     expect(secondNonce).not.toBe(firstNonce);
   });
 
-  it("resolves the active revision custom widget through a sandboxed credential-free route", async () => {
+  it("rejects an expired sign-in handoff ticket", async () => {
+    const { installation } = await installedProject();
+    const authorization = await request(
+      `/embed/review/authorize?${new URLSearchParams({
+        installation_id: installation.id,
+        return_url: `${SITE_ORIGIN}/pricing/`,
+      })}`,
+      { headers: OWNER_HEADERS },
+    );
+    expect(authorization.status).toBe(200);
+    const ticket = (await authorization.text()).match(
+      /shiplet_embed_auth_[A-Za-z0-9_-]+/,
+    )?.[0];
+    expect(ticket).toBeTruthy();
+    await (env as Env).DB.prepare(
+      "UPDATE embed_exchange_codes SET expires_on = ? WHERE code_hash = ?",
+    )
+      .bind("2000-01-01T00:00:00.000Z", await sha256Hex(ticket!))
+      .run();
+    const redeemed = await request("/embed/review/authorize", {
+      method: "POST",
+      headers: {
+        Origin: "http://localhost",
+        "Content-Type": "application/x-www-form-urlencoded",
+      },
+      body: new URLSearchParams({ installation_id: installation.id, ticket: ticket! }),
+    });
+    expect(redeemed.status).toBe(403);
+    expect(redeemed.headers.get("set-cookie")).toBeNull();
+  });
+
+  it("keeps the active revision widget on the app host and out of the website review host", async () => {
     const { organization } = await createOrganization();
     const { project } = await createExternalProject(organization.id);
     const active = await installActiveWidgetRevision(project.id, [
@@ -1010,19 +918,19 @@ describe("WordPress embed installations", () => {
         .not.toContain('<script src="data:text/javascript');
     }
 
-    const connected = await connectInstallation(project.id);
-    const session = await startReviewSession(connected.installation.id);
+    const { installation } = await installWebsite(project.id);
+    const session = await startReviewSession(installation.id);
     const embedHost = await request(session.location, {
       headers: { Cookie: session.cookie },
     });
     expect(embedHost.status).toBe(200);
     const embedHtml = await embedHost.text();
-    expect.soft(embedHtml).toContain(`data-revision-id="${active.revisionId}"`);
-    expect.soft(embedHtml).toContain('data-shiplet-widget-frame="v1"');
+    expect(embedHtml).toContain(`data-revision-id="${active.revisionId}"`);
+    expect(embedHtml).not.toContain('data-shiplet-widget-frame="v1"');
+    expect(embedHtml).not.toContain("/embed/review/widget");
     expect(embedHtml).not.toContain("reviewToken");
-    expect(embedHtml).toContain('data-shiplet-embed-origin="https://client.example.com"');
+    expect(embedHtml).toContain(`data-shiplet-embed-origin="${SITE_ORIGIN}"`);
     expect(embedHtml).not.toMatch(/<iframe[^>]+data-shiplet-artifact-frame/);
-
   });
 
   it("fails closed when a bypassed runtime-v1 widget contains an unsupported module graph", async () => {
@@ -1106,14 +1014,9 @@ describe("WordPress embed installations", () => {
   });
 
   it("renders a revoked embedded session as the accessible frame-free revoked state", async () => {
-    const { organization } = await createOrganization();
-    const { project } = await createExternalProject(organization.id);
-    const connected = await connectInstallation(project.id);
-    const session = await startReviewSession(connected.installation.id);
-    await request(`/api/embed/installations/${connected.installation.id}`, {
-      method: "DELETE",
-      headers: { Authorization: `Bearer ${connected.secret}` },
-    });
+    const { project, installation } = await installedProject();
+    const session = await startReviewSession(installation.id);
+    await disconnectWebsite(project.id, installation.id);
     const response = await request(session.location, {
       headers: { Cookie: session.cookie },
     });
@@ -1125,14 +1028,12 @@ describe("WordPress embed installations", () => {
   });
 
   it("renders an expired embedded session as the accessible frame-free expired state", async () => {
-    const { organization } = await createOrganization();
-    const { project } = await createExternalProject(organization.id);
-    const connected = await connectInstallation(project.id);
-    const session = await startReviewSession(connected.installation.id);
+    const { installation } = await installedProject();
+    const session = await startReviewSession(installation.id);
     await (env as Env).DB.prepare(
       `UPDATE embed_review_sessions SET expires_on = ? WHERE installation_id = ?`,
     )
-      .bind("2000-01-01T00:00:00.000Z", connected.installation.id)
+      .bind("2000-01-01T00:00:00.000Z", installation.id)
       .run();
     const response = await request(session.location, {
       headers: { Cookie: session.cookie },
@@ -1145,17 +1046,15 @@ describe("WordPress embed installations", () => {
   });
 
   it("renders permission denial as an accessible frame-free trusted-host state", async () => {
-    const { organization } = await createOrganization();
-    const { project } = await createExternalProject(organization.id);
-    const connected = await connectInstallation(project.id);
+    const { installation } = await installedProject();
     const response = await request(
       `/embed/review/start?${new URLSearchParams({
-        installation_id: connected.installation.id,
-        return_url: "https://client.example.com/pricing/",
+        installation_id: installation.id,
+        return_url: `${SITE_ORIGIN}/pricing/`,
       })}`,
       {
         headers: {
-          "x-shiplet-user-id": "user_wordpress_outsider_state",
+          "x-shiplet-user-id": "user_embed_review_outsider_state",
           "x-shiplet-user-email": "outsider-state@example.com",
         },
       },
@@ -1171,10 +1070,8 @@ describe("WordPress embed installations", () => {
   });
 
   it("renders kernel storage failure as an accessible frame-free offline state", async () => {
-    const { organization } = await createOrganization();
-    const { project } = await createExternalProject(organization.id);
-    const connected = await connectInstallation(project.id);
-    const session = await startReviewSession(connected.installation.id);
+    const { installation } = await installedProject();
+    const session = await startReviewSession(installation.id);
     await (env as Env).DB.prepare(
       "ALTER TABLE embed_review_sessions RENAME TO embed_review_sessions_offline_test",
     ).run();
@@ -1199,64 +1096,32 @@ describe("WordPress embed installations", () => {
     const { organization } = await createOrganization();
     const firstProject = await createExternalProject(organization.id);
     const secondProject = await createExternalProject(organization.id);
-    const first = await connectInstallation(firstProject.project.id);
-    const second = await connectInstallation(secondProject.project.id);
+    const first = await installWebsite(firstProject.project.id);
+    const second = await installWebsite(secondProject.project.id);
+    expect(first.installation.id).not.toBe(second.installation.id);
     const rows = await (env as Env).DB.prepare(
-      `SELECT id, revoked_on FROM embed_installations
-			 WHERE id IN (?, ?) ORDER BY created_on`,
+      `SELECT id, revoked_on FROM embed_installations WHERE id IN (?, ?)`,
     )
       .bind(first.installation.id, second.installation.id)
       .all<{ id: string; revoked_on: string | null }>();
     expect(rows.results).toHaveLength(2);
-    expect(
-      rows.results.find((row) => row.id === first.installation.id)?.revoked_on,
-    ).toBeNull();
-    expect(
-      rows.results.find((row) => row.id === second.installation.id)?.revoked_on,
-    ).toBeNull();
-    const retiredStart = await request(
-      `/embed/review/start?${new URLSearchParams({
-        installation_id: first.installation.id,
-        return_url: "https://client.example.com/pricing/",
-      })}`,
-      { headers: OWNER_HEADERS },
+    for (const row of rows.results) expect(row.revoked_on).toBeNull();
+    expect((await startReviewSession(first.installation.id)).start.status).toBe(
+      302,
     );
-    expect(retiredStart.status).toBe(302);
-    const activeStart = await startReviewSession(second.installation.id);
-    expect(activeStart.start.status).toBe(302);
-  });
-
-  it("serves a credential-free bootstrap for an app-origin trusted iframe", async () => {
-    const response = await request("/api/embed/client.js");
-    expect(response.status).toBe(200);
-    expect(response.headers.get("content-type")).toContain(
-      "application/javascript",
-    );
-    const script = await response.text();
-    expect(script).toContain("__SHIPLET_EMBED__");
-    expect(script).toContain("/embed/review/start");
-    for (const forbidden of [
-      "__SHIPLET_REVIEW__",
-      "reviewToken",
-      "presenceToken",
-      "sessionStorage",
-      "localStorage",
-      "/api/review/client.js",
-      "/api/embed/session/exchange",
-      "Authorization",
-    ]) {
-      expect(script).not.toContain(forbidden);
-    }
+    expect(
+      (await startReviewSession(second.installation.id)).start.status,
+    ).toBe(302);
   });
 });
 
-describe("trusted WordPress review boundary", () => {
+describe("trusted embedded review boundary", () => {
   const baseSession = {
     installationId: "embed_installation_allowed",
     projectId: "project_allowed",
     revisionId: "revision_allowed",
-    siteOrigin: "https://client.example.com",
-    pageUrl: "https://client.example.com/pricing/?campaign=summer",
+    siteOrigin: SITE_ORIGIN,
+    pageUrl: `${SITE_ORIGIN}/pricing/?campaign=summer`,
     actorUserId: "user_allowed",
     expiresOn: "2030-01-01T00:05:00.000Z",
     revokedOn: null,
@@ -1273,13 +1138,7 @@ describe("trusted WordPress review boundary", () => {
   };
 
   it("Given one-time session material, When a cookie is issued, Then only a bounded partitioned HttpOnly header carries it", () => {
-    const createCookie =
-      futureEmbedContracts.createEmbedReviewSessionCookieHeader;
-    if (typeof createCookie !== "function") {
-      expect(typeof createCookie).toBe("function");
-      return;
-    }
-    const header = createCookie({
+    const header = createEmbedReviewSessionCookieHeader({
       installationId: "embed_installation_allowed",
       sessionHandle: "opaque-test-handle-not-a-credential",
       now: new Date("2030-01-01T00:00:00.000Z"),
@@ -1301,20 +1160,17 @@ describe("trusted WordPress review boundary", () => {
   });
 
   it("Given concurrent installations on one top-level site, When their cookies are issued and read, Then neither overwrites or authenticates the other", () => {
-    const createCookie =
-      futureEmbedContracts.createEmbedReviewSessionCookieHeader;
-    const readCookie = futureEmbedContracts.readEmbedReviewSessionHandle;
     const now = new Date("2030-01-01T00:00:00.000Z");
     const expiresOn = new Date("2030-01-01T00:05:00.000Z");
     const firstHandle = "first-opaque-test-handle";
     const secondHandle = "second-opaque-test-handle";
-    const first = createCookie({
+    const first = createEmbedReviewSessionCookieHeader({
       installationId: "embed_installation_first",
       sessionHandle: firstHandle,
       now,
       expiresOn,
     });
-    const second = createCookie({
+    const second = createEmbedReviewSessionCookieHeader({
       installationId: "embed_installation_second",
       sessionHandle: secondHandle,
       now,
@@ -1324,11 +1180,15 @@ describe("trusted WordPress review boundary", () => {
     const secondPair = second.split(";", 1)[0];
     expect(firstPair.split("=", 1)[0]).not.toBe(secondPair.split("=", 1)[0]);
     const combined = `${firstPair}; ${secondPair}`;
-    expect(readCookie(combined, "embed_installation_first")).toBe(firstHandle);
-    expect(readCookie(combined, "embed_installation_second")).toBe(
-      secondHandle,
+    expect(readEmbedReviewSessionHandle(combined, "embed_installation_first")).toBe(
+      firstHandle,
     );
-    expect(readCookie(combined, "embed_installation_other")).toBeNull();
+    expect(
+      readEmbedReviewSessionHandle(combined, "embed_installation_second"),
+    ).toBe(secondHandle);
+    expect(
+      readEmbedReviewSessionHandle(combined, "embed_installation_other"),
+    ).toBeNull();
     for (const unsafeInstallationId of [
       "../other",
       "contains whitespace",
@@ -1336,49 +1196,40 @@ describe("trusted WordPress review boundary", () => {
       "",
     ]) {
       expect(() =>
-        createCookie({
+        createEmbedReviewSessionCookieHeader({
           installationId: unsafeInstallationId,
           sessionHandle: firstHandle,
           now,
           expiresOn,
         }),
       ).toThrowError(/installation/i);
-      expect(readCookie(combined, unsafeInstallationId)).toBeNull();
+      expect(readEmbedReviewSessionHandle(combined, unsafeInstallationId)).toBeNull();
     }
   });
 
   it("Given a page URL with credential-shaped query material, When it is bound for review, Then secrets and fragments are stripped while navigation context remains", () => {
-    const normalize = futureEmbedContracts.normalizeEmbedReviewPageUrl;
-    if (typeof normalize !== "function") {
-      expect(typeof normalize).toBe("function");
-      return;
-    }
-    const normalized = normalize(
-      "https://client.example.com/reset/?campaign=fall&page=2&utm_source=review&code=private&OAuth_Token=private&reset_password_token=private&X-Amz-Credential=private&X-Amz-Signature=private&sig=private&api_key=private&state=private#private-fragment",
-      "https://client.example.com",
+    const normalized = normalizeEmbedReviewPageUrl(
+      `${SITE_ORIGIN}/reset/?campaign=fall&page=2&utm_source=review&code=private&OAuth_Token=private&reset_password_token=private&X-Amz-Credential=private&X-Amz-Signature=private&sig=private&api_key=private&state=private#private-fragment`,
+      SITE_ORIGIN,
     );
     expect(normalized).toBe(
-      "https://client.example.com/reset/?campaign=fall&page=2&utm_source=review",
+      `${SITE_ORIGIN}/reset/?campaign=fall&page=2&utm_source=review`,
     );
   });
 
   it("recursively sanitizes credential-bearing URLs nested inside ordinary query values", () => {
-    const normalize = futureEmbedContracts.normalizeEmbedReviewPageUrl;
-    const nested = new URL("https://client.example.com/oauth/callback");
+    const nested = new URL(`${SITE_ORIGIN}/oauth/callback`);
     nested.searchParams.set("campaign", "fall");
     nested.searchParams.set("code", "private-inner-code");
-    const reset = new URL("https://client.example.com/account/reset");
+    const reset = new URL(`${SITE_ORIGIN}/account/reset`);
     reset.searchParams.set("tab", "profile");
     reset.searchParams.set("reset_password_token", "private-reset-link");
     reset.hash = "private-reset-fragment";
     nested.searchParams.set("next", reset.toString());
-    const outer = new URL("https://client.example.com/pricing/");
+    const outer = new URL(`${SITE_ORIGIN}/pricing/`);
     outer.searchParams.set("campaign", "summer");
     outer.searchParams.set("continue", nested.toString());
-    const normalized = normalize(
-      outer.toString(),
-      "https://client.example.com",
-    );
+    const normalized = normalizeEmbedReviewPageUrl(outer.toString(), SITE_ORIGIN);
     expect(normalized).toBeTruthy();
     const normalizedOuter = new URL(normalized || "");
     expect(normalizedOuter.searchParams.get("campaign")).toBe("summer");
@@ -1403,11 +1254,6 @@ describe("trusted WordPress review boundary", () => {
   });
 
   it("atomically claims an operation receipt only for its exact installation, Shiplet, revision, actor, effect, payload, request, and lifetime", async () => {
-    const claim = futureEmbedContracts.claimEmbedReviewOperationReceipt;
-    if (typeof claim !== "function") {
-      expect.soft(typeof claim).toBe("function");
-      return;
-    }
     await (env as Env).DB.prepare(
       `CREATE TABLE IF NOT EXISTS embed_review_operation_receipts (
 				receipt_hash TEXT PRIMARY KEY,
@@ -1423,7 +1269,6 @@ describe("trusted WordPress review boundary", () => {
 			)`,
     ).run();
     const receiptHandle = "test-operation-receipt-handle-not-a-credential";
-    const receiptHash = await sha256Hex(receiptHandle);
     const binding = {
       receiptHandle,
       installationId: "embed_installation_receipt",
@@ -1435,24 +1280,34 @@ describe("trusted WordPress review boundary", () => {
       requestId: "request_receipt",
       now: new Date("2030-01-01T00:00:00.000Z"),
     };
-    await (env as Env).DB.prepare(
-      `INSERT INTO embed_review_operation_receipts (
+    const insertReceipt = async (
+      handle: string,
+      requestId: string,
+      expiresOn: string,
+    ) =>
+      (env as Env).DB.prepare(
+        `INSERT INTO embed_review_operation_receipts (
 				receipt_hash, installation_id, project_id, revision_id,
 				actor_user_id, effect, payload_digest, request_id, expires_on, claimed_on
 			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)`,
-    )
-      .bind(
-        receiptHash,
-        binding.installationId,
-        binding.shipletId,
-        binding.revisionId,
-        binding.actorUserId,
-        binding.effect,
-        binding.payloadDigest,
-        binding.requestId,
-        "2030-01-01T00:01:00.000Z",
       )
-      .run();
+        .bind(
+          await sha256Hex(handle),
+          binding.installationId,
+          binding.shipletId,
+          binding.revisionId,
+          binding.actorUserId,
+          binding.effect,
+          binding.payloadDigest,
+          requestId,
+          expiresOn,
+        )
+        .run();
+    await insertReceipt(
+      receiptHandle,
+      binding.requestId,
+      "2030-01-01T00:01:00.000Z",
+    );
     for (const mismatch of [
       { installationId: "embed_installation_other" },
       { shipletId: "project_other" },
@@ -1463,39 +1318,29 @@ describe("trusted WordPress review boundary", () => {
       { requestId: "request_other" },
     ]) {
       expect(
-        await claim((env as Env).DB, { ...binding, ...mismatch }),
-      ).toMatchObject({
-        ok: false,
-      });
+        await claimEmbedReviewOperationReceipt((env as Env).DB, {
+          ...binding,
+          ...mismatch,
+        }),
+      ).toMatchObject({ ok: false });
     }
     const concurrent = await Promise.all([
-      claim((env as Env).DB, binding),
-      claim((env as Env).DB, binding),
+      claimEmbedReviewOperationReceipt((env as Env).DB, binding),
+      claimEmbedReviewOperationReceipt((env as Env).DB, binding),
     ]);
     expect(concurrent.filter((result) => result.ok)).toHaveLength(1);
-    expect(await claim((env as Env).DB, binding)).toMatchObject({ ok: false });
+    expect(
+      await claimEmbedReviewOperationReceipt((env as Env).DB, binding),
+    ).toMatchObject({ ok: false });
 
     const expiredHandle = "expired-operation-receipt-not-a-credential";
-    await (env as Env).DB.prepare(
-      `INSERT INTO embed_review_operation_receipts (
-				receipt_hash, installation_id, project_id, revision_id,
-				actor_user_id, effect, payload_digest, request_id, expires_on, claimed_on
-			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)`,
-    )
-      .bind(
-        await sha256Hex(expiredHandle),
-        binding.installationId,
-        binding.shipletId,
-        binding.revisionId,
-        binding.actorUserId,
-        binding.effect,
-        binding.payloadDigest,
-        "request_expired",
-        "2029-12-31T23:59:59.000Z",
-      )
-      .run();
+    await insertReceipt(
+      expiredHandle,
+      "request_expired",
+      "2029-12-31T23:59:59.000Z",
+    );
     expect(
-      await claim((env as Env).DB, {
+      await claimEmbedReviewOperationReceipt((env as Env).DB, {
         ...binding,
         receiptHandle: expiredHandle,
         requestId: "request_expired",
@@ -1503,22 +1348,23 @@ describe("trusted WordPress review boundary", () => {
     ).toMatchObject({ ok: false });
   });
 
-  it("Given the current embed module, When its public surface is inspected, Then the retired browser review-code issuer is absent", () => {
-    expect(
-      Object.prototype.hasOwnProperty.call(
-        embedContracts,
-        "createEmbedReviewCode",
-      ),
-    ).toBe(false);
+  it("Given the current embed module, When its public surface is inspected, Then retired review-code and server-secret installation issuers are absent", () => {
+    for (const retired of [
+      "createEmbedReviewCode",
+      "createEmbedConnectionCode",
+      "createEmbedInstallation",
+      "authenticateEmbedInstallation",
+      "embedClientScript",
+    ]) {
+      expect(
+        Object.prototype.hasOwnProperty.call(embedContracts, retired),
+        retired,
+      ).toBe(false);
+    }
   });
 
   it("Given a trusted session record, When it becomes public, Then credentials and actor authority are omitted", () => {
-    const project = futureEmbedContracts.publicEmbedReviewSession;
-    if (typeof project !== "function") {
-      expect(typeof project).toBe("function");
-      return;
-    }
-    const publicSession = project({
+    const publicSession = publicEmbedReviewSession({
       ...baseSession,
       sessionHandle: "private-session-material",
       reviewToken: "private-review-material",
@@ -1547,25 +1393,21 @@ describe("trusted WordPress review boundary", () => {
   });
 
   it("Given a legacy session record containing a credential-bearing page URL, When it becomes public, Then the projection redacts it defensively", () => {
-    const project = futureEmbedContracts.publicEmbedReviewSession;
-    const publicSession = project({
+    const publicSession = publicEmbedReviewSession({
       ...baseSession,
-      pageUrl:
-        "https://client.example.com/pricing/?campaign=summer&reset_token=private&X-Amz-Signature=private#private",
+      pageUrl: `${SITE_ORIGIN}/pricing/?campaign=summer&reset_token=private&X-Amz-Signature=private#private`,
       sessionHandle: "private-session-material",
       reviewToken: "private-review-material",
       presenceToken: "private-presence-material",
     });
-    expect(publicSession.pageUrl).toBe(
-      "https://client.example.com/pricing/?campaign=summer",
-    );
+    expect(publicSession.pageUrl).toBe(`${SITE_ORIGIN}/pricing/?campaign=summer`);
     expect(JSON.stringify(publicSession)).not.toContain("private");
   });
 
   it.each([
     ["wrong origin", { siteOrigin: "https://attacker.example" }],
     ["wrong installation", { installationId: "embed_installation_other" }],
-    ["wrong page", { pageUrl: "https://client.example.com/other/" }],
+    ["wrong page", { pageUrl: `${SITE_ORIGIN}/other/` }],
     ["wrong project", { projectId: "project_other" }],
     ["wrong revision", { revisionId: "revision_other" }],
     ["wrong actor", { actorUserId: "user_other" }],
@@ -1573,163 +1415,30 @@ describe("trusted WordPress review boundary", () => {
   ])(
     "Given a bound trusted session, When a request has %s, Then authority fails closed",
     (_caseName, override) => {
-      const validate = futureEmbedContracts.validateEmbedReviewSessionBinding;
-      if (typeof validate !== "function") {
-        expect(typeof validate).toBe("function");
-        return;
-      }
       expect(
-        validate(baseSession, { ...baseRequest, ...override }),
+        validateEmbedReviewSessionBinding(baseSession, {
+          ...baseRequest,
+          ...override,
+        }),
       ).toMatchObject({ ok: false });
     },
   );
 
   it("Given a revoked or expired trusted session, When used, Then authority fails closed", () => {
-    const validate = futureEmbedContracts.validateEmbedReviewSessionBinding;
-    if (typeof validate !== "function") {
-      expect(typeof validate).toBe("function");
-      return;
-    }
+    expect(validateEmbedReviewSessionBinding(baseSession, baseRequest)).toEqual({
+      ok: true,
+    });
     expect(
-      validate(
+      validateEmbedReviewSessionBinding(
         { ...baseSession, revokedOn: "2030-01-01T00:00:01.000Z" },
         baseRequest,
       ),
     ).toMatchObject({ ok: false });
     expect(
-      validate(baseSession, {
+      validateEmbedReviewSessionBinding(baseSession, {
         ...baseRequest,
         now: new Date("2030-01-01T00:05:00.000Z"),
       }),
     ).toMatchObject({ ok: false });
-  });
-
-  it("Given hostile installation-page JavaScript, When the bootstrap runs, Then only the configured app-origin frame is mounted without credentials", () => {
-    const script = embedContracts.embedClientScript();
-    const appended: Array<Record<string, unknown>> = [];
-    const listeners = new Map<string, Array<(event: unknown) => void>>();
-    const navigate = vi.fn();
-    const fetchCall = vi.fn();
-    const location = {
-      href: "https://client.example.com/pricing/?campaign=summer&page=2&code=private&reset_password_token=private&X-Amz-Signature=private#private-fragment",
-      assign: navigate,
-    };
-    const document = {
-      currentScript: {
-        src: "https://shiplet.cc/api/embed/client.js",
-      },
-      querySelector: vi.fn(() => null),
-      createElement: vi.fn((tagName: string) => {
-        const attributes = new Map<string, string>();
-        return {
-          tagName: tagName.toUpperCase(),
-          dataset: {},
-          style: {},
-          setAttribute(name: string, value: string) {
-            attributes.set(name, value);
-          },
-          getAttribute(name: string) {
-            return attributes.get(name) || null;
-          },
-        };
-      }),
-      body: {
-        appendChild(element: Record<string, unknown>) {
-          appended.push(element);
-          return element;
-        },
-      },
-      head: {
-        appendChild(element: Record<string, unknown>) {
-          appended.push(element);
-          return element;
-        },
-      },
-    };
-    const hostileWindow = {
-      __SHIPLET_EMBED__: {
-        installationId: "embed_installation_allowed",
-        apiBaseUrl: "https://attacker.example",
-      },
-      addEventListener(type: string, listener: (event: unknown) => void) {
-        listeners.set(type, [...(listeners.get(type) || []), listener]);
-      },
-    };
-    const execute = new Function(
-      "window",
-      "document",
-      "location",
-      "sessionStorage",
-      "localStorage",
-      "history",
-      "fetch",
-      "URL",
-      script,
-    );
-    execute(
-      hostileWindow,
-      document,
-      location,
-      { getItem: vi.fn(), setItem: vi.fn() },
-      { getItem: vi.fn(), setItem: vi.fn() },
-      { replaceState: vi.fn(), state: null },
-      fetchCall,
-      URL,
-    );
-
-    const iframe = appended.find((element) => element.tagName === "IFRAME");
-    expect(iframe).toBeDefined();
-    const iframeSrc = new URL(String(iframe?.src || ""));
-    expect(iframeSrc.origin).toBe("https://shiplet.cc");
-    expect(iframeSrc.pathname).toBe("/embed/review/start");
-    expect(iframeSrc.searchParams.get("installation_id")).toBe(
-      "embed_installation_allowed",
-    );
-    expect(iframeSrc.searchParams.get("return_url")).toBe(
-      "https://client.example.com/pricing/?campaign=summer&page=2",
-    );
-    for (const forbiddenParam of [
-      "shiplet_embed_code",
-      "code",
-      "token",
-      "session",
-      "capability",
-    ]) {
-      expect(iframeSrc.searchParams.has(forbiddenParam)).toBe(false);
-    }
-    expect(iframe?.title).toBe("Review this page in Shiplet");
-    const sandbox = String(
-      (
-        iframe as {
-          getAttribute?: (name: string) => string | null;
-        }
-      )?.getAttribute?.("sandbox") || "",
-    );
-    expect(sandbox).toContain("allow-scripts");
-    expect(sandbox).toContain("allow-forms");
-    expect(sandbox).toContain("allow-same-origin");
-    expect(sandbox).toContain("allow-popups");
-    expect(sandbox).toContain("allow-popups-to-escape-sandbox");
-    expect(sandbox).not.toContain("allow-modals");
-    expect(sandbox).not.toContain("allow-downloads");
-    expect(sandbox).not.toContain("allow-top-navigation");
-    expect(navigate).not.toHaveBeenCalled();
-    expect(fetchCall).not.toHaveBeenCalled();
-
-    for (const listener of listeners.get("message") || []) {
-      listener({
-        origin: "https://client.example.com",
-        source: hostileWindow,
-        data: {
-          type: "shiplet.feedback.create",
-          actor: { kind: "human", id: "user_allowed" },
-        },
-      });
-    }
-    expect(fetchCall).not.toHaveBeenCalled();
-    expect(navigate).not.toHaveBeenCalled();
-    expect(
-      (hostileWindow as Record<string, unknown>).__SHIPLET_REVIEW__,
-    ).toBeUndefined();
   });
 });

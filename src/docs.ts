@@ -11,7 +11,7 @@ interface DocsPage {
 
 // prettier-ignore
 const DOCS_PUBLIC_CONTENT_SHA256: Record<string, string> = {
-  "cli": "09fce96ca3a01879250dc723f5f82940666ece438b49db04b8536dd970961558",
+  "cli": "95c76e56d7dcac4d2982a4bcf152205d884cb4a1262aaf71dde55d6d967b972f",
   "self-hosting": "03dd91928c89a6911867c9c4f4625aa4455306c420af821408540ffb7eac1f38",
   "browser-capture": "1b6542d6a598b88c6dacda840930f1ff5095d9c0952778bb3a26672603a61643",
   "introduction": "04360e14d9c10a3cce48907eebea6b53d1647ad094353e5e22d57193ced2c2e1",
@@ -20,20 +20,20 @@ const DOCS_PUBLIC_CONTENT_SHA256: Record<string, string> = {
   "quickstart":
     "447ea3b2f09dcb48ea11813b612b697332cd4717c2fcc6c3a26e0815e3393120",
   "access-control":
-    "79149325c91406a2390f14cd814e9a1eae1d3eac6010ac6181040518fa75967a",
+    "71c4b16009ef9569e8f106138bb498fcfdb0c8a51281f98db1dc0262ee96e287",
   "publishing":
-    "0d94977a77ce4a701644a65f43eeec8002f4a141a3cdbf11d591b366a1c52c90",
+    "b9f56eaf441f5e4fa4c060936613eb378e2415dffa91b63c29fdf93e75267582",
   "extensions":
     "c834eef088f4ab55ed628fe95cc4b169445c7ca3f77732e8717e5c048fc70d13",
   "review-feedback":
-    "56b2b5ef78e69b80e9cf8e28252c3ed7e88ff6955d214ed3d839a22ebd3be78f",
+    "3cf5e78d73d4036525249aa494a73bf3d62b157726f27470db3f9e73df07df70",
   "code-mode-mcp":
     "262b9c534331c1d7bc76a4e2b8708e18f8f54fb79dbcbff960ef96e6c889624a",
   "api-keys":
     "9fb78882f2041ecf900e128ad19c53131617c987bcb347f084d46c871d2ed83a",
   "api-surface":
     "ae7d36eb6be9d7c20c4e9a493540d3b9f3d89ce7d31dbb1de9a25d8ee5f56f95",
-  "embed": "19aff21c3359f20c2b02c84373391c1b8b043722e1fe7ed51a7bcc668e4e2a63",
+  "embed": "9fef7053a6175f1aa55f8c7c5076596d104b2aa26538839c70a63e6a441c96b3",
   "security": "5b52e175c0b5cb8630e199c1bfc126895eadaa47e5f0fa3ec19d7878b6e7caa6"
 };
 
@@ -194,7 +194,12 @@ const DOCS_PAGES: DocsPage[] = [
 </tbody></table>
 <h2>People and teams</h2>
 <p>Organizations contain members and teams. A Shiplet can also grant access to an exact invited email address. Invitations become effective for the matching signed-in identity.</p>
+<p>Sharing a Shiplet by email grants that one Shiplet only. It does not make the person a member of the organization or of any team, so they cannot open the organization's other Shiplets, archive Shiplets, or invite anyone. Someone who is already a member receives the grant at once, without an invitation.</p>
+<p>Sign in first: a restricted Shiplet or its invitation opened while signed out starts a normal sign-in without naming the Shiplet or organization. After sign-in, the invitation is offered only to the exact invited email; accept it deliberately. Any other account sees the usual request-access screen.</p>
 <p>Open <strong>Account</strong> at <code>/account</code> to inspect or switch the signed-in identity. Open <strong>Workspace</strong> at <code>/workspace</code> to choose the active organization.</p>
+<h2>Removing people</h2>
+<p>WorkOS owns organization membership. When you remove or deactivate someone in WorkOS, or demote them from admin to member, Shiplet applies the change at their next sign-in, and a background sweep applies it for people who never sign in again. Each five-minute sweep run checks up to 20 people, so a full pass takes about five minutes for every 20 people who belong to an organization.</p>
+<p>Applying a removal deletes the person's organization membership and their place in its teams. Organization visibility, organization and team grants, and administrator actions stop applying on their next request, including from sessions that are already open; those sessions stay signed in until they expire. The person keeps Shiplets they own and any grant made to them on a single Shiplet. If WorkOS cannot be reached, Shiplet keeps every membership and tries again later.</p>
 <h2>Invite links</h2>
 <p>Organization administrators create invite links in the <strong>Invite links</strong> section of <strong>Workspace</strong>. Each link targets the whole organization or exactly one team. It can allow a set number of uses or unlimited uses, expire after a number of days or never, and be reserved for specific email addresses. Administrators can copy the same link again later and revoke it at any time, and Shiplet records every link creation, join, and revocation in its audit history.</p>
 <p>A revoked, expired, or used-up link stops working immediately; ask an administrator for a new one. Anyone who has an unreserved link can sign in and join, so share it only where you would share membership.</p>
@@ -219,6 +224,7 @@ const DOCS_PAGES: DocsPage[] = [
 <p>Remove <code>--dry-run</code> to publish and approve the browser session when prompted. Open the returned review URL. The CLI encodes assets and preserves folder paths for you.</p>
 <h2>Uploaded files</h2>
 <p>Direct REST clients send base64-encoded <code>assets</code>. The browser Prepare page accepts supported files directly. Shiplet serves <code>index.html</code> when present and creates a file review page when it is absent.</p>
+<p>Uploads are limited to 200 files, 10 MB per file, and 24 MB in total.</p>
 <pre><code>{
   "name": "Campaign prototype",
   "subdomain": "campaign-prototype",
@@ -265,6 +271,7 @@ const DOCS_PAGES: DocsPage[] = [
 <h2>Review in the browser</h2>
 <ol><li>Open the review link.</li><li>Choose the page or a visible element.</li><li>Leave a comment and submit it through the trusted toolbar.</li><li>Reply, update status, mention a collaborator, or watch the Shiplet from its detail page.</li></ol>
 <p>Use <a href="/feedback">Feedback</a> for the global review queue and <a href="/inbox">Inbox</a> for notifications. If live updates stop, reload the trusted review host; persisted feedback remains available.</p>
+<p>Only someone who can edit the Shiplet can invite through a mention: mentioning a workspace member who cannot open it yet grants them reviewer access. Other workspace members' mentions only notify people who can already open the Shiplet. A mention that has no effect never reveals whether that person exists or belongs to the workspace.</p>
 <h2>Optional feedback automation through MCP</h2>
 <p>An authorized agent can read tickets, create replies, and update status through documented API operations. Shiplet records the authenticated agent credential as the actor.</p>
 <p><strong>Next:</strong> open <a href="/feedback">Feedback</a> to work through review tickets.</p>`,
@@ -285,6 +292,7 @@ npx shiplet-cli prepare ./dist --name "Review build" --subdomain review-build --
 <pre><code>npm install -g shiplet-cli
 shiplet --help</code></pre>
 <p>Replace <code>./dist</code> with your artifact folder and choose an available subdomain. Add <code>--dry-run</code> to inspect the artifact before publishing; a dry run does not authenticate.</p>
+<p>Shiplet publishes into your only workspace automatically. If your account belongs to more than one, add <code>--organization org_123</code> with the workspace ID, or set <code>SHIPLET_ORGANIZATION_ID</code>; the flag wins when both are set. Workspace IDs start with <code>org_</code>. If you name neither, the error lists each of your workspaces by name and ID, and a dry run shows the workspace a command will use.</p>
 <h2>Approve a session</h2>
 <ol><li>Run <code>shiplet login</code>, or any network command without an API key, to use browser authorization.</li><li>Sign in to Shiplet if asked. Check the account shown on the approval page.</li><li>Select <strong>Authorize CLI</strong> only if you started the command.</li><li>Select <strong>Return to CLI</strong> on the approval page to complete the local callback.</li><li>Return to your terminal or agent for the result. You can close the browser window.</li></ol>
 <p>One approval creates a session that later commands reuse for two hours by default. Set another length with <code>--session-ttl</code> or <code>SHIPLET_CLI_SESSION_TTL</code>, from 5 minutes to 8 hours; Shiplet enforces the 8 hour maximum. The session is bound to the exact Shiplet origin and the approved account, and is kept in the macOS Keychain, the Linux Secret Service keyring, or otherwise a user-only <code>0600</code> file under <code>~/.config/shiplet</code>. It is never printed. No pasted credential is required.</p>

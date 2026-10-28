@@ -79,7 +79,7 @@ async function fixture() {
       siteOrigin,
       `${siteOrigin}/`,
       "Reviewer site",
-      crypto.randomUUID(),
+      `browser-only:${installationId}`,
       user.id,
       new Date().toISOString(),
     )

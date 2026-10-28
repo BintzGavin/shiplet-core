@@ -11,6 +11,22 @@ export interface WorkOSMembership {
   id: string;
 }
 
+/** One of a person's WorkOS organization memberships, as reconciliation reads it. */
+export interface WorkOSUserOrganizationMembership {
+  id: string;
+  organizationId: string;
+  userId: string;
+  status: "active" | "inactive" | "pending";
+  /** Every role slug WorkOS reports for the membership, or null for none. */
+  roleSlugs: string[] | null;
+}
+
+export interface WorkOSUserOrganizationMembershipPage {
+  memberships: WorkOSUserOrganizationMembership[];
+  /** The cursor for the next page, or null on the last page. */
+  after: string | null;
+}
+
 export interface WorkOSTeam {
   id: string;
   name: string;
@@ -45,6 +61,15 @@ const testOrganizationMemberships = new Map<
   { id: string; organizationId: string; userId: string }
 >();
 const testTeamMembershipIds = new Map<string, Set<string>>();
+// Test mode's WorkOS reports the memberships and roles Shiplet recorded, except
+// where a test simulated a change in WorkOS: a removed membership, a changed
+// role, or WorkOS failing to answer for a person.
+const testRemovedOrganizationMemberships = new Set<string>();
+const testOrganizationMembershipRoles = new Map<string, string>();
+const testFailingMembershipListings = new Set<string>();
+const testFailingMembershipLookups = new Set<string>();
+const testHangingMembershipListings = new Set<string>();
+const testMembershipListings: string[] = [];
 
 function testOrganizationMembershipKey(organizationId: string, userId: string) {
   return JSON.stringify([organizationId, userId]);
@@ -381,6 +406,7 @@ export async function createWorkOSOrganizationMembership(
     if (testOrganizationMemberships.has(key)) {
       throw new Error("Organization membership already exists");
     }
+    testRemovedOrganizationMemberships.delete(key);
     const id = `om_${slug(options.organizationId)}_${slug(options.userId)}`;
     testOrganizationMemberships.set(key, {
       id,
@@ -410,6 +436,9 @@ export async function findWorkOSOrganizationMembership(
   options: { organizationId: string; userId: string },
 ): Promise<WorkOSMembership | null> {
   if (env.SHIPLET_AUTH_MODE === "test") {
+    if (testFailingMembershipLookups.has(options.userId)) {
+      throw new Response("WorkOS is unavailable", { status: 503 });
+    }
     const membership = testOrganizationMemberships.get(
       testOrganizationMembershipKey(options.organizationId, options.userId),
     );
@@ -429,6 +458,89 @@ export async function findWorkOSOrganizationMembership(
       candidate.userId === options.userId,
   );
   return membership ? { id: membership.id } : null;
+}
+
+function membershipRoleSlugs(membership: {
+  role?: { slug?: unknown } | null;
+  roles?: Array<{ slug?: unknown } | null> | null;
+}) {
+  const slugs = [membership.role, ...(membership.roles ?? [])]
+    .map((role) => role?.slug)
+    .filter((slug): slug is string => typeof slug === "string" && slug !== "");
+  return slugs.length > 0 ? [...new Set(slugs)] : null;
+}
+
+/**
+ * One page of the person's active and pending WorkOS organization
+ * memberships, across every organization. WorkOS leaves out inactive
+ * (deactivated) and deleted memberships. Throws when WorkOS does not answer or
+ * answers with something other than a list, so a caller never mistakes a
+ * failed read for a person with no memberships.
+ */
+export async function listWorkOSOrganizationMembershipsPage(
+  env: Env,
+  options: { userId: string; after?: string | null },
+): Promise<WorkOSUserOrganizationMembershipPage> {
+  if (env.SHIPLET_AUTH_MODE === "test") {
+    testMembershipListings.push(options.userId);
+    if (testFailingMembershipListings.has(options.userId)) {
+      throw new Response("WorkOS is unavailable", { status: 503 });
+    }
+    if (testHangingMembershipListings.has(options.userId)) {
+      return new Promise<never>(() => {});
+    }
+    const identity = await env.DB.prepare(
+      `SELECT user_id FROM workos_user_identities
+			 WHERE workos_user_id = ? LIMIT 1`,
+    )
+      .bind(options.userId)
+      .first<{ user_id: string }>();
+    const recorded = await env.DB.prepare(
+      `SELECT id, organization_id, role FROM organization_memberships
+			 WHERE user_id = ? ORDER BY organization_id`,
+    )
+      .bind(identity?.user_id ?? options.userId)
+      .all<{ id: string; organization_id: string; role: string }>();
+    const memberships = (recorded.results || [])
+      .filter(
+        (row) =>
+          !testRemovedOrganizationMemberships.has(
+            testOrganizationMembershipKey(row.organization_id, options.userId),
+          ),
+      )
+      .map((row) => ({
+        id: row.id,
+        organizationId: row.organization_id,
+        userId: options.userId,
+        status: "active" as const,
+        roleSlugs: [
+          testOrganizationMembershipRoles.get(
+            testOrganizationMembershipKey(row.organization_id, options.userId),
+          ) ?? row.role,
+        ],
+      }));
+    return { memberships, after: null };
+  }
+
+  const list = await getWorkOS(env).userManagement.listOrganizationMemberships({
+    userId: options.userId,
+    statuses: ["active", "pending"],
+    limit: 100,
+    after: options.after || undefined,
+  });
+  if (!Array.isArray(list.data)) {
+    throw new Error("WorkOS returned a malformed membership list");
+  }
+  return {
+    memberships: list.data.map((membership) => ({
+      id: membership.id,
+      organizationId: membership.organizationId,
+      userId: membership.userId,
+      status: membership.status,
+      roleSlugs: membershipRoleSlugs(membership),
+    })),
+    after: list.listMetadata?.after || null,
+  };
 }
 
 /**
@@ -550,9 +662,45 @@ export async function sendWorkOSInvitation(
   return serializeInvitation(invitation);
 }
 
-/** Read-only view of test mode's WorkOS stand-in, for tests. */
+/** Test mode's WorkOS stand-in, for tests to inspect and change. */
 export const workosTestDouble = {
   teamMembershipIds(teamId: string) {
     return [...(testTeamMembershipIds.get(teamId) ?? [])];
+  },
+  /** Simulates an administrator removing the person in WorkOS. */
+  removeOrganizationMembership(organizationId: string, userId: string) {
+    const key = testOrganizationMembershipKey(organizationId, userId);
+    testRemovedOrganizationMemberships.add(key);
+    testOrganizationMemberships.delete(key);
+  },
+  /** Simulates an administrator changing the person's role in WorkOS. */
+  setOrganizationMembershipRole(
+    organizationId: string,
+    userId: string,
+    roleSlug: string,
+  ) {
+    testOrganizationMembershipRoles.set(
+      testOrganizationMembershipKey(organizationId, userId),
+      roleSlug,
+    );
+  },
+  /** Makes WorkOS fail to list the person's memberships. */
+  setMembershipListingFailure(userId: string, failing: boolean) {
+    if (failing) testFailingMembershipListings.add(userId);
+    else testFailingMembershipListings.delete(userId);
+  },
+  /** Makes WorkOS never answer a listing of the person's memberships. */
+  setMembershipListingHang(userId: string, hanging: boolean) {
+    if (hanging) testHangingMembershipListings.add(userId);
+    else testHangingMembershipListings.delete(userId);
+  },
+  /** Makes WorkOS fail to look up the person's membership of one organization. */
+  setMembershipLookupFailure(userId: string, failing: boolean) {
+    if (failing) testFailingMembershipLookups.add(userId);
+    else testFailingMembershipLookups.delete(userId);
+  },
+  /** The WorkOS user IDs whose memberships were listed, in order. */
+  membershipListings() {
+    return [...testMembershipListings];
   },
 };

@@ -39,6 +39,7 @@ import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/
 
 import {
   createStandaloneAssetPreviewIndex,
+  STANDALONE_ASSET_DOWNLOAD_PARAM,
   STANDALONE_ASSET_PREVIEW_MARKER,
 } from "./asset-preview";
 import {
@@ -111,6 +112,7 @@ import {
   sweepStaleExternalRewriteSpools,
 } from "./cloudflare-external-rewrite-spool";
 import {
+  assertStaticUploadFitsPackage,
   MAX_UPLOAD_JSON_BYTES,
   validateAndNormalizeStaticAssets,
 } from "./upload-policy";
@@ -127,6 +129,7 @@ import {
   LEGACY_SESSION_COOKIE,
   SESSION_COOKIE,
   getAccountGroupCookie,
+  createAuthFlowState,
   createUserSessionResponse,
   getCookie,
   getSessionCookie,
@@ -136,6 +139,8 @@ import {
   requireCurrentUser,
   requestCanUsePlatformCookies,
   switchAccountSessionResponse,
+  verifyAuthFlowState,
+  type AuthFlowVerification,
 } from "./auth";
 import {
   createInvitationConsentToken,
@@ -151,7 +156,10 @@ import {
   type RevisionKernelAuthorizationBinding,
   type ShipletActor,
 } from "./self-owned/revisions";
-import { migrateLegacyShipletRevision } from "./self-owned/legacy-migration";
+import {
+  legacyStaticPackageEnvelopeBytes,
+  migrateLegacyShipletRevision,
+} from "./self-owned/legacy-migration";
 import { createRevisionMcpManifestValidator } from "./self-owned/mcp-revision-validator";
 import {
   addTrustedRevisionPreviewContext,
@@ -166,6 +174,7 @@ import {
 } from "./self-owned/revision-preview-receipts";
 import {
   digestShipletPackage,
+  MAX_PACKAGE_BYTES,
   parseShipletPackage,
   ShipletPackageError,
   type ValidatedShipletPackage,
@@ -295,10 +304,11 @@ import {
   findPendingInvitationsByEmail,
   findPendingInvitationsByEmailAndOrganization,
   findPendingInvitationsByEmailAndProject,
-  findPendingInvitationsByProject,
   findPendingInvitationsByWorkOSInvitationId,
   findPendingInvitationsByWorkOSInvitationToken,
   getOrganizationMembership,
+  getShipletUserGrant,
+  getUserByEmail,
   getOrganizationById,
   getProjectById,
   getShipletAccessRequest,
@@ -307,6 +317,7 @@ import {
   getUser,
   isProjectOwner,
   listOrganizationMentionUsers,
+  ORGANIZATION_MEMBER_CAN_VIEW_PROJECT_SQL,
   listProjectsForOrganization,
   listProjectsForUser,
   listOrganizationsForUser,
@@ -350,6 +361,10 @@ import {
   latestWorkOSUserIdForLocalUser,
   resolveVerifiedWorkOSUser,
 } from "./workos-identity";
+import {
+  reconcileWorkOSMembershipsForUser,
+  sweepWorkOSMemberships,
+} from "./workos-membership-sync";
 import {
   ReviewScope,
   ReviewCapability,
@@ -500,24 +515,17 @@ import {
   type KernelApprovalBinding,
 } from "./mcp-kernel-approval";
 import {
-  appendEmbedRedirectParams,
-  authenticateEmbedInstallation,
+  BROWSER_INSTALLATION_FILTER,
   consumeEmbedExchangeCode,
-  createEmbedConnectionCode,
-  createEmbedInstallation,
   createEmbedReviewSession,
   createEmbedReviewGrant,
   createEmbedReviewSessionCookieHeader,
   digestEmbedReviewOperationReceiptHandle,
-  embedClientScript,
   getEmbedReviewSession,
   getEmbedInstallation,
-  normalizeEmbedConnectionRequest,
   normalizeEmbedReturnUrl,
   normalizeEmbedSiteUrl,
-  publicEmbedInstallation,
   readEmbedReviewSessionHandle,
-  revokeEmbedInstallation,
   validateEmbedReviewSessionBinding,
   type EmbedInstallationRecord,
 } from "./embed";
@@ -627,10 +635,7 @@ function allowedReviewCorsOrigin(
 
 function isEmbedApiPath(pathname: string) {
   return (
-    pathname === "/api/embed/client.js" ||
-    pathname === "/api/embed/installations/exchange" ||
-    pathname === "/api/embed/session/exchange" ||
-    pathname.startsWith("/api/embed/installations/")
+    pathname === "/api/embed/session/exchange"
   );
 }
 
@@ -717,11 +722,21 @@ function isPlatformCookieAuthRoute(pathname: string, method: string) {
   )
     return true;
   if (method !== "GET" && pathname === "/auth/login") return true;
-  if (method !== "GET" && pathname === "/embed/connect") return true;
   if (method !== "GET" && pathname === "/embed/install") return true;
   if (method !== "GET" && pathname === "/capture") return true;
   if (method !== "GET" && pathname === "/auth/switch-account") return true;
   return false;
+}
+
+// Shiplet's own sign-in and website setup pages are served with
+// `Referrer-Policy: no-referrer`, so browsers serialize the Origin of their
+// same-origin form submissions as "null". Only these top-level HTML form
+// routes may present that provenance instead of a control-plane Origin.
+function isNoReferrerTopLevelFormRoute(pathname: string, method: string) {
+  return (
+    method === "POST" &&
+    (pathname === "/auth/login" || pathname === "/embed/install")
+  );
 }
 
 function hasBearerAuthorization(request: Request) {
@@ -769,7 +784,7 @@ app.use("*", async (c, next) => {
   const path = new URL(c.req.url).pathname;
   const authPage = path.startsWith("/auth/") ||
     path === "/cli/authorize" || path === "/cli/authorize/complete" ||
-    path === "/embed/connect" || path === "/embed/install";
+    path === "/embed/install";
   if (!authPage || !c.req.header("accept")?.includes("text/html")) return;
   c.header("cache-control", "no-store");
   c.header("referrer-policy", "no-referrer");
@@ -844,7 +859,12 @@ app.use("*", async (c, next) => {
     !isControlPlaneOrigin(c.env, c.req.url, c.req.header("origin") || null, {
       method: c.req.method,
       hasCookie: Boolean(c.req.header("cookie")),
-    })
+    }) &&
+    !(
+      (isNoReferrerTopLevelFormRoute(url.pathname, c.req.method) ||
+        isNoReferrerTopLevelFormRoute(routedPathname(c.req.url), c.req.method)) &&
+      hasTrustedTopLevelFormProvenance(c.req.raw, [])
+    )
   ) {
     return c.text("Control-plane origin required", 403);
   }
@@ -875,7 +895,8 @@ const KERNEL_SCHEMA_EPOCH_MARKER = "kernel";
 // test/kernel-schema-epoch.spec.ts pins the schema digest to this value.
 // 2: organization and team invite link tables.
 // 3: cli_authorization_requests.session_ttl_seconds for reusable CLI sessions.
-const CURRENT_KERNEL_SCHEMA_EPOCH = 3;
+// 4: workos_membership_sync_state and the organization membership user index.
+const CURRENT_KERNEL_SCHEMA_EPOCH = 4;
 
 async function readKernelSchemaEpoch(db: D1Database): Promise<number | null> {
   const table = await db
@@ -1019,15 +1040,6 @@ async function readRequestTextWithLimit(request: Request, limit: number) {
 
 function normalizeAssetFiles(value: unknown) {
   return validateAndNormalizeStaticAssets(value);
-}
-
-function decodeState(state: string | null) {
-  if (!state) return {};
-  try {
-    return JSON.parse(atob(state));
-  } catch {
-    return {};
-  }
 }
 
 function appBaseUrl(env: Env, requestUrl: string) {
@@ -1284,55 +1296,7 @@ function embedProjectSubdomain(siteName: string, siteUrl: string) {
     .replace(/[^a-z0-9]+/g, "-")
     .replace(/^-+|-+$/g, "")
     .slice(0, 45);
-  return `${stem || "wordpress"}-${crypto.randomUUID().slice(0, 8)}`;
-}
-
-function renderEmbedConnectPage(options: {
-  connection: ReturnType<typeof normalizeEmbedConnectionRequest> & {};
-  organizations: Array<{ id: string; name: string }>;
-  projects: Project[];
-}) {
-  const { connection, organizations, projects } = options;
-  const selectedProjectId = connection.projectId || "new";
-  const projectOptions = [
-    `<option value="new"${selectedProjectId === "new" ? " selected" : ""}>Create a new Shiplet project</option>`,
-    ...projects.map(
-      (project) =>
-        `<option value="${escapeEmbedHtml(project.id)}"${selectedProjectId === project.id ? " selected" : ""}>${escapeEmbedHtml(project.name)}</option>`,
-    ),
-  ].join("");
-  const organizationOptions = organizations
-    .map(
-      (organization) =>
-        `<option value="${escapeEmbedHtml(organization.id)}">${escapeEmbedHtml(organization.name)}</option>`,
-    )
-    .join("");
-
-  return `<section class="success-card" style="max-width:720px;margin-inline:auto">
-	<span class="success-card-label">WordPress connection</span>
-	<h1>Connect ${escapeEmbedHtml(connection.siteName)}</h1>
-	<p style="margin-top:10px">Allow this WordPress site to load Shiplet review mode on <code>${escapeEmbedHtml(connection.siteOrigin)}</code>.</p>
-	<form method="post" action="/embed/connect" style="display:grid;gap:16px;margin-top:24px">
-		<input type="hidden" name="site_url" value="${escapeEmbedHtml(connection.siteUrl)}">
-		<input type="hidden" name="site_name" value="${escapeEmbedHtml(connection.siteName)}">
-		<input type="hidden" name="return_url" value="${escapeEmbedHtml(connection.returnUrl)}">
-		<input type="hidden" name="state" value="${escapeEmbedHtml(connection.state)}">
-		<label style="display:grid;gap:6px">
-			<strong>Shiplet project</strong>
-			<select name="project_id">${projectOptions}</select>
-			<small>Use one project for the whole site; feedback stays grouped by page URL.</small>
-		</label>
-		<label style="display:grid;gap:6px">
-			<strong>Workspace for a new project</strong>
-			<select name="organization_id"${organizations.length ? "" : " disabled"}>
-				${organizationOptions || '<option value="">A default workspace will be created</option>'}
-			</select>
-		</label>
-		<div class="dashboard-actions">
-			<button class="btn btn-primary" type="submit">Connect WordPress site</button>
-		</div>
-	</form>
-</section>`;
+  return `${stem || "website"}-${crypto.randomUUID().slice(0, 8)}`;
 }
 
 function projectSubdomainFromReturnTo(env: Env, returnTo: string) {
@@ -1390,25 +1354,150 @@ function renderInvitationConsentPage(options: {
   project: Project;
   organizationName: string;
   consentToken: string;
-  signedIn: boolean;
+  joinsWorkspace: boolean;
 }) {
-  const action = options.signedIn
-    ? "Accept invitation and open Shiplet"
-    : "Sign in and accept invitation";
+  const offer = options.joinsWorkspace
+    ? `<p>You are choosing to join <strong>${escapeAuthHtml(options.organizationName)}</strong> and open this restricted Shiplet.</p>`
+    : `<p><strong>${escapeAuthHtml(options.organizationName)}</strong> invited you to open this restricted Shiplet. Accepting opens this Shiplet only, not the rest of the workspace.</p>`;
   return `<div class="auth-stage">
 	<div class="auth-scene" aria-hidden="true">${HARBOR_SCENE_SVG}</div>
 	<section class="form-container auth-card" aria-labelledby="invitation-consent-title">
 		<span class="success-card-label">Restricted Shiplet</span>
 		<h1 id="invitation-consent-title">Review ${escapeAuthHtml(options.project.name)}</h1>
-		<p>You are choosing to join <strong>${escapeAuthHtml(options.organizationName)}</strong> and open this restricted Shiplet.</p>
+		${offer}
 		<p>Continue only if you recognize this workspace. Shiplet will require the exact email address that was invited.</p>
 		<form method="post" action="/auth/login">
 			<input type="hidden" name="consent_token" value="${escapeAuthHtml(options.consentToken)}">
-			<button class="btn btn-primary" type="submit">${action}</button>
+			<button class="btn btn-primary" type="submit">Accept invitation and open Shiplet</button>
 			<a class="btn btn-secondary" href="/">Cancel</a>
 		</form>
 	</section>
 </div>`;
+}
+
+/** An email share opens one Shiplet; it never joins its workspace or a team. */
+function isShipletOnlyInvitation(invitation: AppInvitationRecord) {
+  return invitation.invite_type === "shiplet_user";
+}
+
+/**
+ * The pending invitation to this Shiplet that the signed-in person may accept:
+ * it must name their exact email and the Shiplet's own workspace.
+ */
+async function pendingInvitationForSignedInUser(
+  env: Env,
+  project: Project,
+  user: ShipletUser,
+  invitationId?: string | null,
+) {
+  const email = user.email.trim().toLowerCase();
+  const candidates = invitationId
+    ? await findPendingInvitationById(env.DB, invitationId)
+    : await findPendingInvitationsByEmailAndProject(env.DB, email, project.id);
+  return (
+    candidates.find(
+      (invitation) =>
+        invitation.project_id === project.id &&
+        invitation.organization_id === project.organization_id &&
+        invitation.email.trim().toLowerCase() === email,
+    ) || null
+  );
+}
+
+/**
+ * After sign-in, a person whose exact email has a pending invitation to the
+ * restricted Shiplet they asked for is offered its named consent step. Nobody
+ * else sees the Shiplet or workspace names here; they continue under the
+ * normal access rules.
+ */
+async function invitationConsentUrlForUser(
+  c: any,
+  user: ShipletUser,
+  returnTo: string,
+) {
+  const project = await projectFromAuthReturnTo(c.env, c.req.url, returnTo);
+  if (
+    !project ||
+    project.archived_on ||
+    !project.organization_id ||
+    project.visibility === "public" ||
+    project.visibility === "unlisted" ||
+    (await canViewProject(c.env.DB, project, user.id))
+  ) {
+    return null;
+  }
+  const invitation = await pendingInvitationForSignedInUser(
+    c.env,
+    project,
+    user,
+  );
+  if (!invitation) return null;
+  const consentToken = await createInvitationConsentToken(c.env, {
+    projectId: project.id,
+    invitationId: invitation.id,
+    returnTo,
+  });
+  const consentUrl = new URL("/auth/login", appBaseUrl(c.env, c.req.url));
+  consentUrl.searchParams.set("consent", consentToken);
+  return consentUrl.toString();
+}
+
+/** Whether a form response may redirect here under `form-action 'self'`. */
+function isSameOriginAsRequest(requestUrl: string, target: string) {
+  try {
+    return new URL(target, requestUrl).origin === new URL(requestUrl).origin;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Pages here are served with `form-action 'self'`, and browsers refuse a form
+ * submission that redirects to another origin. A form whose next stop is on
+ * another origin finishes in a new document that moves on by itself, with a
+ * link for browsers that do not follow the refresh.
+ */
+function formNavigationHandoffResponse(
+  c: any,
+  user: ShipletUser | null,
+  options: {
+    label: string;
+    title: string;
+    message: string;
+    href: string;
+    action: string;
+  },
+) {
+  const href = escapeAuthHtml(options.href);
+  const body = renderPage(
+    `<div class="auth-stage auth-stage-compact">
+      <meta http-equiv="refresh" content="0;url=${href}">
+      <section class="form-container auth-card auth-decision" aria-labelledby="form-handoff-title">
+        <span class="success-card-label">${escapeAuthHtml(options.label)}</span>
+        <h1 id="form-handoff-title">${escapeAuthHtml(options.title)}</h1>
+        <p>${escapeAuthHtml(options.message)}</p>
+        <a id="form-handoff-link" class="btn btn-primary" href="${href}" rel="noreferrer">${escapeAuthHtml(options.action)}</a>
+      </section>
+    </div>`,
+    {
+      nonce: kernelDocumentNonce(c),
+      user,
+      appUrl: appBaseUrl(c.env, c.req.url),
+      title: `${options.title} | Shiplet`,
+      canonicalPath: null,
+      indexing: "noindex",
+    },
+  );
+  return new Response(body, {
+    status: 200,
+    headers: {
+      "content-type": "text/html; charset=utf-8",
+      "cache-control": "no-store",
+      pragma: "no-cache",
+      "referrer-policy": "no-referrer",
+      "x-content-type-options": "nosniff",
+    },
+  });
 }
 
 async function invitationConsentPageResponse(c: any, consentToken: string) {
@@ -1431,13 +1520,33 @@ async function invitationConsentPageResponse(c: any, consentToken: string) {
   ) {
     return c.text("Invitation consent is invalid or expired", 400);
   }
-  const organization = project.organization_id
-    ? await getOrganizationById(c.env.DB, project.organization_id)
-    : null;
-  if (!organization) return c.text("Invitation workspace not found", 404);
 
+  // Consent is offered only after sign-in, so a signed-out visitor starts a
+  // normal sign-in and is offered consent again if their email is invited.
   const user = await getCurrentUser(c.req.raw, c.env);
-  if (user && (await canViewProject(c.env.DB, project, user.id))) {
+  if (!user) {
+    return workOSLoginRedirect(c, {
+      returnTo: consent.returnTo,
+      organizationId: await organizationIdForAuthReturn(
+        c.env,
+        c.req.url,
+        consent.returnTo,
+      ),
+    });
+  }
+  const invitation = (await canViewProject(c.env.DB, project, user.id))
+    ? null
+    : await pendingInvitationForSignedInUser(
+        c.env,
+        project,
+        user,
+        consent.invitationId,
+      );
+  const organization =
+    invitation && project.organization_id
+      ? await getOrganizationById(c.env.DB, project.organization_id)
+      : null;
+  if (!invitation || !organization) {
     return c.redirect(
       await resolvePostAuthReturnTo(c, consent.returnTo, user),
       302,
@@ -1450,7 +1559,7 @@ async function invitationConsentPageResponse(c: any, consentToken: string) {
         project,
         organizationName: organization.name,
         consentToken,
-        signedIn: Boolean(user),
+        joinsWorkspace: !isShipletOnlyInvitation(invitation),
       }),
       {
         nonce: kernelDocumentNonce(c),
@@ -4371,6 +4480,10 @@ async function injectReviewClient(
   options: ArtifactResponseOptions = {},
 ) {
   if (request.method !== "GET") return response;
+  // A download keeps the stored bytes rather than the review-ready rewrite.
+  if (/^attachment\b/i.test(response.headers.get("content-disposition") || "")) {
+    return response;
+  }
 
   const contentType = response.headers.get("content-type") || "";
   const normalizedContentType = contentType.toLowerCase();
@@ -5028,6 +5141,7 @@ async function applyDurableHumanThreadOperation(input: {
     await requireDurableReviewMentionRecipients(
       input.env.DB,
       input.project,
+      input.user,
       input.mentions || [],
     );
   } else {
@@ -5111,6 +5225,7 @@ async function applyDurableHumanFeedbackOperation(input: {
   await requireDurableReviewMentionRecipients(
     input.env.DB,
     input.project,
+    input.user,
     input.payload.mentions,
   );
   const activeRevisionId = trustedReviewRevisionId(input.project);
@@ -5488,11 +5603,15 @@ async function listTrustedReviewMentionCandidates(
     user.id,
   );
   if (!membership) return [];
+  // Only an editor's mention can invite, so only editors are offered members
+  // who cannot view the Shiplet yet.
+  const canInvite = await canEditProject(env.DB, project, user);
   const users = await listOrganizationMentionUsers(
     env.DB,
     project.organization_id,
     query,
     limit,
+    canInvite ? {} : { viewersOfProjectId: project.id },
   );
   const hydrated = [];
   for (const mentionUser of users) {
@@ -5601,12 +5720,17 @@ async function listModernReviewMentionCandidates(
 			throw new Response("Invalid review mention cursor", { status: 400 });
 		}
 	}
+	// Only an editor's mention can invite, so only editors are offered members
+	// who cannot view the Shiplet yet.
+	const canInvite = await canEditProject(env.DB, project, user);
 	const bindings: Array<string | number> = [project.organization_id];
+	if (!canInvite) bindings.push(project.id);
 	const rows = await env.DB.prepare(
 		`SELECT users.id, users.email, users.first_name, users.last_name
 		 FROM organization_memberships
 		 JOIN users ON users.id = organization_memberships.user_id
-		 WHERE organization_memberships.organization_id = ?`,
+		 WHERE organization_memberships.organization_id = ?
+		 ${canInvite ? "" : `AND ${ORGANIZATION_MEMBER_CAN_VIEW_PROJECT_SQL}`}`,
 	).bind(...bindings).all<{ id: string; email: string; first_name: string | null; last_name: string | null }>();
 	const candidates: ModernReviewMentionCandidate[] = (rows.results || []).map((candidate) => {
 		const label = reviewerLabel(candidate as ShipletUser);
@@ -5715,13 +5839,28 @@ function isExternalProject(project: Project) {
   );
 }
 
+function isStandaloneAssetPreview(project: Project) {
+  return (
+    project.source_type === "static" &&
+    project.script_content.startsWith(STANDALONE_ASSET_PREVIEW_MARKER)
+  );
+}
+
 function standalonePreviewDownloadsAllowed(project: Project, assetPath = "/") {
   const normalizedPath = `/${assetPath}`.replace(/\/+/, "/");
   return (
-    project.source_type === "static" &&
-    project.script_content.startsWith(STANDALONE_ASSET_PREVIEW_MARKER) &&
+    isStandaloneAssetPreview(project) &&
     (normalizedPath === "/" || normalizedPath === "/index.html")
   );
+}
+
+function attachmentContentDisposition(fileName: string) {
+  const fallback = fileName.replace(/[^\x20-\x7e]|["\\%]/g, "_");
+  const encoded = encodeURIComponent(fileName).replace(
+    /['()*]/g,
+    (character) => `%${character.charCodeAt(0).toString(16).toUpperCase()}`,
+  );
+  return `attachment; filename="${fallback}"; filename*=UTF-8''${encoded}`;
 }
 
 function isPublicExternalArtifactRead(project: Project, request: Request) {
@@ -6242,6 +6381,10 @@ async function syncAuthenticatedWorkOSUser(
   organizationId?: string | null,
 ) {
   const user = await resolveVerifiedWorkOSUser(env.DB, workosUser);
+  // Drop memberships WorkOS removed and roles it demoted before this sign-in
+  // records the organization AuthKit chose. It never throws, and when WorkOS
+  // cannot answer it keeps every membership.
+  await reconcileWorkOSMembershipsForUser(env, user.id, { source: "sign_in" });
 
   if (organizationId) {
     const existingMembership = await getOrganizationMembership(
@@ -6349,7 +6492,8 @@ async function reconcilePendingInvitationsForUser(
 
   for (const invitation of pendingInvitations) {
     const organizationMembershipId = `om_${invitation.organization_id}_${user.id}`;
-    if (invitation.organization_id) {
+    const shipletOnly = isShipletOnlyInvitation(invitation);
+    if (invitation.organization_id && !shipletOnly) {
       await ensureOrganizationMembershipRecord(env.DB, {
         id: organizationMembershipId,
         organization_id: invitation.organization_id,
@@ -6359,7 +6503,7 @@ async function reconcilePendingInvitationsForUser(
       });
     }
 
-    if (invitation.team_id) {
+    if (invitation.team_id && !shipletOnly) {
       await createTeamMembership(
         env.DB,
         invitation.team_id,
@@ -6479,7 +6623,9 @@ async function acceptInvitationConsentForUser(
     env,
     workosUser,
     {
-      organizationId: invitation.organization_id,
+      organizationId: isShipletOnlyInvitation(invitation)
+        ? undefined
+        : invitation.organization_id,
       pendingInvitations: [invitation],
     },
   );
@@ -7033,13 +7179,46 @@ function defaultOrganizationName(user: ShipletUser) {
   return "My Shiplet Workspace";
 }
 
-async function resolvePublishOrganizationId(env: Env, user: ShipletUser) {
+type PublishShipletOptions = {
+  /** The caller asked for JSON, so a missing workspace lists its choices. */
+  listOrganizationChoices?: boolean;
+};
+
+const ORGANIZATION_REQUIRED_MESSAGE = "Missing required fields: organization_id";
+
+// Only a signed-in person gets here, and the list is their own memberships,
+// so it shows nothing they cannot already see. Clients that do not ask for
+// JSON, such as the browser forms, keep the plain message.
+function organizationRequiredResponse(
+  organizations: Array<{ id: string; name: string }>,
+  options: PublishShipletOptions,
+) {
+  if (!options.listOrganizationChoices) {
+    return new Response(ORGANIZATION_REQUIRED_MESSAGE, { status: 400 });
+  }
+  return json(
+    {
+      ok: false,
+      code: "organization_required",
+      error: ORGANIZATION_REQUIRED_MESSAGE,
+      organizations: organizations.map((organization) => ({
+        id: organization.id,
+        name: organization.name,
+      })),
+    },
+    400,
+  );
+}
+
+async function resolvePublishOrganizationId(
+  env: Env,
+  user: ShipletUser,
+  options: PublishShipletOptions = {},
+) {
   const organizations = await listOrganizationsForUser(env.DB, user.id);
   if (organizations.length === 1) return organizations[0].id;
   if (organizations.length > 1) {
-    throw new Response("Missing required fields: organization_id", {
-      status: 400,
-    });
+    throw organizationRequiredResponse(organizations, options);
   }
 
   const { organization } = await createOrganizationForUser(
@@ -7055,10 +7234,11 @@ async function publishShiplet(
   db: D1QB,
   user: ShipletUser,
   payload: PublishShipletPayload,
+  options: PublishShipletOptions = {},
 ) {
   const organizationId =
     normalizeOptionalString(payload.organization_id) ||
-    (await resolvePublishOrganizationId(env, user));
+    (await resolvePublishOrganizationId(env, user, options));
 
   await requireOrganizationMembership(env.DB, organizationId, user.id);
   return await publishShipletForOrganization(
@@ -7155,19 +7335,6 @@ async function publishShipletForOrganization(
     }
   }
 
-  if (customHostname) {
-    const customHostnameCreated = await createCustomHostname(
-      env,
-      customHostname,
-    );
-    if (!customHostnameCreated) {
-      throw new Response(
-        "Custom hostname could not be provisioned on Cloudflare. Check CLOUDFLARE_ZONE_ID and API token permissions, then try again.",
-        { status: 502 },
-      );
-    }
-  }
-
   let scriptPlaceholder: string;
   let staticAssetsToStore: AssetFile[] | null = null;
   let sourceType: Project["source_type"];
@@ -7222,6 +7389,28 @@ async function publishShipletForOrganization(
     created_on: new Date().toISOString(),
     modified_on: new Date().toISOString(),
   };
+
+  // The first revision packages every stored file, so refuse an upload that
+  // cannot fit before the hostname, project, or assets are saved.
+  if (staticAssetsToStore) {
+    assertStaticUploadFitsPackage(
+      await legacyStaticPackageEnvelopeBytes(project, staticAssetsToStore),
+      MAX_PACKAGE_BYTES,
+    );
+  }
+
+  if (customHostname) {
+    const customHostnameCreated = await createCustomHostname(
+      env,
+      customHostname,
+    );
+    if (!customHostnameCreated) {
+      throw new Response(
+        "Custom hostname could not be provisioned on Cloudflare. Check CLOUDFLARE_ZONE_ID and API token permissions, then try again.",
+        { status: 502 },
+      );
+    }
+  }
 
   await CreateProject(db, project);
   if (staticAssetsToStore) {
@@ -12044,7 +12233,6 @@ app.get("/docs/:slug", (c) => {
   const retiredPublicDocRedirects: Record<string, string> = {
     "packages-revisions": "/docs/publishing",
     deployment: "/docs/publishing",
-    wordpress: "/docs/embed",
     "external-setup": "/docs/security",
   };
   const retiredRedirect = retiredPublicDocRedirects[slug];
@@ -12301,25 +12489,24 @@ app.post("/api/cli/session/revoke", async (c) => {
   }
 });
 
-function workOSLoginRedirect(
+async function workOSLoginRedirect(
   c: any,
   options: {
     returnTo: string;
     invitationToken?: string | null;
     accountAction?: string;
-    consentToken?: string | null;
     organizationId?: string | null;
     prompt?: "login";
+    retried?: boolean;
   },
 ) {
-  const state = btoa(
-    JSON.stringify({
-      returnTo: options.returnTo,
-      invitationToken: options.invitationToken || undefined,
-      accountAction: options.accountAction,
-      consentToken: options.consentToken || undefined,
-    }),
-  );
+  const { state, cookie } = await createAuthFlowState(c.env, {
+    returnTo: options.returnTo,
+    invitationToken: options.invitationToken || undefined,
+    accountAction: options.accountAction,
+    retried: options.retried || undefined,
+  });
+  c.header("set-cookie", cookie, { append: true });
   const authorizationUrl = getWorkOSAuthorizationUrl(c.env, {
     state,
     invitationToken: options.invitationToken,
@@ -12356,6 +12543,9 @@ app.get("/auth/login", async (c) => {
       url.searchParams.get("account_action") === "add"
         ? "add"
         : undefined;
+    // Set when a callback could not find this browser's flow cookie and
+    // restarted sign-in once; a second miss shows recovery instead of looping.
+    const retried = url.searchParams.get("auth_retry") === "1";
 
     if (invitationToken) {
       const pending = await findPendingInvitationsByWorkOSInvitationToken(
@@ -12375,6 +12565,20 @@ app.get("/auth/login", async (c) => {
             requestedProject?.id === project.id
               ? returnTo
               : artifactPublicUrl(c.env, c.req.url, project);
+          // A Shiplet invitation is accepted only from its consent step, so
+          // the email link's token is not handed to AuthKit to accept early.
+          // Signed-out visitors sign in first and are offered consent after.
+          if (!(await getCurrentUser(c.req.raw, c.env))) {
+            return workOSLoginRedirect(c, {
+              returnTo: scopedReturnTo,
+              organizationId: await organizationIdForAuthReturn(
+                c.env,
+                c.req.url,
+                scopedReturnTo,
+              ),
+              retried,
+            });
+          }
           const signedConsent = await createInvitationConsentToken(c.env, {
             projectId: project.id,
             invitationId: invitation.id,
@@ -12390,23 +12594,8 @@ app.get("/auth/login", async (c) => {
         invitationToken,
         accountAction,
         organizationId,
+        retried,
       });
-    }
-
-    const project = await projectFromAuthReturnTo(c.env, c.req.url, returnTo);
-    if (
-      project &&
-      !project.archived_on &&
-      project.visibility !== "public" &&
-      project.visibility !== "unlisted" &&
-      project.organization_id &&
-      (await findPendingInvitationsByProject(c.env.DB, project.id)).length > 0
-    ) {
-      const signedConsent = await createInvitationConsentToken(c.env, {
-        projectId: project.id,
-        returnTo,
-      });
-      return invitationConsentPageResponse(c, signedConsent);
     }
 
     if (
@@ -12416,7 +12605,11 @@ app.get("/auth/login", async (c) => {
     ) {
       const currentUser = await getCurrentUser(c.req.raw, c.env);
       if (currentUser) {
-        return c.redirect(await resolvePostAuthReturnTo(c, returnTo, currentUser), 302);
+        return c.redirect(
+          (await invitationConsentUrlForUser(c, currentUser, returnTo)) ||
+            (await resolvePostAuthReturnTo(c, returnTo, currentUser)),
+          302,
+        );
       }
     }
 
@@ -12424,6 +12617,7 @@ app.get("/auth/login", async (c) => {
       returnTo,
       accountAction,
       organizationId,
+      retried,
     });
   } catch (error) {
     if (isResponse(error)) return error;
@@ -12444,7 +12638,8 @@ app.post("/auth/login", async (c) => {
       !isControlPlaneOrigin(c.env, c.req.url, c.req.header("origin") || null, {
         method: "POST",
         hasCookie: true,
-      })
+      }) &&
+      !hasTrustedTopLevelFormProvenance(c.req.raw, [])
     ) {
       return c.text("Invitation consent origin denied", 403);
     }
@@ -12484,20 +12679,34 @@ app.post("/auth/login", async (c) => {
         },
         consent,
       );
-      return c.redirect(
-        await resolvePostAuthReturnTo(c, consent.returnTo, currentUser),
-        302,
+      const destination = await resolvePostAuthReturnTo(
+        c,
+        consent.returnTo,
+        currentUser,
       );
+      if (isSameOriginAsRequest(c.req.url, destination)) {
+        return c.redirect(destination, 302);
+      }
+      return formNavigationHandoffResponse(c, currentUser, {
+        label: "Invitation accepted",
+        title: "Open Shiplet",
+        message: "Your access is ready.",
+        href: destination,
+        action: "Open Shiplet",
+      });
     }
 
-    return workOSLoginRedirect(c, {
-      returnTo: consent.returnTo,
-      consentToken,
-      organizationId: await organizationIdForAuthReturn(
-        c.env,
-        c.req.url,
-        consent.returnTo,
-      ),
+    // The session ended after consent was shown. Redirecting this form to
+    // AuthKit would be refused under form-action 'self', so sign-in restarts
+    // from a link and consent is offered again afterwards.
+    const signInUrl = new URL("/auth/login", appBaseUrl(c.env, c.req.url));
+    signInUrl.searchParams.set("return_to", consent.returnTo);
+    return formNavigationHandoffResponse(c, null, {
+      label: "Sign in",
+      title: "Sign in to continue",
+      message: "Your session ended. Sign in again to accept the invitation.",
+      href: signInUrl.toString(),
+      action: "Sign in",
     });
   } catch (error) {
     if (isResponse(error)) return error;
@@ -12512,20 +12721,84 @@ app.post("/auth/login", async (c) => {
   }
 });
 
+// A callback whose state this browser did not mint is never exchanged: that
+// would let a link carrying someone else's code sign the visitor into their
+// account. Without state (AuthKit-initiated sign-in, or a stale or foreign
+// link) the browser restarts sign-in once through /auth/login, which binds a
+// new flow; a state whose cookie disagrees, or a second miss, gets recovery.
+function rejectedAuthCallbackResponse(
+  c: any,
+  flow: Exclude<AuthFlowVerification, { ok: true }>,
+) {
+  console.warn(
+    JSON.stringify({
+      event: "auth.callback",
+      outcome: "rejected",
+      reason: `state_${flow.reason}`,
+    }),
+  );
+  if (flow.reason === "missing") return c.redirect("/auth/login", 302);
+  if (flow.reason === "unbound" && flow.state.retried !== true) {
+    const params = new URLSearchParams({
+      return_to: safeReturnTo(
+        c.env,
+        typeof flow.state.returnTo === "string" ? flow.state.returnTo : null,
+      ),
+    });
+    if (flow.state.accountAction === "add") params.set("account_action", "add");
+    params.set("auth_retry", "1");
+    return c.redirect(`/auth/login?${params}`, 302);
+  }
+  if (flow.clearCookie) c.header("set-cookie", flow.clearCookie, { append: true });
+  return c.text(
+    "This sign-in was started in another browser or has expired. Start sign-in again.",
+    400,
+  );
+}
+
+function withAppendedSetCookie(response: Response, cookie: string) {
+  const headers = new Headers(response.headers);
+  headers.append("set-cookie", cookie);
+  return new Response(response.body, {
+    status: response.status,
+    statusText: response.statusText,
+    headers,
+  });
+}
+
 app.get("/auth/callback", async (c) => {
+  let flow: AuthFlowVerification;
   try {
     const url = new URL(c.req.url);
-    const code = url.searchParams.get("code");
-    const state = decodeState(url.searchParams.get("state")) as {
+    if (!url.searchParams.get("code")) {
+      return c.text("Missing WorkOS authorization code", 400);
+    }
+    flow = await verifyAuthFlowState(
+      c.req.raw,
+      c.env,
+      url.searchParams.get("state"),
+    );
+  } catch {
+    return c.text("Authentication failed", 500);
+  }
+  if (!flow.ok) return rejectedAuthCallbackResponse(c, flow);
+  // The flow cookie is single-use whatever the exchange outcome.
+  return withAppendedSetCookie(
+    await completeAuthCallback(c, flow.state),
+    flow.clearCookie,
+  );
+});
+
+async function completeAuthCallback(c: any, verifiedState: Record<string, unknown>) {
+  try {
+    const url = new URL(c.req.url);
+    const code = url.searchParams.get("code") || "";
+    const state = verifiedState as {
       returnTo?: string;
       invitationToken?: string;
       accountAction?: string;
       consentToken?: string;
     };
-
-    if (!code) {
-      return c.text("Missing WorkOS authorization code", 400);
-    }
 
     const authResponse = await authenticateWorkOSCode(c.env, {
       code,
@@ -12561,6 +12834,9 @@ app.get("/auth/callback", async (c) => {
     }
 
     if (state.consentToken) {
+      // Sign-in no longer starts from a consent form, but a flow begun before
+      // that change may still return here. Consent is offered again below,
+      // now that the person is signed in.
       const verification = await verifyInvitationConsentToken(
         c.env,
         state.consentToken,
@@ -12569,21 +12845,24 @@ app.get("/auth/callback", async (c) => {
         return c.text("Invitation consent is invalid or expired", 400);
       }
       callbackReturnTo = verification.consent.returnTo;
-      const accepted = await acceptInvitationConsentForUser(
-        c.env,
-        c.req.url,
-        workosUser,
-        verification.consent,
-      );
-      user = accepted.user;
-    } else if (state.invitationToken) {
+    }
+
+    if (state.invitationToken) {
+      // Shiplet invitations wait for their signed-in consent step.
+      const pendingInvitations = (
+        await findPendingInvitationsForUser(c.env, {
+          invitationId,
+          invitationToken: state.invitationToken,
+          organizationId,
+          email: workosUser.email,
+        })
+      ).filter((invitation) => !invitation.project_id);
       const reconciliation = await reconcilePendingInvitationsForUser(
         c.env,
         workosUser,
         {
-          invitationId,
-          invitationToken: state.invitationToken,
           organizationId,
+          pendingInvitations,
         },
       );
       user = reconciliation.user;
@@ -12618,7 +12897,9 @@ app.get("/auth/callback", async (c) => {
     const accountGroupId = accountSwitchingEnabled
       ? getAccountGroupCookie(c.req.raw, c.env) || newId("acctgrp")
       : null;
-    const redirectTo = await resolvePostAuthReturnTo(c, callbackReturnTo, user);
+    const redirectTo =
+      (await invitationConsentUrlForUser(c, user, callbackReturnTo)) ||
+      (await resolvePostAuthReturnTo(c, callbackReturnTo, user));
 
     return createUserSessionResponse(c.env, user.id, redirectTo, {
       accountGroupId,
@@ -12641,7 +12922,7 @@ app.get("/auth/callback", async (c) => {
     );
     return c.text("Authentication failed", 500);
   }
-});
+}
 
 app.post("/auth/switch-account", async (c) => {
   if (!useFeatureFlag(c.env, ACCOUNT_EMAIL_SWITCHING_FLAG)) {
@@ -12725,7 +13006,7 @@ app.on(["GET", "POST"], "/embed/install", async (c) => {
   let message = "";
   try {
     if (c.req.method === "POST") {
-      if (c.req.header("origin") !== url.origin)
+      if (!hasTrustedTopLevelFormProvenance(c.req.raw, [url.origin]))
         return c.text("Same-origin setup required", 403);
       if (Number(c.req.header("content-length") || "0") > 16_384)
         return c.text("Request too large", 413);
@@ -12800,7 +13081,7 @@ app.on(["GET", "POST"], "/embed/install", async (c) => {
     const installations = selectedProjectId
       ? (
           await c.env.DB.prepare(
-            "SELECT * FROM embed_installations WHERE project_id = ? AND revoked_on IS NULL ORDER BY created_on DESC",
+            `SELECT * FROM embed_installations WHERE project_id = ? AND revoked_on IS NULL AND ${BROWSER_INSTALLATION_FILTER} ORDER BY created_on DESC`,
           )
             .bind(selectedProjectId)
             .all<EmbedInstallationRecord>()
@@ -12860,131 +13141,6 @@ app.get(
       },
     }),
 );
-
-app.get("/embed/connect", async (c) => {
-  try {
-    const url = new URL(c.req.url);
-    const connection = normalizeEmbedConnectionRequest({
-      site_url: url.searchParams.get("site_url"),
-      site_name: url.searchParams.get("site_name"),
-      return_url: url.searchParams.get("return_url"),
-      state: url.searchParams.get("state"),
-      project_id: url.searchParams.get("project_id"),
-    });
-    if (!connection || !connection.state) {
-      return c.text("Invalid WordPress connection request", 400);
-    }
-
-    const user = await getCurrentUser(c.req.raw, c.env);
-    if (!user) {
-      return c.redirect(
-        authLoginRedirectUrl(c.env, c.req.url, embedRouteReturnTo(c.req.url)),
-      );
-    }
-
-    const organizations = await listOrganizationsForUser(c.env.DB, user.id);
-    const accessibleProjects = await listProjectsForUser(c.env.DB, user.id);
-    const editableProjects: Project[] = [];
-    for (const project of accessibleProjects) {
-      if (
-        project.organization_id &&
-        !project.archived_on &&
-        (await canEditProject(c.env.DB, project, user))
-      ) {
-        editableProjects.push(project);
-      }
-    }
-
-    return c.html(
-      renderPage(
-        renderEmbedConnectPage({
-          connection,
-          organizations,
-          projects: editableProjects,
-        }),
-        {
-          nonce: kernelDocumentNonce(c),
-          customDomain: c.env.CUSTOM_DOMAIN,
-          appUrl: appBaseUrl(c.env, c.req.url),
-          user,
-          title: `Connect ${connection.siteName} | Shiplet`,
-          description: "Connect a WordPress site to Shiplet review mode.",
-          canonicalPath: null,
-          indexing: "noindex",
-        },
-      ),
-    );
-  } catch (error) {
-    if (isResponse(error)) return error;
-    const message = error instanceof Error ? error.message : "Unknown error";
-    return c.text(`Failed to start WordPress connection: ${message}`, 500);
-  }
-});
-
-app.post("/embed/connect", async (c) => {
-  try {
-    const contentLength = Number(c.req.header("content-length") || "0");
-    if (contentLength > 16_384) {
-      return c.text("WordPress connection request is too large", 413);
-    }
-    const user = await requireCurrentUser(c);
-    const formData = await c.req.raw.formData();
-    const form: Record<string, unknown> = {};
-    formData.forEach((value, key) => {
-      if (typeof value === "string") form[key] = value;
-    });
-    const connection = normalizeEmbedConnectionRequest(form);
-    if (!connection || !connection.state) {
-      return c.text("Invalid WordPress connection request", 400);
-    }
-
-    let project: Project;
-    if (!connection.projectId || connection.projectId === "new") {
-      const result = await publishShiplet(c.env, c.var.db, user, {
-        name: connection.siteName,
-        organization_id: normalizeOptionalString(form.organization_id),
-        subdomain: embedProjectSubdomain(
-          connection.siteName,
-          connection.siteUrl,
-        ),
-        external_url: connection.siteUrl,
-        visibility: "organization",
-      });
-      project = result.project;
-    } else {
-      const existingProject = await getProjectById(
-        c.env.DB,
-        connection.projectId,
-      );
-      if (!existingProject || existingProject.archived_on) {
-        return c.text("Shiplet project not found", 404);
-      }
-      if (!(await canEditProject(c.env.DB, existingProject, user))) {
-        return c.text("Shiplet project edit access required", 403);
-      }
-      project = existingProject;
-    }
-
-    const code = await createEmbedConnectionCode(c.env.DB, {
-      project,
-      user,
-      siteOrigin: connection.siteOrigin,
-      siteUrl: connection.siteUrl,
-      siteName: connection.siteName,
-      returnUrl: connection.returnUrl,
-    });
-    return c.redirect(
-      appendEmbedRedirectParams(connection.returnUrl, {
-        shiplet_code: code,
-        state: connection.state,
-      }),
-    );
-  } catch (error) {
-    if (isResponse(error)) return error;
-    const message = error instanceof Error ? error.message : "Unknown error";
-    return c.text(`Failed to connect WordPress site: ${message}`, 500);
-  }
-});
 
 type ActiveReviewWidget = {
   revisionId: string;
@@ -13543,6 +13699,16 @@ async function serveRevisionStaticArtifact(
     "x-shiplet-revision": revisionId,
   });
   if (file.object_key) headers.set("x-shiplet-static-fallback", "r2");
+  // Download links on a generated file review page ask for the stored file.
+  if (
+    isStandaloneAssetPreview(project) &&
+    new URL(request.url).searchParams.has(STANDALONE_ASSET_DOWNLOAD_PARAM)
+  ) {
+    headers.set(
+      "content-disposition",
+      attachmentContentDisposition(file.path.split("/").pop() || "download"),
+    );
+  }
   const responseBody = body.buffer.slice(
     body.byteOffset,
     body.byteOffset + body.byteLength,
@@ -14881,6 +15047,7 @@ app.post("/review/confirm", async (c) => {
       await requireDurableReviewMentionRecipients(
         c.env.DB,
         project,
+        user,
         feedbackValidation.value.mentions,
       );
       validatedPayload = { ...feedbackValidation.value };
@@ -15060,6 +15227,7 @@ async function requireEmbedConfirmationBinding(c: any, form: FormData) {
   return {
     project,
     pageUrl,
+    user,
     session: {
       installationId: installation.id,
       revisionId,
@@ -15095,7 +15263,7 @@ app.post("/embed/review/confirm", async (c) => {
     const binding = formData.has("installation_id")
       ? await requireEmbedConfirmationBinding(c, formData)
       : await requireEmbedReviewSession(c);
-    const { session, project, pageUrl } = binding;
+    const { session, project, pageUrl, user } = binding;
     const requestId = String(formData.get("request_id") || "").trim();
     const operation = String(formData.get("operation") || "").trim();
     const submittedPageUrl = String(formData.get("page_url") || "");
@@ -15166,6 +15334,7 @@ app.post("/embed/review/confirm", async (c) => {
       await requireDurableReviewMentionRecipients(
         c.env.DB,
         project,
+        user,
         feedbackValidation.value.mentions,
       );
       validatedPayload = { ...feedbackValidation.value };
@@ -15310,10 +15479,8 @@ app.post("/embed/review/thread", async (c) => {
       await readRequestTextWithLimit(c.req.raw, 32_768),
     ))
       form.set(key, value);
-    const { project, session, pageUrl } = await requireEmbedConfirmationBinding(
-      c,
-      form,
-    );
+    const { project, session, pageUrl, user } =
+      await requireEmbedConfirmationBinding(c, form);
     const feedbackId = String(form.get("feedback_id") || "");
     const feedback = await getReviewFeedback(c.env.DB, project.id, feedbackId);
     if (
@@ -15339,6 +15506,7 @@ app.post("/embed/review/thread", async (c) => {
       await requireDurableReviewMentionRecipients(
         c.env.DB,
         project,
+        user,
         mentionResult.value,
       );
     }
@@ -15839,13 +16007,6 @@ app.get("/embed/review/host", async (c) => {
   try {
     const { session, project, pageUrl } = await requireEmbedReviewSession(c);
     const origin = new URL(c.req.url).origin;
-    const installation = await getEmbedInstallation(
-      c.env.DB,
-      session.installationId,
-    );
-    const widget = installation?.secret_hash.startsWith("browser-only:")
-      ? null
-      : await activeReviewWidget(c.env, project);
     const bindingQuery = new URLSearchParams({
       installation_id: session.installationId,
       page_url: pageUrl,
@@ -15855,9 +16016,7 @@ app.get("/embed/review/host", async (c) => {
       revisionId: session.revisionId,
       title: project.name,
       artifactUrl: `${origin}/embed/review/context?${bindingQuery}`,
-      widgetUrl: widget
-        ? `${origin}/embed/review/widget?${bindingQuery}`
-        : null,
+      widgetUrl: null,
       hostScriptUrl: `${origin}/api/review/host.js`,
       reviewApiUrl: `${origin}/embed/review/feedback?${bindingQuery}`,
       reviewPageUrl: pageUrl,
@@ -15891,21 +16050,6 @@ app.get("/embed/review/context", async (c) => {
     if (isResponse(error)) return error;
     const message = error instanceof Error ? error.message : "Unknown error";
     return c.text(`Failed to load embedded review context: ${message}`, 500);
-  }
-});
-
-app.get("/embed/review/widget", async (c) => {
-  try {
-    const { session, project } = await requireEmbedReviewSession(c);
-    return serveActiveReviewWidget(
-      c.env,
-      project,
-      session.revisionId,
-      new URL(c.req.url).origin,
-    );
-  } catch (error) {
-    if (isResponse(error)) return error;
-    return c.text("Failed to load embedded review widget", 503);
   }
 });
 
@@ -16097,76 +16241,8 @@ app.post("/embed/review/feedback", async (c) => {
   }
 });
 
-app.get("/api/embed/client.js", () => {
-  return new Response(embedClientScript(), {
-    headers: {
-      "content-type": "application/javascript; charset=utf-8",
-      "cache-control": "public, max-age=300",
-      "x-content-type-options": "nosniff",
-    },
-  });
-});
-
-app.post("/api/embed/installations/exchange", async (c) => {
-  try {
-    const body = await readJson(c);
-    if (!isRecord(body)) return c.text("Invalid exchange request", 400);
-    const site = normalizeEmbedSiteUrl(body.siteUrl);
-    if (!site) return c.text("Invalid WordPress site URL", 400);
-    const code = await consumeEmbedExchangeCode(c.env.DB, {
-      code: body.code,
-      purpose: "connection",
-      siteOrigin: site.siteOrigin,
-    });
-    if (!code) return c.text("Connection code is invalid or expired", 401);
-    const project = await getProjectById(c.env.DB, code.project_id);
-    if (!project || project.archived_on) {
-      return c.text("Shiplet project not found", 404);
-    }
-    const connected = await createEmbedInstallation(c.env.DB, code);
-    return json(
-      {
-        installation: {
-          ...connected.installation,
-          projectName: project.name,
-        },
-        secret: connected.secret,
-      },
-      201,
-    );
-  } catch (error) {
-    if (isResponse(error)) return error;
-    const message = error instanceof Error ? error.message : "Unknown error";
-    return c.text(`Failed to exchange WordPress connection: ${message}`, 500);
-  }
-});
-
 app.post("/api/embed/session/exchange", async (c) => {
   return c.text("Embedded review exchange is retired", 410);
-});
-
-app.delete("/api/embed/installations/:installationId", async (c) => {
-  try {
-    const installation = await authenticateEmbedInstallation(
-      c.env.DB,
-      c.req.param("installationId"),
-      c.req.header("authorization"),
-    );
-    if (!installation) {
-      return c.text("WordPress installation access required", 401);
-    }
-    await revokeEmbedInstallation(c.env.DB, installation.id);
-    return json({
-      installation: {
-        ...publicEmbedInstallation(installation),
-        revokedOn: timestamps.now(),
-      },
-    });
-  } catch (error) {
-    if (isResponse(error)) return error;
-    const message = error instanceof Error ? error.message : "Unknown error";
-    return c.text(`Failed to disconnect WordPress site: ${message}`, 500);
-  }
 });
 
 app.get("/api/me", async (c) => {
@@ -16915,7 +16991,11 @@ app.post("/api/shiplets", async (c) => {
     }
 
     const user = await requireCurrentUser(c);
-    const result = await publishShiplet(c.env, c.var.db, user, body);
+    const result = await publishShiplet(c.env, c.var.db, user, body, {
+      listOrganizationChoices: Boolean(
+        c.req.header("accept")?.includes("application/json"),
+      ),
+    });
     return json(publishResultPayload(c.env, c.req.url, result), 201);
   } catch (error) {
     if (isResponse(error)) return error;
@@ -19767,9 +19847,10 @@ app.post("/api/bootstrap/reconcile-invitation", async (c) => {
         c.env,
         workosUser,
         {
-          organizationId:
-            workosInvitation.organizationId ||
-            pendingInvitation.organization_id,
+          organizationId: isShipletOnlyInvitation(pendingInvitation)
+            ? undefined
+            : workosInvitation.organizationId ||
+              pendingInvitation.organization_id,
           pendingInvitations: [pendingInvitation],
         },
       );
@@ -20203,6 +20284,13 @@ app.get("/shiplets/:projectId/access", async (c) => {
       }
       return c.redirect(`/shiplets/${encodeURIComponent(project.id)}`);
     }
+
+    const consentUrl = await invitationConsentUrlForUser(
+      c,
+      user,
+      returnTarget?.toString() || `/shiplets/${encodeURIComponent(project.id)}`,
+    );
+    if (consentUrl) return c.redirect(consentUrl, 302);
 
     const request = await getShipletAccessRequest(
       c.env.DB,
@@ -20756,14 +20844,31 @@ app.get("/shiplets/:projectId/review-host", async (c) => {
 
 async function handleSandboxedArtifactFrame(c: any, assetPath = "/") {
   try {
-    const user = await getCurrentUser(c.req.raw, c.env);
+    let user = await getCurrentUser(c.req.raw, c.env);
     const project = await getProjectById(c.env.DB, c.req.param("projectId"));
     if (!project) return c.text("Shiplet not found", 404);
     if (project.archived_on)
       return archivedShipletPageResponse(c, project, user);
-    const canReadArtifact =
+    let canReadArtifact =
       isPublicExternalArtifactRead(project, c.req.raw) ||
       (await canViewProject(c.env.DB, project, user?.id));
+    // The opaque frame cannot send the session cookie for the files a page
+    // loads, so reads accept the review host's preview cookie for this
+    // Shiplet, as tenant artifact frames do.
+    if (
+      !canReadArtifact &&
+      (c.req.method === "GET" || c.req.method === "HEAD")
+    ) {
+      const capability = await authenticateArtifactPreviewCapability(
+        c.env,
+        c.req.raw,
+        project,
+      );
+      if (capability) {
+        user = reviewCapabilityUser(capability);
+        canReadArtifact = true;
+      }
+    }
     if (!canReadArtifact) {
       return user
         ? c.text("Shiplet access denied", 403)
@@ -22162,7 +22267,7 @@ app.post("/api/projects/:projectId/invitations", async (c) => {
           }),
       });
 
-      return json({ grant }, 201);
+      return json({ grant, delivery: "granted" }, 201);
     }
 
     if (targetType === "team") {
@@ -22196,7 +22301,7 @@ app.post("/api/projects/:projectId/invitations", async (c) => {
           }),
       });
 
-      return json({ grant }, 201);
+      return json({ grant, delivery: "granted" }, 201);
     }
 
     const email = String(body.email || "")
@@ -22204,6 +22309,79 @@ app.post("/api/projects/:projectId/invitations", async (c) => {
       .toLowerCase();
     if (!email) {
       return c.text("Missing required field: email", 400);
+    }
+
+    // An email share opens this Shiplet only. It never makes the person a
+    // member of the workspace or of a team.
+    const existingUser = await getUserByEmail(c.env.DB, email);
+    const existingGrant = await getShipletUserGrant(c.env.DB, project.id, {
+      id: existingUser?.id || "",
+      email,
+    });
+    if (existingGrant) {
+      if (existingGrant.role !== role) {
+        return c.text(
+          "This email already has access to this Shiplet with a different role",
+          409,
+        );
+      }
+      const pendingInvitation = existingGrant.accepted_on
+        ? undefined
+        : (
+            await findPendingInvitationsByEmailAndProject(
+              c.env.DB,
+              email,
+              project.id,
+            )
+          )[0];
+      // `delivery` tells the share UI whether someone was emailed an
+      // invitation or can already open the Shiplet.
+      return json(
+        pendingInvitation
+          ? {
+              grant: existingGrant,
+              appInvitation: publicAppInvitation(pendingInvitation),
+              delivery: "invited",
+            }
+          : { grant: existingGrant, delivery: "granted" },
+        200,
+      );
+    }
+
+    // Workspace members already sign in to this workspace, so they receive
+    // the grant at once instead of an invitation.
+    if (
+      existingUser &&
+      (await getOrganizationMembership(
+        c.env.DB,
+        project.organization_id,
+        existingUser.id,
+      ))
+    ) {
+      const grant = await runAuditedKernelAdminAction({
+        db: c.env.DB,
+        organizationId: project.organization_id,
+        projectId: project.id,
+        actorId: user.id,
+        action: "shiplet_share.create",
+        targetKind: "user",
+        operation: () => {
+          const grantedOn = timestamps.now();
+          return createShipletGrant(c.env.DB, {
+            id: newId("grant"),
+            project_id: project.id,
+            organization_id: project.organization_id!,
+            target_type: "user",
+            target_id: existingUser.id,
+            email,
+            role,
+            invited_by_user_id: user.id,
+            created_on: grantedOn,
+            accepted_on: grantedOn,
+          });
+        },
+      });
+      return json({ grant, delivery: "granted" }, 201);
     }
 
     const { workosInvitation, appInvitation, grant } =
@@ -22215,10 +22393,10 @@ app.post("/api/projects/:projectId/invitations", async (c) => {
         action: "shiplet_share.create",
         targetKind: "user_invitation",
         operation: async () => {
+          // No organization: the invitation only lets the person sign in.
+          // Access comes from the Shiplet grant once they accept it.
           const workosInvitation = await sendWorkOSInvitation(c.env, {
             email,
-            organizationId: project.organization_id!,
-            roleSlug: "member",
             inviterUserId: user.id,
           });
           const appInvitation = await createAppInvitation(c.env.DB, {
@@ -22254,6 +22432,7 @@ app.post("/api/projects/:projectId/invitations", async (c) => {
         grant,
         appInvitation: publicAppInvitation(appInvitation),
         workosInvitation: publicWorkOSInvitation(workosInvitation),
+        delivery: "invited",
       },
       201,
     );
@@ -23297,6 +23476,12 @@ scheduledApp.scheduled = async (controller, environment, context) => {
       // unrelated database and OAuth reconciliation work in this cron run.
     }
     await autoInitializeDatabase(environment.DB);
+    try {
+      await sweepWorkOSMemberships(environment);
+    } catch {
+      // The sweep keeps its cursor in D1 and resumes on the next run. A
+      // failure here must not starve the OAuth reconciliation below.
+    }
     const runtime = environment as DeploymentRuntimeEnv;
     if (!(await cloudflareSupportEntrypointsReady(runtime))) return;
     await reconcileCloudflareOAuthAcknowledgements({

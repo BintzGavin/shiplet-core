@@ -1200,4 +1200,148 @@ describe("durable review operation recovery", () => {
         .first(),
     ).toEqual({ grants: 1, notifications: 2 });
   });
+
+  it("lets only editor mentions invite on the durable path and rejects a non-editor's skipped mention like an unknown one", async () => {
+    const { organization, project, feedback, pageUrl } = await fixture();
+    const identity = (label: string) => ({
+      "x-shiplet-user-id": `user_durable_${label}_${crypto.randomUUID()}`,
+      "x-shiplet-user-email": `durable-${label}-${crypto.randomUUID()}@example.com`,
+    });
+    const viewer = identity("viewer");
+    const target = identity("target");
+    const colleague = identity("colleague");
+    const now = new Date().toISOString();
+    for (const user of [viewer, target, colleague]) {
+      expect(
+        (
+          await request("/api/organizations", {
+            method: "POST",
+            headers: { "Content-Type": "application/json", ...user },
+            body: JSON.stringify({ name: `Mention identity ${crypto.randomUUID()}` }),
+          })
+        ).status,
+      ).toBe(201);
+      await (env as Env).DB.prepare(
+        `INSERT INTO organization_memberships
+         (id, organization_id, user_id, role, created_on)
+         VALUES (?, ?, ?, 'member', ?)`,
+      )
+        .bind(`membership_${crypto.randomUUID()}`, organization.id, user["x-shiplet-user-id"], now)
+        .run();
+    }
+    for (const [user, role] of [[viewer, "viewer"], [colleague, "reviewer"]] as const) {
+      await (env as Env).DB.prepare(
+        `INSERT INTO shiplet_access_grants
+         (id, project_id, organization_id, target_type, target_id, email, role,
+          invited_by_user_id, workos_invitation_id, created_on, accepted_on)
+         VALUES (?, ?, ?, 'user', ?, ?, ?, ?, NULL, ?, ?)`,
+      )
+        .bind(
+          `grant_${crypto.randomUUID().replace(/-/g, "")}`,
+          project.id,
+          organization.id,
+          user["x-shiplet-user-id"],
+          user["x-shiplet-user-email"],
+          role,
+          OWNER["x-shiplet-user-id"],
+          now,
+          now,
+        )
+        .run();
+    }
+    const sideEffects = (userId: string) =>
+      (env as Env).DB.prepare(
+        `SELECT
+         (SELECT COUNT(*) FROM shiplet_access_grants
+          WHERE project_id = ? AND target_type = 'user' AND target_id = ?) AS grants,
+         (SELECT COUNT(*) FROM review_notifications
+          WHERE project_id = ? AND recipient_user_id = ?) AS notifications,
+         (SELECT COUNT(*) FROM review_feedback_mentions
+          WHERE project_id = ? AND mentioned_user_id = ?) AS mentions`,
+      )
+        .bind(project.id, userId, project.id, userId, project.id, userId)
+        .first();
+    const create = (mentions: Array<Record<string, string>>, requestId = `request_${crypto.randomUUID()}`) =>
+      request(`/api/projects/${project.id}/review-feedback`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", ...viewer },
+        body: JSON.stringify({
+          comment: "Durable viewer mention",
+          pageUrl,
+          clientFeedbackId: `client-${crypto.randomUUID()}`,
+          mentions,
+          requestId,
+        }),
+      });
+    const reply = (mentions: Array<Record<string, string>>) =>
+      request(`/api/projects/${project.id}/review-feedback/${feedback.id}/replies`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", ...viewer },
+        body: JSON.stringify({
+          comment: "Durable viewer reply",
+          mentions,
+          requestId: `request_${crypto.randomUUID()}`,
+        }),
+      });
+
+    const rejections = [
+      await create([{ userId: target["x-shiplet-user-id"] }]),
+      await create([{ email: target["x-shiplet-user-email"] }]),
+      await create([{ userId: `user_unknown_${crypto.randomUUID()}` }]),
+      await create([{ email: `unknown-${crypto.randomUUID()}@example.com` }]),
+      await reply([{ userId: target["x-shiplet-user-id"] }]),
+      await reply([{ userId: `user_unknown_${crypto.randomUUID()}` }]),
+    ];
+    for (const rejection of rejections) {
+      expect(rejection.status).toBe(400);
+      expect(await rejection.text()).toBe("Invalid review mentions");
+    }
+    expect(await sideEffects(target["x-shiplet-user-id"])).toEqual({
+      grants: 0,
+      notifications: 0,
+      mentions: 0,
+    });
+    expect(
+      (
+        await request(`/shiplets/${project.id}`, {
+          headers: target,
+          redirect: "manual",
+        })
+      ).status,
+    ).toBe(302);
+
+    expect((await create([{ userId: colleague["x-shiplet-user-id"] }])).status).toBe(201);
+    expect((await reply([{ userId: colleague["x-shiplet-user-id"] }])).status).toBe(201);
+    expect(await sideEffects(colleague["x-shiplet-user-id"])).toEqual({
+      grants: 1,
+      notifications: 2,
+      mentions: 2,
+    });
+
+    const ownerCreate = await request(`/api/projects/${project.id}/review-feedback`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...OWNER },
+      body: JSON.stringify({
+        comment: "Durable editor invite",
+        pageUrl,
+        clientFeedbackId: `client-${crypto.randomUUID()}`,
+        mentions: [{ userId: target["x-shiplet-user-id"] }],
+        requestId: `request_${crypto.randomUUID()}`,
+      }),
+    });
+    expect(ownerCreate.status).toBe(201);
+    expect(await sideEffects(target["x-shiplet-user-id"])).toEqual({
+      grants: 1,
+      notifications: 1,
+      mentions: 1,
+    });
+    expect(
+      (
+        await request(`/shiplets/${project.id}`, {
+          headers: target,
+          redirect: "manual",
+        })
+      ).status,
+    ).toBe(200);
+  });
 });

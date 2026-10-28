@@ -3,13 +3,19 @@ import { expect, test } from "@playwright/test";
 import {
   authHeaders,
   createOrganization,
+  crossSiteFrameInputLaunchOptions,
   establishMembership,
   loginAs,
   publishStaticShiplet,
   testUser,
 } from "./helpers";
 
-test.use({ screenshot: "off", video: "off", trace: "off" });
+test.use({
+  launchOptions: crossSiteFrameInputLaunchOptions,
+  screenshot: "off",
+  video: "off",
+  trace: "off",
+});
 
 test("two-tag install selects real page content, shares feedback, follows SPA navigation, and cleans up", async ({
   page,
@@ -77,22 +83,22 @@ test("two-tag install selects real page content, shares feedback, follows SPA na
       "A website worth reviewing.",
     );
     const comment = "Make this heading more specific for new customers.";
-    await frame.locator(".shiplet-review-form textarea").fill(comment);
+    const composer = frame.locator("#shiplet-annotation-composer");
+    await composer.getByRole("textbox", { name: "Annotation", exact: true }).fill(comment);
     await page.screenshot({
       path: "/private/tmp/shiplet-parity-navigation-r2-20260920/embeddable-desktop-before-close.png",
     });
-    const confirmationPromise = page.waitForEvent("popup");
-    await frame
+    // New embedded feedback saves directly from the frame; only replies and
+    // status changes open a top-level confirmation.
+    const pagesBeforeSubmit = page.context().pages().length;
+    await composer
       .getByRole("button", { name: "Send annotation", exact: true })
       .click();
-    const confirmation = await confirmationPromise;
-    await confirmation
-      .getByRole("button", { name: "Confirm and send feedback" })
-      .click();
     await expect(
-      confirmation.getByRole("heading", { name: "Feedback sent" }),
-    ).toBeVisible();
-    await confirmation.close();
+      composer.locator(".shiplet-review-composer-message"),
+    ).toHaveText("Feedback sent");
+    await expect(composer).toBeHidden();
+    expect(page.context().pages()).toHaveLength(pagesBeforeSubmit);
     const cancelAnnotation = frame.getByRole("button", {
       name: "Cancel annotation",
     });
