@@ -274,9 +274,18 @@ export async function ensureCanonicalEventSchema(db: D1Database): Promise<void> 
 			 BEFORE UPDATE ON shiplet_events
 			 BEGIN SELECT RAISE(ABORT, 'shiplet_events are immutable'); END`,
 		),
+		// Events stay immutable except while the owner's permanent-deletion
+		// purge holds an authorization row for the project (the same exception
+		// the revision kernel tables use). Recreate it so existing databases
+		// pick up the exception.
+		db.prepare("DROP TRIGGER IF EXISTS trg_shiplet_events_immutable_delete"),
 		db.prepare(
-			`CREATE TRIGGER IF NOT EXISTS trg_shiplet_events_immutable_delete
+			`CREATE TRIGGER trg_shiplet_events_immutable_delete
 			 BEFORE DELETE ON shiplet_events
+			 WHEN NOT EXISTS (
+				SELECT 1 FROM shiplet_kernel_purge_authorizations purge
+				WHERE purge.project_id = OLD.project_id
+			 )
 			 BEGIN SELECT RAISE(ABORT, 'shiplet_events are immutable'); END`,
 		),
 	]);

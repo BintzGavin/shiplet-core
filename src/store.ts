@@ -1376,7 +1376,14 @@ export async function permanentlyDeleteProjectRecords(
       .prepare("DELETE FROM review_feedback_replies WHERE project_id = ?")
       .bind(projectId),
     db
+      .prepare("DELETE FROM review_feedback_attachments WHERE project_id = ?")
+      .bind(projectId),
+    db
       .prepare("DELETE FROM review_feedback WHERE project_id = ?")
+      .bind(projectId),
+    // Allowed only while the purge authorization above is present.
+    db
+      .prepare("DELETE FROM shiplet_events WHERE project_id = ?")
       .bind(projectId),
     db
       .prepare("DELETE FROM shiplet_watch_subscriptions WHERE project_id = ?")

@@ -12,8 +12,8 @@ import app, { schemaInitializationTest } from "../src/index";
 // Pin the two together: when this digest changes, bump
 // CURRENT_KERNEL_SCHEMA_EPOCH in src/index.ts and update both values here.
 const PINNED_KERNEL_SCHEMA = {
-  epoch: 4,
-  digest: "9c42566a65cbd31f92fc4a9319771561fe70a56da74c7306bd3e51f28cd8b9b6",
+  epoch: 5,
+  digest: "b20db5133d37da83833dc352a483f4e7d8ea29f01f78d8a6066674314d6e5e87",
 };
 
 // Releases up to v0.1.43 recorded epoch 1 before the invite link tables existed.
@@ -22,6 +22,8 @@ const EPOCH_BEFORE_INVITE_LINKS = 1;
 const EPOCH_BEFORE_REUSABLE_CLI_SESSIONS = 2;
 // Releases before WorkOS membership reconciliation recorded epoch 3.
 const EPOCH_BEFORE_MEMBERSHIP_SYNC = 3;
+// Releases before purge-authorized canonical event deletion recorded epoch 4.
+const EPOCH_BEFORE_EVENT_PURGE = 4;
 const EPOCH_TABLE = "shiplet_kernel_schema_epoch";
 
 function db() {
@@ -118,6 +120,26 @@ describe("kernel schema epoch", () => {
       .bind("idx_organization_memberships_user")
       .first<{ name: string }>();
     expect(index).not.toBeNull();
+  });
+
+  it("replaces the unconditional canonical event delete trigger on a database that recorded the epoch from before purges", async () => {
+    await request("/health");
+    await recordEpoch(EPOCH_BEFORE_EVENT_PURGE);
+    await db().prepare("DROP TRIGGER IF EXISTS trg_shiplet_events_immutable_delete").run();
+    await db().prepare(
+      `CREATE TRIGGER trg_shiplet_events_immutable_delete
+       BEFORE DELETE ON shiplet_events
+       BEGIN SELECT RAISE(ABORT, 'shiplet_events are immutable'); END`,
+    ).run();
+
+    expect((await request(`/join/${"E".repeat(32)}`)).status).toBe(404);
+
+    const trigger = await db().prepare(
+      "SELECT sql FROM sqlite_master WHERE type = 'trigger' AND name = ?",
+    )
+      .bind("trg_shiplet_events_immutable_delete")
+      .first<{ sql: string }>();
+    expect(trigger?.sql).toContain("shiplet_kernel_purge_authorizations");
   });
 
   it("pins the kernel schema to its epoch so schema changes cannot ship without a bump", async () => {

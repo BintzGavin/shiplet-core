@@ -896,7 +896,8 @@ const KERNEL_SCHEMA_EPOCH_MARKER = "kernel";
 // 2: organization and team invite link tables.
 // 3: cli_authorization_requests.session_ttl_seconds for reusable CLI sessions.
 // 4: workos_membership_sync_state and the organization membership user index.
-const CURRENT_KERNEL_SCHEMA_EPOCH = 4;
+// 5: shiplet_events delete trigger allows authorized permanent-deletion purges.
+const CURRENT_KERNEL_SCHEMA_EPOCH = 5;
 
 async function readKernelSchemaEpoch(db: D1Database): Promise<number | null> {
   const table = await db
@@ -4175,14 +4176,42 @@ function requireProjectOwner(project: Project, user: ShipletUser) {
   }
 }
 
+// R2 accepts at most 1,000 keys per delete call.
+const R2_DELETE_BATCH_SIZE = 1_000;
+
 async function deleteProjectPermanently(env: Env, project: Project) {
   const assets = await env.DB
     .prepare("SELECT object_key FROM project_assets WHERE project_id = ? AND object_key IS NOT NULL")
     .bind(project.id)
     .all<{ object_key: string }>();
+  const reviewObjects = await env.DB
+    .prepare(
+      `SELECT screenshot_key AS object_key FROM review_feedback
+       WHERE project_id = ? AND screenshot_key IS NOT NULL
+       UNION
+       SELECT object_key FROM review_feedback_attachments WHERE project_id = ?`,
+    )
+    .bind(project.id, project.id)
+    .all<{ object_key: string }>();
   await permanentlyDeleteProjectRecords(env.DB, project.id);
 
   let cleanupIncomplete = false;
+  const reviewKeys = (reviewObjects.results || []).map((row) => row.object_key);
+  if (reviewKeys.length > 0 && env.REVIEW_ASSETS) {
+    for (
+      let index = 0;
+      index < reviewKeys.length;
+      index += R2_DELETE_BATCH_SIZE
+    ) {
+      try {
+        await env.REVIEW_ASSETS.delete(
+          reviewKeys.slice(index, index + R2_DELETE_BATCH_SIZE),
+        );
+      } catch {
+        cleanupIncomplete = true;
+      }
+    }
+  }
   for (const asset of assets.results || []) {
     try {
       if (!env.SHIPLET_ASSETS) {
