@@ -142,7 +142,7 @@ export function registerTraceRoutes(app: Hono<any>) {
 	app.get(`${trace}/attachments/:sha256`, async (c) => {
 		const access = await resolveTraceAccess(c.env, c.req.raw, c.req.param("projectId"), "read");
 		if (access instanceof Response) return access;
-		return handleGetAttachment(c.env, access, c.req.param("traceId"), c.req.param("sha256"));
+		return handleGetAttachment(c.env, access, c.req.param("traceId"), c.req.param("sha256"), c.req.header("range"));
 	});
 
 	// Uploads the bytes of a deferred attachment (a session-produced file).

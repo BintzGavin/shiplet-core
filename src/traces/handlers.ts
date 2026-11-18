@@ -47,6 +47,7 @@ import {
 	getTrace,
 	listProjectTraces,
 	readAttachment,
+	attachmentSize,
 	readManifest,
 	readSegment,
 	storePendingAttachment,
@@ -261,25 +262,63 @@ export async function handleGetContext(env: Env, access: TraceAccess, traceId: s
 	return ok({ traceId: row.id, level: view.resolved.level, context });
 }
 
-export async function handleGetAttachment(env: Env, access: TraceAccess, traceId: string, sha256: string) {
+// One byte range from a Range header ("bytes=0-99", "bytes=100-", "bytes=-500"),
+// resolved against the object size. Browsers send these to seek in a video.
+// Multiple ranges are not supported, so the whole file is served instead.
+export function parseByteRange(header: string | null | undefined, size: number): { offset: number; length: number } | "unsatisfiable" | null {
+	if (!header) return null;
+	const match = /^bytes=(\d*)-(\d*)$/.exec(header.trim());
+	if (!match || (match[1] === "" && match[2] === "")) return null;
+	if (match[1] === "") {
+		const suffix = Number(match[2]);
+		if (suffix === 0) return "unsatisfiable";
+		const length = Math.min(suffix, size);
+		return size === 0 ? "unsatisfiable" : { offset: size - length, length };
+	}
+	const start = Number(match[1]);
+	if (start >= size) return "unsatisfiable";
+	const end = match[2] === "" ? size - 1 : Math.min(Number(match[2]), size - 1);
+	if (end < start) return null;
+	return { offset: start, length: end - start + 1 };
+}
+
+export async function handleGetAttachment(env: Env, access: TraceAccess, traceId: string, sha256: string, rangeHeader?: string | null) {
 	const row = await getTrace(env.DB, access.project.id, traceId);
 	const view = row && /^[a-f0-9]{64}$/.test(sha256) ? await viewTrace(env, access, row) : null;
 	if (!row || !view || !(view.manifest.attachments || []).some((attachment) => attachment.sha256 === sha256)) return notFound();
-	const object = await readAttachment(env, row, sha256);
+	let range: { offset: number; length: number } | null = null;
+	let size: number | null = null;
+	if (rangeHeader) {
+		size = await attachmentSize(env, row, sha256);
+		if (size !== null) {
+			const parsed = parseByteRange(rangeHeader, size);
+			if (parsed === "unsatisfiable") {
+				return new Response(null, { status: 416, headers: { "content-range": `bytes */${size}`, "accept-ranges": "bytes" } });
+			}
+			range = parsed;
+		}
+	}
+	const object = await readAttachment(env, row, sha256, range ?? undefined);
 	if (!object) {
 		if (await getPendingAttachment(env.DB, row.id, sha256)) return traceError(404, "attachment_pending", "This attachment has not been uploaded yet.");
 		return notFound();
 	}
 	const contentType = object.httpMetadata?.contentType || "application/octet-stream";
-	return new Response(object.body, {
-		headers: {
-			"content-type": contentType,
-			"x-content-type-options": "nosniff",
-			"cache-control": "private, max-age=300",
-			"content-disposition": INLINE_TYPES.has(contentType) ? "inline" : `attachment; filename="${sha256}"`,
-			"content-length": String(object.size),
-		},
-	});
+	const headers: Record<string, string> = {
+		"content-type": contentType,
+		"x-content-type-options": "nosniff",
+		"cache-control": "private, max-age=300",
+		"content-disposition": INLINE_TYPES.has(contentType) ? "inline" : `attachment; filename="${sha256}"`,
+		"accept-ranges": "bytes",
+		etag: `"${sha256}"`,
+	};
+	if (range) {
+		headers["content-range"] = `bytes ${range.offset}-${range.offset + range.length - 1}/${object.size}`;
+		headers["content-length"] = String(range.length);
+		return new Response(object.body, { status: 206, headers });
+	}
+	headers["content-length"] = String(object.size);
+	return new Response(object.body, { headers });
 }
 
 export async function handlePutAttachment(env: Env, access: TraceAccess, traceId: string, sha256: string, data: Uint8Array) {

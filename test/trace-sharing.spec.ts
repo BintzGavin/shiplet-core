@@ -276,7 +276,36 @@ describe("trace sharing (slice 2)", () => {
       const served = await request(path, { headers: OWNER });
       expect(served.status).toBe(200);
       expect(served.headers.get("content-type")).toBe("video/mp4");
+      expect(served.headers.get("accept-ranges")).toBe("bytes");
       expect((await served.arrayBuffer()).byteLength).toBe(bytes.byteLength);
+
+      // browsers seek in a video with byte ranges
+      const total = bytes.byteLength;
+      const ranged = async (range: string) => request(path, { headers: { ...OWNER, range } });
+      const first = await ranged("bytes=0-99");
+      expect(first.status).toBe(206);
+      expect(first.headers.get("content-range")).toBe(`bytes 0-99/${total}`);
+      expect(first.headers.get("content-length")).toBe("100");
+      expect([...new Uint8Array(await first.arrayBuffer())]).toEqual([...bytes.slice(0, 100)]);
+      const open = await ranged(`bytes=${total - 10}-`);
+      expect(open.status).toBe(206);
+      expect(open.headers.get("content-range")).toBe(`bytes ${total - 10}-${total - 1}/${total}`);
+      expect([...new Uint8Array(await open.arrayBuffer())]).toEqual([...bytes.slice(total - 10)]);
+      const suffix = await ranged("bytes=-5");
+      expect(suffix.headers.get("content-range")).toBe(`bytes ${total - 5}-${total - 1}/${total}`);
+      expect((await suffix.arrayBuffer()).byteLength).toBe(5);
+      const clamped = await ranged(`bytes=${total - 2}-${total + 1000}`);
+      expect(clamped.headers.get("content-range")).toBe(`bytes ${total - 2}-${total - 1}/${total}`);
+      await clamped.arrayBuffer();
+      const beyond = await ranged(`bytes=${total}-`);
+      expect(beyond.status).toBe(416);
+      expect(beyond.headers.get("content-range")).toBe(`bytes */${total}`);
+      // several ranges, or nonsense, get the whole file
+      const multi = await ranged("bytes=0-1,5-6");
+      expect(multi.status).toBe(200);
+      await multi.arrayBuffer();
+      // a reader who cannot see the trace learns nothing from a range request
+      expect((await request(path, { headers: { ...person("stranger"), range: "bytes=0-1" } })).status).toBe(404);
       const again = await request(path, { method: "PUT", headers: OWNER, body: bytes });
       expect(again.status).toBe(409);
       const detail = await request(`/api/shiplets/${projectId}/traces/${created.trace.id}`, { headers: OWNER });
