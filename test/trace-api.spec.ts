@@ -157,6 +157,7 @@ describe("trace API (slice 1)", () => {
           "eventCount",
           "harness",
           "id",
+          "pendingAttachments",
           "projectId",
           "revisionId",
           "segmentCount",
@@ -225,12 +226,17 @@ describe("trace API (slice 1)", () => {
         expect(await read.json()).toMatchObject({ error: "not_found" });
         const list = await request(`/api/shiplets/${projectId}/traces`, { headers });
         if (list.status === 200) expect(((await list.json()) as { traces: unknown[] }).traces).toEqual([]);
-        const del = await request(`/api/shiplets/${projectId}/traces/${trace.id}`, { method: "DELETE", headers });
-        expect(del.status).toBe(404);
+        if (headers !== ADMIN) {
+          const del = await request(`/api/shiplets/${projectId}/traces/${trace.id}`, { method: "DELETE", headers });
+          expect(del.status).toBe(404);
+        }
       }
       // a member cannot even add a trace to a Shiplet they cannot edit
       const memberUpload = await post(projectId, await fixtureUpload({ title: "member" }), MEMBER);
       expect(memberUpload.status).toBe(403);
+      // organization admins cannot read a private trace, but may delete it
+      const adminDelete = await request(`/api/shiplets/${projectId}/traces/${trace.id}`, { method: "DELETE", headers: ADMIN });
+      expect(adminDelete.status).toBe(204);
     });
   });
 

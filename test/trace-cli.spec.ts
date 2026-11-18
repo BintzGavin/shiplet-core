@@ -204,6 +204,98 @@ describe("shiplet trace (CLI)", () => {
     expect(context.stdout).toContain("A trace is the full log of an agent session");
   });
 
+  it("attaches a screenshot the session produced, uploads its bytes, and shares the trace", async () => {
+    const work = await tempDir();
+    await mkdir(path.join(work, "out"), { recursive: true });
+    const png = new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10, 1, 2, 3]);
+    await writeFile(path.join(work, "out/shot.png"), png);
+    await writeFile(path.join(work, "outside.png"), png.slice(0, 9));
+    const now = new Date();
+    const at = (offset: number) => new Date(now.getTime() + offset * 1000 - 60_000).toISOString();
+    const rollout = [
+      { timestamp: at(0), type: "session_meta", payload: { id: "c2", cwd: work } },
+      { timestamp: at(1), type: "event_msg", payload: { type: "user_message", message: "Take a screenshot" } },
+      { timestamp: at(2), type: "response_item", payload: { type: "function_call", name: "shell", call_id: "s1", arguments: JSON.stringify({ command: ["bash", "-lc", "playwright screenshot out/shot.png"] }) } },
+      { timestamp: at(3), type: "response_item", payload: { type: "function_call_output", call_id: "s1", output: "Saved out/shot.png and ../elsewhere.png" } },
+      { timestamp: at(120), type: "response_item", payload: { type: "message", role: "assistant", content: [{ type: "output_text", text: "Done." }] } },
+    ];
+    const session = path.join(work, "rollout.jsonl");
+    await writeFile(session, rollout.map((record) => JSON.stringify(record)).join("\n"));
+    const audiencesFile = path.join(work, "audiences.json");
+    await writeFile(audiencesFile, JSON.stringify([{ targetType: "email", targetId: "alex@example.com", profile: { level: "full", rules: [{ op: "mask_terms", terms: ["secret project"] }] } }]));
+
+    const dry = await run(["trace", "share", session, "--shiplet", "p", "--dry-run", "--json"]);
+    expect(JSON.parse(dry.stdout).producedFiles).toEqual([{ path: path.join("out", "shot.png"), mediaType: "image/png", bytes: png.byteLength }]);
+
+    let uploaded: any;
+    let audiences: any;
+    let putBytes: Uint8Array | null = null;
+    const server = stubServer([
+      (call) => {
+        if (call.method === "POST" && call.url.endsWith("/traces")) {
+          uploaded = JSON.parse(call.body!);
+          const deferred = uploaded.attachments.filter((attachment: any) => attachment.deferred);
+          return Response.json({ trace: { id: "trc_2" }, serverMasked: { count: 0, kinds: {} }, pendingAttachments: deferred.map((a: any) => a.sha256) }, { status: 201 });
+        }
+        return undefined;
+      },
+      (call) => {
+        if (call.method === "PUT" && call.url.includes("/attachments/")) {
+          putBytes = call.body as unknown as Uint8Array;
+          return new Response(null, { status: 204 });
+        }
+        return undefined;
+      },
+      (call) => {
+        if (call.method === "PUT" && call.url.endsWith("/audiences")) {
+          audiences = JSON.parse(call.body!);
+          return Response.json({ sharing: "shared", audiences: audiences.audiences.map((audience: any) => ({ ...audience })) });
+        }
+        return undefined;
+      },
+    ]);
+    const result = await run(
+      ["trace", "share", session, "--shiplet", "proj_1", "--api-url", "https://shiplet.test", "--audience", "organization=conversation", "--audiences", audiencesFile],
+      { fetch: server.fetch, env: { SHIPLET_API_KEY: "shiplet_org_testkeyvalue1234567890" } },
+    );
+    expect(result.stderr).toBe("");
+    expect(result.code).toBe(0);
+    const deferred = uploaded.attachments.filter((attachment: any) => attachment.deferred);
+    expect(deferred).toEqual([expect.objectContaining({ mediaType: "image/png", bytes: png.byteLength, source: "file", name: path.join("out", "shot.png") })]);
+    expect(uploaded.events.some((event: any) => event.attachmentIds?.includes(deferred[0].sha256))).toBe(true);
+    expect(putBytes && Buffer.from(putBytes).equals(Buffer.from(png))).toBe(true);
+    expect(audiences.audiences).toEqual([
+      { targetType: "organization", targetId: "organization", profile: { level: "conversation", rules: [] } },
+      expect.objectContaining({ targetType: "email", targetId: "alex@example.com" }),
+    ]);
+    expect(result.stdout).toContain("Shared with: organization=conversation, email:alex@example.com=full");
+
+    const noFiles = await run(["trace", "share", session, "--shiplet", "p", "--dry-run", "--json", "--no-files"]);
+    expect(JSON.parse(noFiles.stdout).producedFiles).toEqual([]);
+    expect((await run(["trace", "share", session, "--shiplet", "p", "--dry-run", "--audience", "team=full"])).stderr).toContain("needs an id");
+  });
+
+  it("changes sharing without dropping audiences, and previews a level", async () => {
+    const calls: any[] = [];
+    const server = stubServer([
+      (call) => {
+        calls.push(call);
+        if (call.url.endsWith("/audiences")) return Response.json({ sharing: "private", audiences: [{ targetType: "team", targetId: "t1", profile: { level: "summary", rules: [] } }] });
+        if (call.url.endsWith("/preview")) return Response.json({ events: [{ kind: "user_message" }, { kind: "omitted" }], manifest: { attachments: [], summary: { filesTouched: ["a.ts"] } } });
+        return undefined;
+      },
+    ]);
+    const env = { SHIPLET_API_KEY: "shiplet_org_testkeyvalue1234567890" };
+    const privateResult = await run(["trace", "audiences", "trc_1", "--shiplet", "p", "--private", "--api-url", "https://shiplet.test"], { fetch: server.fetch, env });
+    expect(privateResult.code).toBe(0);
+    expect(JSON.parse(calls[0].body)).toEqual({ sharing: "private" });
+    expect(privateResult.stdout).toContain("team:t1 = summary");
+    const preview = await run(["trace", "preview", "trc_1", "--shiplet", "p", "--level", "conversation", "--api-url", "https://shiplet.test"], { fetch: server.fetch, env });
+    expect(preview.code).toBe(0);
+    expect(JSON.parse(calls[1].body)).toEqual({ profile: { level: "conversation", rules: [] } });
+    expect(preview.stdout).toContain("user_message 1, omitted 1");
+  });
+
   it("reports when traces are not enabled", async () => {
     const server = stubServer([() => Response.json({ error: "traces_not_enabled", message: "off" }, { status: 404 })]);
     const result = await run(["trace", "list", "--shiplet", "p", "--api-url", "https://shiplet.test"], {

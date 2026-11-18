@@ -158,7 +158,7 @@ import {
 } from "./self-owned/revisions";
 import { ensureTraceSchema } from "./traces/schema";
 import { registerTraceRoutes } from "./traces/routes";
-import { deleteProjectTraceObjects } from "./traces/store";
+import { deleteProjectTraceObjects, sweepArchivedShipletTraces } from "./traces/store";
 import {
   legacyStaticPackageEnvelopeBytes,
   migrateLegacyShipletRevision,
@@ -901,7 +901,8 @@ const KERNEL_SCHEMA_EPOCH_MARKER = "kernel";
 // 3: cli_authorization_requests.session_ttl_seconds for reusable CLI sessions.
 // 4: workos_membership_sync_state and the organization membership user index.
 // 5: project_traces for agent session traces.
-const CURRENT_KERNEL_SCHEMA_EPOCH = 5;
+// 6: trace audiences, variants, and pending attachments.
+const CURRENT_KERNEL_SCHEMA_EPOCH = 6;
 
 async function readKernelSchemaEpoch(db: D1Database): Promise<number | null> {
   const table = await db
@@ -23486,6 +23487,12 @@ scheduledApp.scheduled = async (controller, environment, context) => {
       // unrelated database and OAuth reconciliation work in this cron run.
     }
     await autoInitializeDatabase(environment.DB);
+    try {
+      await sweepArchivedShipletTraces(environment, controller.scheduledTime);
+    } catch {
+      // Traces of archived Shiplets are retried on the next run; the sweep is
+      // bounded and must not starve the work below.
+    }
     try {
       await sweepWorkOSMemberships(environment);
     } catch {

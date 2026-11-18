@@ -186,7 +186,7 @@ and its canonical JSON is at most 32 KiB.
 | Rule | Shape | Effect | Dashboard |
 | --- | --- | --- | --- |
 | `mask_terms` | `{ op, terms: string[], caseSensitive?: false }` | Each term (2 to 200 chars, at most 200 terms) is replaced with `[masked]` in every string field and the summary | Yes |
-| `drop_paths` | `{ op, globs: string[] }` | Events whose tool input path or input summary matches a glob become `omitted`; matching `filesTouched` entries are removed | Yes |
+| `drop_paths` | `{ op, globs: string[] }` | Events whose tool input path or input summary matches a glob become `omitted`, along with the results of those tool calls; matching `filesTouched` entries are removed. A glob without a leading `/` may match any trailing part of a path, so `src/**` matches `/work/app/src/a.ts` | Yes |
 | `drop_kinds` | `{ op, kinds: EventKind[] }` | Drops events of these kinds | Only "hide reasoning" |
 | `drop_tools` | `{ op, tools: string[] }` | Drops calls and results for these tool names | No |
 | `drop_agents` | `{ op, agents: string[] }` | Drops every event from these subagents | No |
@@ -1076,11 +1076,28 @@ prefix; no other table references them.
    - the `sharing` flag, with admins reading shared traces (D2);
    - variant rendering (D12) with preview, and the CLI `--audience`, `--share`,
      and `--private` flags;
-   - multipart upload;
+   - large files as deferred attachments;
    - session-produced files (D9);
    - the D18 retention sweep.
 
    Retires the risk that matters most: a reader seeing more than their level.
+
+   **Built.** What shipped differs from this outline in places:
+   - **Large files.** Instead of multipart event upload, the event JSON stays
+     at most 16 MiB per request. Attachments up to 20 MiB each can be declared
+     `deferred` (binary types only; text is always inline so it is masked) and
+     sent afterwards with
+     `PUT /api/shiplets/:id/traces/:traceId/attachments/:sha256`. Until then,
+     reads of them return 404 `attachment_pending`. Raising the 16 MiB event
+     limit is still open.
+   - **Audience API.** `GET` and `PUT /api/shiplets/:id/traces/:traceId/audiences`
+     replace the whole set (`{ sharing?, audiences? }`; omitting `audiences`
+     keeps the current set and changes only `sharing`), and
+     `POST .../preview` renders a profile without storing it.
+   - **Reads.** Reads return the reader's level in `access`.
+   - **CLI.** `shiplet trace audiences` and `shiplet trace preview`, plus
+     `--audience <type>:<id>=<level>` and `--audiences <file.json>` on share.
+   - **Schema.** These tables are kernel schema epoch 6.
 3. **MCP parity.** `openapi.json` entries, Code Mode dispatcher branches and
    allowlist entries, and `traces:*` agent permissions. Covers list, read,
    `getTraceContext` (paginated), share, audiences, profiles, and preview, plus

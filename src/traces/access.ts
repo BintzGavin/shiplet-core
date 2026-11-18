@@ -12,6 +12,7 @@ import {
 } from "../org-api-tokens";
 import { canEditProject, canViewProject, getProjectById, type ShipletUser } from "../store";
 import type { Project } from "../types";
+import type { TraceViewer } from "./audiences";
 import type { TraceReader } from "./store";
 
 export type TraceMode = "read" | "write" | "delete";
@@ -19,6 +20,7 @@ export type TraceMode = "read" | "write" | "delete";
 export type TraceAccess = {
 	project: Project;
 	reader: TraceReader;
+	viewer: TraceViewer;
 	user: ShipletUser | null;
 	token: OrganizationApiTokenRecord | null;
 };
@@ -67,12 +69,18 @@ export async function resolveTraceAccess(
 		if (mode === "write" && project.archived_on) {
 			return traceError(409, "shiplet_archived", "Restore this Shiplet before adding traces.");
 		}
-		return { project, token, user: null, reader: { kind: "api_key", id: token.id } };
+		return { project, token, user: null, reader: { kind: "api_key", id: token.id }, viewer: { kind: "api_key", tokenId: token.id } };
 	}
 
 	const user = await getCurrentUser(request, env);
 	if (!user) {
-		return mode === "write" ? traceError(401, "unauthorized", "Sign in to add a trace.") : notFound();
+		if (mode !== "read" || authorization) {
+			return mode === "write" ? traceError(401, "unauthorized", "Sign in to add a trace.") : notFound();
+		}
+		// Anonymous visitors of a public or unlisted Shiplet can read traces
+		// shared with a "link" audience, and nothing else.
+		if (!(await canViewProject(env.DB, project))) return notFound();
+		return { project, token: null, user: null, reader: { kind: "anonymous" }, viewer: { kind: "anonymous" } };
 	}
 	if (mode === "write") {
 		if (!(await canEditProject(env.DB, project, user))) {
@@ -89,5 +97,6 @@ export async function resolveTraceAccess(
 		token: null,
 		user,
 		reader: { kind: "user", id: user.id, isShipletOwner: project.owner_user_id === user.id },
+		viewer: { kind: "user", user },
 	};
 }

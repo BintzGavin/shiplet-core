@@ -23,6 +23,7 @@ export type TraceRow = {
 	canonical_bytes: number;
 	attachment_count: number;
 	attachment_bytes: number;
+	pending_attachments: number;
 	client_masked_count: number;
 	server_masked_count: number;
 	manifest_sha256: string;
@@ -42,6 +43,7 @@ export type TraceSummary = {
 	canonicalBytes: number;
 	attachmentCount: number;
 	attachmentBytes: number;
+	pendingAttachments: number;
 	serverMaskedCount: number;
 	sharing: "private" | "shared";
 	uploadedBy: { kind: "user" | "api_key"; id: string };
@@ -62,6 +64,7 @@ export function traceSummary(row: TraceRow): TraceSummary {
 		canonicalBytes: row.canonical_bytes,
 		attachmentCount: row.attachment_count,
 		attachmentBytes: row.attachment_bytes,
+		pendingAttachments: row.pending_attachments || 0,
 		serverMaskedCount: row.server_masked_count,
 		sharing: row.sharing === "shared" ? "shared" : "private",
 		uploadedBy: row.uploader_token_id
@@ -103,6 +106,7 @@ export type CreateTraceInput = {
 	manifestSha256: string;
 	segments: Array<{ index: number; ndjson: string }>;
 	attachments: TraceAttachment[];
+	pendingAttachments?: Array<{ sha256: string; mediaType: string; bytes: number }>;
 	clientMaskedCount: number;
 	serverMaskedCount: number;
 	createdOn: string;
@@ -123,7 +127,9 @@ export async function createTrace(env: Env, input: CreateTraceInput): Promise<Tr
 		(sum, segment) => sum + new TextEncoder().encode(segment.ndjson).byteLength,
 		0,
 	);
-	const attachmentBytes = input.attachments.reduce((sum, attachment) => sum + attachment.bytes, 0);
+	const pending = input.pendingAttachments || [];
+	const attachmentBytes =
+		input.attachments.reduce((sum, attachment) => sum + attachment.bytes, 0) + pending.reduce((sum, attachment) => sum + attachment.bytes, 0);
 	const row: TraceRow = {
 		id: input.id,
 		project_id: input.projectId,
@@ -140,8 +146,9 @@ export async function createTrace(env: Env, input: CreateTraceInput): Promise<Tr
 		event_count: input.manifest.counts.events,
 		segment_count: input.segments.length,
 		canonical_bytes: canonicalBytes,
-		attachment_count: input.attachments.length,
+		attachment_count: input.attachments.length + pending.length,
 		attachment_bytes: attachmentBytes,
+		pending_attachments: pending.length,
 		client_masked_count: input.clientMaskedCount,
 		server_masked_count: input.serverMaskedCount,
 		manifest_sha256: input.manifestSha256,
@@ -159,9 +166,9 @@ export async function createTrace(env: Env, input: CreateTraceInput): Promise<Tr
 			`INSERT INTO project_traces (
 				id, project_id, organization_id, revision_id, uploader_user_id, uploader_token_id,
 				upload_sha256, sharing, title, harness, started_on, ended_on, event_count,
-				segment_count, canonical_bytes, attachment_count, attachment_bytes,
+				segment_count, canonical_bytes, attachment_count, attachment_bytes, pending_attachments,
 				client_masked_count, server_masked_count, manifest_sha256, created_on
-			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		)
 			.bind(
 				row.id,
@@ -181,12 +188,20 @@ export async function createTrace(env: Env, input: CreateTraceInput): Promise<Tr
 				row.canonical_bytes,
 				row.attachment_count,
 				row.attachment_bytes,
+				row.pending_attachments,
 				row.client_masked_count,
 				row.server_masked_count,
 				row.manifest_sha256,
 				row.created_on,
 			)
 			.run();
+		for (const attachment of pending) {
+			await env.DB.prepare(
+				"INSERT OR REPLACE INTO trace_pending_attachments (trace_id, sha256, media_type, bytes) VALUES (?, ?, ?, ?)",
+			)
+				.bind(row.id, attachment.sha256, attachment.mediaType, attachment.bytes)
+				.run();
+		}
 	} catch (error) {
 		try {
 			await deleteR2Keys(bucket, written);
@@ -214,9 +229,13 @@ export async function getTrace(db: D1Database, projectId: string, traceId: strin
 
 export type TraceReader =
 	| { kind: "user"; id: string; isShipletOwner: boolean }
-	| { kind: "api_key"; id: string };
+	| { kind: "api_key"; id: string }
+	| { kind: "anonymous" };
 
+// Slice 1 rule (uploader or Shiplet owner). Shared traces go through
+// resolveTraceLevel in ./audiences.
 export function readerMayRead(row: TraceRow, reader: TraceReader) {
+	if (reader.kind === "anonymous") return false;
 	if (reader.kind === "api_key") return row.uploader_token_id === reader.id;
 	return reader.isShipletOwner || row.uploader_user_id === reader.id;
 }
@@ -238,21 +257,15 @@ export function decodeCursor(value: string | null | undefined): Cursor | null {
 	return null;
 }
 
-export async function listTracesForReader(
+// One page of a Shiplet's traces, newest first. Callers filter by what the
+// reader may see (resolveTraceLevel), so pages can come back short.
+export async function listProjectTraces(
 	db: D1Database,
 	projectId: string,
-	reader: TraceReader,
 	{ cursor, limit }: { cursor: Cursor | null; limit: number },
 ) {
 	const conditions = ["project_id = ?"];
 	const binds: unknown[] = [projectId];
-	if (reader.kind === "api_key") {
-		conditions.push("uploader_token_id = ?");
-		binds.push(reader.id);
-	} else if (!reader.isShipletOwner) {
-		conditions.push("uploader_user_id = ?");
-		binds.push(reader.id);
-	}
 	if (cursor) {
 		conditions.push("(created_on < ? OR (created_on = ? AND id < ?))");
 		binds.push(cursor.createdOn, cursor.createdOn, cursor.id);
@@ -301,9 +314,12 @@ async function deletePrefix(bucket: R2Bucket, prefix: string) {
 // The row goes first; a failed object delete then leaves only orphans, which
 // the project-level prefix delete (or the slice 2 sweep) later removes.
 export async function deleteTrace(env: Env, row: TraceRow) {
-	await env.DB.prepare("DELETE FROM project_traces WHERE project_id = ? AND id = ?")
-		.bind(row.project_id, row.id)
-		.run();
+	await env.DB.batch([
+		env.DB.prepare("DELETE FROM project_traces WHERE project_id = ? AND id = ?").bind(row.project_id, row.id),
+		env.DB.prepare("DELETE FROM trace_audiences WHERE trace_id = ?").bind(row.id),
+		env.DB.prepare("DELETE FROM trace_variants WHERE trace_id = ?").bind(row.id),
+		env.DB.prepare("DELETE FROM trace_pending_attachments WHERE trace_id = ?").bind(row.id),
+	]);
 	try {
 		await deletePrefix(env.REVIEW_ASSETS, traceObjectPrefix(row.project_id, row.id));
 	} catch {
@@ -341,4 +357,46 @@ export async function traceQuotaUsage(
 				.bind(uploaderUserId)
 				.first<{ used: number }>();
 	return Number(row?.used || 0);
+}
+
+export async function storePendingAttachment(
+	env: Env,
+	row: TraceRow,
+	attachment: { sha256: string; mediaType: string; data: Uint8Array },
+) {
+	await env.REVIEW_ASSETS.put(attachmentKey(row.project_id, row.id, attachment.sha256), attachment.data, {
+		httpMetadata: { contentType: attachment.mediaType },
+	});
+	await env.DB.batch([
+		env.DB.prepare("DELETE FROM trace_pending_attachments WHERE trace_id = ? AND sha256 = ?").bind(row.id, attachment.sha256),
+		env.DB.prepare(
+			"UPDATE project_traces SET pending_attachments = MAX(0, pending_attachments - 1) WHERE id = ?",
+		).bind(row.id),
+	]);
+}
+
+export async function getPendingAttachment(db: D1Database, traceId: string, sha256: string) {
+	return db
+		.prepare("SELECT sha256, media_type, bytes FROM trace_pending_attachments WHERE trace_id = ? AND sha256 = ?")
+		.bind(traceId, sha256)
+		.first<{ sha256: string; media_type: string; bytes: number }>();
+}
+
+export const ARCHIVED_TRACE_RETENTION_DAYS = 7;
+
+// D18: traces of Shiplets archived more than 7 days ago are deleted, ahead of
+// the Shiplet's own 30-day retention. Bounded per run; the cron repeats.
+export async function sweepArchivedShipletTraces(env: Env, now = Date.now(), limit = 25) {
+	if (!env.REVIEW_ASSETS) return 0;
+	const cutoff = new Date(now - ARCHIVED_TRACE_RETENTION_DAYS * 24 * 60 * 60 * 1000).toISOString();
+	const rows = await env.DB.prepare(
+		`SELECT project_traces.* FROM project_traces
+		 JOIN projects ON projects.id = project_traces.project_id
+		 WHERE projects.archived_on IS NOT NULL AND projects.archived_on <= ?
+		 LIMIT ?`,
+	)
+		.bind(cutoff, limit)
+		.all<TraceRow>();
+	for (const row of rows.results || []) await deleteTrace(env, row);
+	return (rows.results || []).length;
 }

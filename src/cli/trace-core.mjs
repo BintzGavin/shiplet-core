@@ -777,7 +777,13 @@ export async function finalizeTrace({
     },
     summary,
     segments: segmentRecords,
-    attachments: attachments.map(({ sha256, mediaType, bytes, source: attachmentSource = "inline" }) => ({ sha256, mediaType, bytes, source: attachmentSource })),
+    attachments: attachments.map(({ sha256, mediaType, bytes, source: attachmentSource = "inline", name }) => ({
+      sha256,
+      mediaType,
+      bytes,
+      source: attachmentSource,
+      ...(name ? { name } : {}),
+    })),
     masking: {
       coreVersion: CORE_VERSION,
       clientCount: masking.clientCount ?? 0,
@@ -787,6 +793,303 @@ export async function finalizeTrace({
     },
   };
   return { manifest, segments: segments.map(({ index, ndjson }) => ({ index, ndjson })), events: withSummaries };
+}
+
+// ---------------------------------------------------------------------------
+// Redaction profiles (D3): a level, then ordered rules. Rendering is
+// deterministic, so a profile's digest names its stored variant.
+
+export const LEVELS = Object.freeze(["full", "conversation", "summary", "hidden"]);
+export const RULE_OPS = Object.freeze([
+  "mask_terms",
+  "drop_paths",
+  "drop_kinds",
+  "drop_tools",
+  "drop_agents",
+  "drop_events",
+  "drop_attachments",
+  "truncate",
+]);
+const MAX_RULES = 50;
+const MAX_PROFILE_BYTES = 32 * KiB;
+
+const stringArray = (value, { min = 0, max = 200, itemMin = 1, itemMax = 200 } = {}) =>
+  Array.isArray(value) &&
+  value.length >= min &&
+  value.length <= max &&
+  value.every((item) => typeof item === "string" && item.length >= itemMin && item.length <= itemMax);
+
+export function validateProfile(profile) {
+  const errors = [];
+  const fail = (path, message) => errors.push({ path, message });
+  if (!isPlainObject(profile)) return { ok: false, errors: [{ path: "", message: "A profile is { level, rules }." }] };
+  for (const key of Object.keys(profile)) if (key !== "level" && key !== "rules") fail(key, "Unknown field.");
+  if (!LEVELS.includes(profile.level)) fail("level", "Must be full, conversation, summary, or hidden.");
+  const rules = profile.rules ?? [];
+  if (!Array.isArray(rules) || rules.length > MAX_RULES) fail("rules", `At most ${MAX_RULES} rules.`);
+  else {
+    rules.forEach((rule, index) => {
+      const path = `rules[${index}]`;
+      if (!isPlainObject(rule) || !RULE_OPS.includes(rule.op)) return fail(`${path}.op`, `Must be one of ${RULE_OPS.join(", ")}.`);
+      const allowed = { mask_terms: ["terms", "caseSensitive"], drop_paths: ["globs"], drop_kinds: ["kinds"], drop_tools: ["tools"], drop_agents: ["agents"], drop_events: ["ids"], drop_attachments: ["mediaTypes"], truncate: ["maxChars"] }[rule.op];
+      for (const key of Object.keys(rule)) if (key !== "op" && !allowed.includes(key)) fail(`${path}.${key}`, "Unknown field.");
+      if (rule.op === "mask_terms") {
+        if (!stringArray(rule.terms, { min: 1, max: 200, itemMin: 2, itemMax: 200 })) fail(`${path}.terms`, "1 to 200 terms of 2 to 200 characters.");
+        if (rule.caseSensitive !== undefined && typeof rule.caseSensitive !== "boolean") fail(`${path}.caseSensitive`, "Must be a boolean.");
+      }
+      if (rule.op === "drop_paths" && !stringArray(rule.globs, { min: 1, max: 100, itemMax: 500 })) fail(`${path}.globs`, "1 to 100 globs.");
+      if (rule.op === "drop_kinds" && !(stringArray(rule.kinds, { min: 1, max: 20 }) && rule.kinds.every((kind) => EVENT_KINDS.includes(kind)))) {
+        fail(`${path}.kinds`, "1 or more event kinds.");
+      }
+      if (rule.op === "drop_tools" && !stringArray(rule.tools, { min: 1, max: 100 })) fail(`${path}.tools`, "1 to 100 tool names.");
+      if (rule.op === "drop_agents" && !stringArray(rule.agents, { min: 1, max: 100 })) fail(`${path}.agents`, "1 to 100 agent IDs.");
+      if (rule.op === "drop_events" && !(stringArray(rule.ids, { min: 1, max: 10000, itemMax: 16 }) && rule.ids.every((id) => /^e\d{6,}$/.test(id)))) {
+        fail(`${path}.ids`, "1 or more event IDs.");
+      }
+      if (rule.op === "drop_attachments" && !stringArray(rule.mediaTypes, { min: 1, max: 20, itemMax: 100 })) fail(`${path}.mediaTypes`, "1 to 20 media types.");
+      if (rule.op === "truncate" && !(Number.isInteger(rule.maxChars) && rule.maxChars >= 20 && rule.maxChars <= 262144)) {
+        fail(`${path}.maxChars`, "An integer from 20 to 262144.");
+      }
+    });
+  }
+  if (byteLength(canonicalJson(profile)) > MAX_PROFILE_BYTES) fail("", "A profile is at most 32 KiB.");
+  return errors.length ? { ok: false, errors } : { ok: true };
+}
+
+export function canonicalJson(value) {
+  if (Array.isArray(value)) return `[${value.map(canonicalJson).join(",")}]`;
+  if (isPlainObject(value)) {
+    return `{${Object.keys(value)
+      .sort()
+      .map((key) => `${JSON.stringify(key)}:${canonicalJson(value[key])}`)
+      .join(",")}}`;
+  }
+  return JSON.stringify(value ?? null);
+}
+
+export function normalizeProfile(profile) {
+  return { level: profile.level, rules: Array.isArray(profile.rules) ? profile.rules : [] };
+}
+
+export async function profileDigest(profile) {
+  return sha256Hex(canonicalJson(normalizeProfile(profile)));
+}
+
+// Linear glob matcher: ** spans folders, * stays inside one, ? is one character.
+export function globToRegExp(glob) {
+  let pattern = "";
+  for (let index = 0; index < glob.length; index++) {
+    const char = glob[index];
+    if (char === "*") {
+      if (glob[index + 1] === "*") {
+        pattern += ".*";
+        index++;
+        if (glob[index + 1] === "/") index++;
+      } else pattern += "[^/]*";
+    } else if (char === "?") pattern += "[^/]";
+    else pattern += char.replace(/[.+^${}()|[\]\\]/g, "\\$&");
+  }
+  return new RegExp(`^${pattern}$`);
+}
+
+function pathMatchers(rules, cwd) {
+  const globs = rules.filter((rule) => rule.op === "drop_paths").flatMap((rule) => rule.globs).map(globToRegExp);
+  if (!globs.length) return null;
+  // A glob without a leading "/" may match any trailing part of a path, so
+  // "src/**" matches /work/app/src/a.ts without knowing the session folder.
+  return (value) => {
+    if (typeof value !== "string" || !value) return false;
+    const candidates = new Set([value, relativePath(value, cwd)].filter(Boolean));
+    for (let index = value.indexOf("/"); index >= 0; index = value.indexOf("/", index + 1)) {
+      if (index + 1 < value.length) candidates.add(value.slice(index + 1));
+    }
+    return [...candidates].some((candidate) => globs.some((glob) => glob.test(candidate)));
+  };
+}
+
+function eventPaths(event) {
+  const input = event.tool?.input && typeof event.tool.input === "object" ? event.tool.input : {};
+  return [input.file_path, input.path, input.notebook_path, event.tool?.inputSummary].filter((value) => typeof value === "string");
+}
+
+function termMasker(rules) {
+  const termRules = rules.filter((rule) => rule.op === "mask_terms");
+  if (!termRules.length) return null;
+  const patterns = termRules.map((rule) => {
+    const escaped = rule.terms
+      .slice()
+      .sort((a, b) => b.length - a.length)
+      .map((term) => term.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
+    return new RegExp(escaped.join("|"), rule.caseSensitive ? "g" : "gi");
+  });
+  return (text) => patterns.reduce((value, pattern) => value.replace(pattern, "[masked]"), text);
+}
+
+function mapStrings(value, fn, key) {
+  if (key && EXEMPT_KEYS.has(key)) return value;
+  if (typeof value === "string") return fn(value);
+  if (Array.isArray(value)) return value.map((item) => mapStrings(item, fn));
+  if (isPlainObject(value)) {
+    const output = {};
+    for (const [childKey, childValue] of Object.entries(value)) output[childKey] = mapStrings(childValue, fn, childKey);
+    return output;
+  }
+  return value;
+}
+
+function mediaTypeMatcher(rules) {
+  const types = rules.filter((rule) => rule.op === "drop_attachments").flatMap((rule) => rule.mediaTypes);
+  if (!types.length) return null;
+  const patterns = types.map(globToRegExp);
+  return (mediaType) => patterns.some((pattern) => pattern.test(mediaType));
+}
+
+const omittedEvent = (event, reason, extra = {}) => ({ id: event.id, seq: event.seq, t: event.t ?? null, agent: event.agent, kind: "omitted", reason, ...extra });
+
+// Pass 1 over every segment: the tool-call IDs whose results must also go.
+export function profileDroppedCallIds(events, profile, { cwd = null } = {}) {
+  const rules = normalizeProfile(profile).rules;
+  const tools = new Set(rules.filter((rule) => rule.op === "drop_tools").flatMap((rule) => rule.tools));
+  const agents = new Set(rules.filter((rule) => rule.op === "drop_agents").flatMap((rule) => rule.agents));
+  const ids = new Set(rules.filter((rule) => rule.op === "drop_events").flatMap((rule) => rule.ids));
+  const kinds = new Set(rules.filter((rule) => rule.op === "drop_kinds").flatMap((rule) => rule.kinds));
+  const matchesPath = pathMatchers(rules, cwd);
+  const dropped = new Set();
+  for (const event of events) {
+    if (event.kind !== "tool_call") continue;
+    if (
+      tools.has(event.tool?.name) ||
+      agents.has(event.agent) ||
+      ids.has(event.id) ||
+      kinds.has("tool_call") ||
+      (matchesPath && eventPaths(event).some(matchesPath))
+    ) {
+      dropped.add(event.tool?.callId);
+    }
+  }
+  return dropped;
+}
+
+// Applies a profile to one segment of canonical events. droppedCallIds comes
+// from profileDroppedCallIds over the whole trace, so a result is hidden even
+// when its call sits in an earlier segment.
+export function applyProfileToEvents(events, profile, { cwd = null, droppedCallIds = new Set(), keepAttachment = () => true } = {}) {
+  const { level, rules } = normalizeProfile(profile);
+  if (level === "summary" || level === "hidden") return [];
+  const kinds = new Set(rules.filter((rule) => rule.op === "drop_kinds").flatMap((rule) => rule.kinds));
+  const tools = new Set(rules.filter((rule) => rule.op === "drop_tools").flatMap((rule) => rule.tools));
+  const agents = new Set(rules.filter((rule) => rule.op === "drop_agents").flatMap((rule) => rule.agents));
+  const ids = new Set(rules.filter((rule) => rule.op === "drop_events").flatMap((rule) => rule.ids));
+  const matchesPath = pathMatchers(rules, cwd);
+  const mask = termMasker(rules);
+  const dropMedia = mediaTypeMatcher(rules);
+  const truncateRule = rules.filter((rule) => rule.op === "truncate").map((rule) => rule.maxChars);
+  const maxChars = truncateRule.length ? Math.min(...truncateRule) : null;
+  return events.map((original) => {
+    let event = original;
+    if (level === "conversation") {
+      if (event.kind === "reasoning") return omittedEvent(event, "reasoning hidden");
+      if (event.kind === "tool_result") {
+        return omittedEvent(event, "tool output hidden", { bytes: byteLength(event.result?.text ?? "") });
+      }
+      if (event.kind === "tool_call") {
+        const { input, ...tool } = event.tool || {};
+        event = { ...event, tool: { ...tool, inputSummary: tool.inputSummary ?? inputSummary(event.tool) } };
+      }
+      if (event.attachmentIds && event.kind !== "user_message") {
+        const { attachmentIds, ...rest } = event;
+        event = rest;
+      }
+    }
+    if (agents.has(event.agent)) return omittedEvent(event, "agent hidden");
+    if (ids.has(event.id)) return omittedEvent(event, "event hidden");
+    if (kinds.has(event.kind)) return omittedEvent(event, `${event.kind} hidden`);
+    if (event.kind === "tool_call" && (tools.has(event.tool?.name) || (matchesPath && eventPaths(event).some(matchesPath)))) {
+      return omittedEvent(event, "tool call hidden");
+    }
+    if (event.kind === "tool_result" && droppedCallIds.has(event.result?.callId)) return omittedEvent(event, "tool output hidden");
+    if (event.kind === "omitted") return event;
+    if (event.attachmentIds) {
+      const keep = event.attachmentIds.filter((id) => keepAttachment(id));
+      if (keep.length !== event.attachmentIds.length) {
+        const { attachmentIds, ...rest } = event;
+        event = keep.length ? { ...rest, attachmentIds: keep } : rest;
+      }
+    }
+    if (mask) event = mapStrings(event, mask);
+    if (maxChars) {
+      event = mapStrings(event, (text) => (text.length > maxChars ? `${text.slice(0, maxChars)}… [truncated: ${text.length} chars]` : text));
+    }
+    return event;
+  });
+}
+
+// The manifest a reader at this profile sees: summary and attachment list
+// filtered by the same rules. Segment records are filled in by the renderer.
+export function applyProfileToManifest(manifest, profile, { attachmentsInEvents = null } = {}) {
+  const { level, rules } = normalizeProfile(profile);
+  const mask = termMasker(rules);
+  const matchesPath = pathMatchers(rules, null);
+  const dropMedia = mediaTypeMatcher(rules);
+  let summary = { ...manifest.summary };
+  summary.filesTouched = (summary.filesTouched || []).filter((file) => !(matchesPath && matchesPath(file)));
+  summary.checks = (summary.checks || []).map((check) => ({ ...check }));
+  if (mask) summary = mapStrings(summary, mask);
+  const attachments =
+    level === "summary" || level === "hidden"
+      ? []
+      : (manifest.attachments || []).filter(
+          (attachment) => !(dropMedia && dropMedia(attachment.mediaType)) && (!attachmentsInEvents || attachmentsInEvents.has(attachment.sha256)),
+        );
+  return {
+    ...manifest,
+    title: mask ? mask(manifest.title) : manifest.title,
+    agents: level === "summary" ? [] : (manifest.agents || []).map((agent) => (mask ? mapStrings(agent, mask) : agent)),
+    summary,
+    attachments,
+    level,
+    segments: level === "summary" || level === "hidden" ? [] : manifest.segments,
+    counts: { ...manifest.counts, attachments: attachments.length },
+  };
+}
+
+export function attachmentKeeper(manifest, profile) {
+  const dropMedia = mediaTypeMatcher(normalizeProfile(profile).rules);
+  const types = new Map((manifest.attachments || []).map((attachment) => [attachment.sha256, attachment.mediaType]));
+  return (sha256) => !(dropMedia && dropMedia(types.get(sha256) || ""));
+}
+
+// Session-produced files (D9): media paths that appear in a tool call's input
+// or a tool result's text. The CLI checks each one exists under the session
+// folder and changed during the session before attaching it.
+export const PRODUCED_FILE_TYPES = Object.freeze({
+  png: "image/png",
+  jpg: "image/jpeg",
+  jpeg: "image/jpeg",
+  gif: "image/gif",
+  webp: "image/webp",
+  mp4: "video/mp4",
+  webm: "video/webm",
+  pdf: "application/pdf",
+});
+const MEDIA_PATH = /(?:^|[\s"'`(=:,\[])((?:~\/|\/|\.{1,2}\/)?[\w@%+\-.\/]*[\w@%+\-]\.(?:png|jpe?g|gif|webp|mp4|webm|pdf))(?=$|[\s"'`),:;\]]|\.(?:$|\s))/gim;
+
+export function referencedMediaPaths(events) {
+  const found = new Map();
+  const visit = (value, eventId) => {
+    if (typeof value === "string") {
+      for (const match of value.matchAll(MEDIA_PATH)) {
+        const candidate = match[1];
+        if (candidate.length <= 1024 && !found.has(candidate)) found.set(candidate, eventId);
+      }
+    } else if (Array.isArray(value)) value.forEach((item) => visit(item, eventId));
+    else if (isPlainObject(value)) Object.values(value).forEach((item) => visit(item, eventId));
+  };
+  for (const event of events) {
+    if (event.kind === "tool_call") visit(event.tool?.input, event.id);
+    if (event.kind === "tool_result") visit(event.result?.text, event.id);
+  }
+  return [...found].map(([path, eventId]) => ({ path, eventId, mediaType: PRODUCED_FILE_TYPES[path.split(".").pop().toLowerCase()] }));
 }
 
 // ---------------------------------------------------------------------------
@@ -823,7 +1126,11 @@ export async function buildUpload({ normalized, title, revisionId = null, source
     droppedAttachments,
     clientMasking,
     events,
-    attachments: attachments.map(({ sha256, mediaType, bytes, data }) => ({ sha256, mediaType, bytes, base64: bytesToBase64(data) })),
+    attachments: attachments.map(({ sha256, mediaType, bytes, data, source = "inline", name, deferred }) =>
+      deferred
+        ? { sha256, mediaType, bytes, deferred: true, source, ...(name ? { name } : {}) }
+        : { sha256, mediaType, bytes, base64: bytesToBase64(data), source, ...(name ? { name } : {}) },
+    ),
   };
 }
 
@@ -893,6 +1200,18 @@ export async function validateUpload(upload) {
       else attachmentIds.add(attachment.sha256);
       if (!ATTACHMENT_TYPES.includes(attachment.mediaType)) fail(`${path}.mediaType`, "Type not allowed.");
       if (!nonNegativeInteger(attachment.bytes) || attachment.bytes > TRACE_LIMITS.attachmentBytes) fail(`${path}.bytes`, "Size out of bounds.");
+      for (const key of Object.keys(attachment)) {
+        if (!["sha256", "mediaType", "bytes", "base64", "deferred", "source", "name"].includes(key)) fail(`${path}.${key}`, "Unknown field.");
+      }
+      if (attachment.source !== undefined && attachment.source !== "inline" && attachment.source !== "file") fail(`${path}.source`, "Must be inline or file.");
+      if (attachment.name !== undefined && !(typeof attachment.name === "string" && attachment.name.length <= 255)) fail(`${path}.name`, "At most 255 characters.");
+      if (attachment.deferred === true) {
+        // Sent later as a binary upload; text must be inline so it is masked.
+        if (attachment.mediaType === "text/plain") fail(`${path}.deferred`, "Text attachments must be sent inline.");
+        if (attachment.base64 !== undefined) fail(`${path}.base64`, "A deferred attachment has no inline bytes.");
+        attachmentBytes += Number.isSafeInteger(attachment.bytes) ? attachment.bytes : 0;
+        continue;
+      }
       if (typeof attachment.base64 !== "string") {
         fail(`${path}.base64`, "Must be base64.");
         continue;
@@ -957,13 +1276,28 @@ export async function validateUpload(upload) {
 }
 
 export function decodeUploadAttachments(upload) {
-  return (upload.attachments || []).map((attachment) => ({
-    sha256: attachment.sha256,
-    mediaType: attachment.mediaType,
-    bytes: attachment.bytes,
-    data: base64ToBytes(attachment.base64),
-    source: "inline",
-  }));
+  return (upload.attachments || [])
+    .filter((attachment) => attachment.deferred !== true)
+    .map((attachment) => ({
+      sha256: attachment.sha256,
+      mediaType: attachment.mediaType,
+      bytes: attachment.bytes,
+      data: base64ToBytes(attachment.base64),
+      source: attachment.source || "inline",
+      ...(attachment.name ? { name: attachment.name } : {}),
+    }));
+}
+
+export function deferredUploadAttachments(upload) {
+  return (upload.attachments || [])
+    .filter((attachment) => attachment.deferred === true)
+    .map((attachment) => ({
+      sha256: attachment.sha256,
+      mediaType: attachment.mediaType,
+      bytes: attachment.bytes,
+      source: attachment.source || "file",
+      ...(attachment.name ? { name: attachment.name } : {}),
+    }));
 }
 
 // ---------------------------------------------------------------------------

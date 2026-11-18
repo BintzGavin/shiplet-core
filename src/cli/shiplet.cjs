@@ -414,6 +414,8 @@ Usage:
   shiplet logout
   shiplet trace share <session.jsonl | session-folder> --shiplet <shiplet-id> [--revision <revision-id>]
   shiplet trace share --current --shiplet <shiplet-id>
+  shiplet trace audiences <trace-id> --shiplet <shiplet-id> [--audience <type>:<id>=<level> ...] [--audiences <file.json>] [--private]
+  shiplet trace preview <trace-id> --shiplet <shiplet-id> (--level <level> | --profile <file.json>)
   shiplet trace list --shiplet <shiplet-id>
   shiplet trace pull <trace-id> --shiplet <shiplet-id> [<dir>] [--as context] [--max-tokens <n>]
   shiplet trace delete <trace-id> --shiplet <shiplet-id>
@@ -475,6 +477,15 @@ Flags:
   --current             trace share: share the agent session this command runs in.
   --title <text>        trace share: trace title. Defaults to the first prompt.
   --no-attachments      trace share: leave out images and other attachments.
+  --no-files            trace share: leave out screenshots, videos, and PDFs the session produced.
+  --audience <a>        trace share/audiences: share with <type>:<id>=<level>, such as
+                        team:team_123=summary, email:alex@example.com=full,
+                        organization=conversation, or link=summary. Repeatable.
+                        Levels: full, conversation, summary, hidden.
+  --audiences <file>    trace share/audiences: JSON array of { targetType, targetId, profile }
+                        with full redaction rules (mask_terms, drop_paths, drop_kinds, ...).
+  --share / --private   trace share/audiences: share or stop sharing the trace.
+  --level / --profile   trace preview: the level, or a JSON { level, rules } file, to preview.
   --as context          trace pull: print an agent-ready handoff instead of writing files.
   --max-tokens <n>      trace pull --as context: approximate size budget (default 32000).
   --json                Print machine-readable JSON output.
@@ -531,6 +542,13 @@ function parseArguments(argv) {
 		maxTokens: "",
 		current: false,
 		noAttachments: false,
+		noFiles: false,
+		share: false,
+		private: false,
+		audience: [],
+		audiences: "",
+		profile: "",
+		level: "",
 		providedFlags: new Set(),
 	};
 
@@ -563,6 +581,13 @@ function parseArguments(argv) {
 		if (arg === "--current") {
 			options.current = true;
 			options.providedFlags.add("--current");
+			continue;
+		}
+		if (arg === "--no-files" || arg === "--share" || arg === "--private") {
+			if (arg === "--no-files") options.noFiles = true;
+			if (arg === "--share") options.share = true;
+			if (arg === "--private") options.private = true;
+			options.providedFlags.add(arg);
 			continue;
 		}
 		if (arg === "--no-attachments") {
@@ -603,6 +628,10 @@ function parseArguments(argv) {
 			else if (flag === "--title") options.title = value;
 			else if (flag === "--as") options.as = value;
 			else if (flag === "--max-tokens") options.maxTokens = value;
+			else if (flag === "--audience") options.audience.push(value);
+			else if (flag === "--audiences") options.audiences = value;
+			else if (flag === "--profile") options.profile = value;
+			else if (flag === "--level") options.level = value;
 			else throw new CliError(`Unknown flag "${flag}".`);
 			continue;
 		}
@@ -655,6 +684,13 @@ function assertApplicableFlags(options) {
 		"--max-tokens": new Set(["trace"]),
 		"--current": new Set(["trace"]),
 		"--no-attachments": new Set(["trace"]),
+		"--no-files": new Set(["trace"]),
+		"--share": new Set(["trace"]),
+		"--private": new Set(["trace"]),
+		"--audience": new Set(["trace"]),
+		"--audiences": new Set(["trace"]),
+		"--profile": new Set(["trace"]),
+		"--level": new Set(["trace"]),
 		"--from-revision": new Set(["fork"]),
 		"--expected-active": new Set(["promote", "rollback"]),
 		"--version": new Set(["validate", "push", "diff"]),
@@ -3811,7 +3847,7 @@ async function runSessionCommand(options, runtime) {
 // session (prompts, replies, and every tool call and result). The shared core
 // in trace-core.mjs normalizes, masks, and validates it on this computer.
 
-const TRACE_SUBCOMMANDS = new Set(["share", "list", "pull", "delete"]);
+const TRACE_SUBCOMMANDS = new Set(["share", "list", "pull", "delete", "audiences", "preview"]);
 const TRACE_JSON_RESPONSE_BYTES = 2 * 1024 * 1024;
 const TRACE_ATTACHMENT_RESPONSE_BYTES = 20 * 1024 * 1024;
 const TRACE_UPLOAD_TIMEOUT_MS = 120_000;
@@ -3844,8 +3880,10 @@ function traceUsage(subcommand) {
 		list: "trace list --shiplet <shiplet-id>",
 		pull: "trace pull <trace-id> --shiplet <shiplet-id> [<dir>] [--as context]",
 		delete: "trace delete <trace-id> --shiplet <shiplet-id>",
+		audiences: "trace audiences <trace-id> --shiplet <shiplet-id> [--audience <type>:<id>=<level> ...] [--audiences <file.json>] [--share | --private]",
+		preview: "trace preview <trace-id> --shiplet <shiplet-id> (--level <level> | --profile <file.json>)",
 	};
-	return `Usage: shiplet ${usages[subcommand] || "trace share|list|pull|delete ..."}`;
+	return `Usage: shiplet ${usages[subcommand] || "trace share|list|pull|delete|audiences|preview ..."}`;
 }
 
 async function readSessionFile(filePath) {
@@ -4062,13 +4100,14 @@ function traceErrorMessage(status, parsed) {
 }
 
 async function traceRequest(session, request) {
-	const { method = "GET", pathname, body, binary = false, timeoutMs = API_REQUEST_TIMEOUT_MS, retryTransient = false } = request;
+	const { method = "GET", pathname, body, rawBody, binary = false, timeoutMs = API_REQUEST_TIMEOUT_MS, retryTransient = false } = request;
 	let reauthenticated = false;
 	let retried = false;
 	while (true) {
 		const headers = { accept: binary ? "*/*" : "application/json", "user-agent": TRACE_IMPORTER };
 		if (session.apiKey) headers.authorization = `Bearer ${session.apiKey}`;
 		if (body !== undefined) headers["content-type"] = "application/json";
+		if (rawBody !== undefined) headers["content-type"] = "application/octet-stream";
 		let response;
 		let parsed;
 		let bytes;
@@ -4090,7 +4129,7 @@ async function traceRequest(session, request) {
 				const result = await fetchApiResponse(
 					session.fetch,
 					`${session.apiUrl}${pathname}`,
-					{ method, headers, body },
+					{ method, headers, body: rawBody !== undefined ? rawBody : body },
 					TRACE_JSON_RESPONSE_BYTES,
 					timeoutMs,
 				);
@@ -4129,6 +4168,91 @@ function maskedKindsText(kinds) {
 	return entries.length ? entries.map(([kind, count]) => `${kind} ×${count}`).join(", ") : "none found";
 }
 
+const TRACE_LEVELS = new Set(["full", "conversation", "summary", "hidden"]);
+const AUDIENCE_TYPES = new Set(["user", "email", "team", "organization", "link", "api_token"]);
+
+// --audience <type>:<id>=<level> (organization=<level> and link=<level> need
+// no id) plus --audiences <file.json> with full { targetType, targetId, profile }.
+async function audiencesFromOptions(options, cwd) {
+	const audiences = [];
+	for (const value of options.audience) {
+		const match = String(value).match(/^([a-z_]+)(?::(.+))?=([a-z]+)$/);
+		if (!match || !AUDIENCE_TYPES.has(match[1]) || !TRACE_LEVELS.has(match[3])) {
+			throw new CliError(`Invalid --audience "${value}". Use <type>:<id>=<level>, such as team:team_123=summary or organization=conversation.`);
+		}
+		const [, targetType, targetId = "", level] = match;
+		if (!targetId && targetType !== "organization" && targetType !== "link") throw new CliError(`--audience ${targetType} needs an id: ${targetType}:<id>=<level>.`);
+		audiences.push({ targetType, targetId: targetId || targetType, profile: { level, rules: [] } });
+	}
+	if (options.audiences) {
+		let parsed;
+		try {
+			parsed = JSON.parse(await fs.readFile(path.resolve(cwd, options.audiences), "utf8"));
+		} catch {
+			throw new CliError(`--audiences must be a JSON file: ${options.audiences}.`);
+		}
+		if (!Array.isArray(parsed)) throw new CliError("--audiences must contain a JSON array of { targetType, targetId, profile }.");
+		audiences.push(...parsed);
+	}
+	return audiences;
+}
+
+function wantsAudienceChange(options) {
+	return options.audience.length > 0 || Boolean(options.audiences) || options.share || options.private;
+}
+
+async function audienceBody(options, cwd) {
+	if (options.share && options.private) throw new CliError("Use --share or --private, not both.");
+	const body = {};
+	// Only send audiences when given; otherwise the server keeps the current set.
+	if (options.audience.length || options.audiences) body.audiences = await audiencesFromOptions(options, cwd);
+	if (options.private) body.sharing = "private";
+	if (options.share) body.sharing = "shared";
+	return body;
+}
+
+// D9: screenshots, videos, and PDFs the session produced under its folder.
+async function producedFiles(core, upload, runtime) {
+	const sessionCwd = upload.cwd || runtime.cwd;
+	const root = path.resolve(sessionCwd);
+	const started = upload.startedAt ? Date.parse(upload.startedAt) : null;
+	const ended = upload.endedAt ? Date.parse(upload.endedAt) + 5 * 60_000 : null;
+	const home = runtime.env.HOME || require("node:os").homedir();
+	const seen = new Set(upload.attachments.map((attachment) => attachment.sha256));
+	let totalBytes = upload.attachments.reduce((sum, attachment) => sum + attachment.bytes, 0);
+	const files = [];
+	const skipped = [];
+	for (const reference of core.referencedMediaPaths(upload.events)) {
+		const absolute = reference.path.startsWith("~/") ? path.join(home, reference.path.slice(2)) : path.resolve(root, reference.path);
+		if (absolute !== root && !absolute.startsWith(`${root}${path.sep}`)) continue;
+		let stat;
+		try {
+			stat = await fs.stat(absolute);
+		} catch {
+			continue;
+		}
+		if (!stat.isFile()) continue;
+		// Skip files untouched during the session (when the filesystem reports times).
+		const modified = Number.isFinite(stat.mtimeMs) && stat.mtimeMs > 0 ? stat.mtimeMs : null;
+		if (modified && ((started && modified < started - 1000) || (ended && modified > ended))) continue;
+		if (stat.size > core.TRACE_LIMITS.attachmentBytes) {
+			skipped.push({ path: path.relative(root, absolute), reason: "larger than 20 MiB" });
+			continue;
+		}
+		if (upload.attachments.length + files.length >= core.TRACE_LIMITS.attachmentsPerTrace || totalBytes + stat.size > core.TRACE_LIMITS.attachmentsTotalBytes) {
+			skipped.push({ path: path.relative(root, absolute), reason: "over the attachment limit" });
+			continue;
+		}
+		const data = await fs.readFile(absolute);
+		const sha256 = crypto.createHash("sha256").update(data).digest("hex");
+		if (seen.has(sha256)) continue;
+		seen.add(sha256);
+		totalBytes += data.byteLength;
+		files.push({ sha256, mediaType: reference.mediaType, bytes: data.byteLength, data, eventId: reference.eventId, name: path.relative(root, absolute) });
+	}
+	return { files, skipped };
+}
+
 async function runTraceCommand(options, runtime) {
 	const [subcommand, ...rest] = options.positionals;
 	if (!TRACE_SUBCOMMANDS.has(subcommand)) {
@@ -4143,8 +4267,14 @@ async function runTraceCommand(options, runtime) {
 		if (options.json) writeJson(runtime.stdout, value);
 		else runtime.stdout.write(text);
 	};
-	if (subcommand !== "share" && (options.current || options.noAttachments || options.title || options.revision || options.dryRun)) {
-		throw new CliError("--current, --no-attachments, --title, --revision, and --dry-run apply to trace share only.");
+	if (subcommand !== "share" && (options.current || options.noAttachments || options.noFiles || options.title || options.revision || options.dryRun)) {
+		throw new CliError("--current, --no-attachments, --no-files, --title, --revision, and --dry-run apply to trace share only.");
+	}
+	if (subcommand !== "share" && subcommand !== "audiences" && wantsAudienceChange(options)) {
+		throw new CliError("--audience, --audiences, --share, and --private apply to trace share and trace audiences only.");
+	}
+	if (subcommand !== "preview" && (options.level || options.profile)) {
+		throw new CliError("--level and --profile apply to trace preview only.");
 	}
 	if (subcommand !== "pull" && (options.as || options.maxTokens)) {
 		throw new CliError("--as and --max-tokens apply to trace pull only.");
@@ -4171,6 +4301,14 @@ async function runTraceCommand(options, runtime) {
 			if (error instanceof core.TraceFormatError) throw new CliError(`${files.main} is not a Claude Code or Codex session file.`);
 			throw error;
 		}
+		const produced = options.noFiles || options.noAttachments ? { files: [], skipped: [] } : await producedFiles(core, prepared.upload, runtime);
+		for (const file of produced.files) {
+			prepared.upload.attachments.push({ sha256: file.sha256, mediaType: file.mediaType, bytes: file.bytes, deferred: true, source: "file", name: file.name.slice(0, 255) });
+			prepared.upload.events = prepared.upload.events.map((event) =>
+				event.id === file.eventId ? { ...event, attachmentIds: [...(event.attachmentIds || []), file.sha256] } : event,
+			);
+		}
+		const sharingBody = wantsAudienceChange(options) ? await audienceBody(options, runtime.cwd) : null;
 		const validation = await core.validateUpload(prepared.upload);
 		if (!validation.ok) {
 			throw new CliError(`Trace is invalid: ${validation.errors.slice(0, 5).map((item) => `${item.path}: ${item.message}`).join("; ")}`);
@@ -4184,6 +4322,8 @@ async function runTraceCommand(options, runtime) {
 			title: prepared.upload.title,
 			events: prepared.upload.events.length,
 			attachments: prepared.upload.attachments.length,
+			producedFiles: produced.files.map((file) => ({ path: file.name, mediaType: file.mediaType, bytes: file.bytes })),
+			skippedFiles: produced.skipped,
 			bytes: size,
 			masked: prepared.masked,
 		};
@@ -4201,6 +4341,8 @@ async function runTraceCommand(options, runtime) {
 			`  Format:      ${summary.format}`,
 			`  Events:      ${summary.events}, attachments: ${summary.attachments}, size: ${formatTraceBytes(size)}`,
 			`  Masked here: ${maskedKindsText(summary.masked.kinds)}`,
+			...(produced.files.length ? [`  Files:       ${produced.files.map((file) => sanitizeOutputText(file.name)).join(", ")}`] : []),
+			...produced.skipped.map((file) => `  Skipped:     ${sanitizeOutputText(file.path)} (${file.reason})`),
 		].join("\n");
 		if (options.dryRun) {
 			write({ ok: true, dryRun: true, ...summary }, `${describe}\nDry run: nothing was uploaded.\n`);
@@ -4208,16 +4350,35 @@ async function runTraceCommand(options, runtime) {
 		}
 		const session = await openTraceSession(options, runtime);
 		let result;
+		let shared = null;
 		try {
 			result = await traceRequest(session, { method: "POST", pathname: base, body, timeoutMs: TRACE_UPLOAD_TIMEOUT_MS, retryTransient: true });
+			const traceId = String(responseRecord(result.trace).id || "");
+			const pending = new Set(Array.isArray(result.pendingAttachments) ? result.pendingAttachments : []);
+			for (const file of produced.files) {
+				if (!pending.has(file.sha256)) continue;
+				await traceRequest(session, {
+					method: "PUT",
+					pathname: `${base}/${encodeURIComponent(traceId)}/attachments/${file.sha256}`,
+					rawBody: file.data,
+					timeoutMs: TRACE_UPLOAD_TIMEOUT_MS,
+					retryTransient: true,
+				});
+			}
+			if (sharingBody) {
+				shared = await traceRequest(session, { method: "PUT", pathname: `${base}/${encodeURIComponent(traceId)}/audiences`, body: JSON.stringify(sharingBody) });
+			}
 		} finally {
 			await session.close();
 		}
 		const trace = responseRecord(result.trace);
 		const link = `${session.apiUrl}/shiplets/${encodeURIComponent(shipletId)}/traces/${encodeURIComponent(String(trace.id || ""))}`;
+		const sharingText = shared && shared.sharing === "shared"
+			? `  Shared with: ${(shared.audiences || []).map((audience) => `${audience.targetType}${audience.targetType === "organization" || audience.targetType === "link" ? "" : `:${audience.targetId}`}=${audience.profile?.level}`).join(", ") || "nobody yet"} (organization admins can read shared traces)`
+			: "  Private to you and the Shiplet owner.";
 		write(
-			{ ok: true, ...summary, trace, duplicate: result.duplicate === true, serverMasked: result.serverMasked || null, link },
-			`${describe}\n${result.duplicate ? "Already uploaded" : "Uploaded"}: ${trace.id}\n  Masked by Shiplet: ${maskedKindsText(result.serverMasked?.kinds)}\n  Private to you and the Shiplet owner.\n  ${link}\n`,
+			{ ok: true, ...summary, trace, duplicate: result.duplicate === true, serverMasked: result.serverMasked || null, sharing: shared, link },
+			`${describe}\n${result.duplicate ? "Already uploaded" : "Uploaded"}: ${trace.id}\n  Masked by Shiplet: ${maskedKindsText(result.serverMasked?.kinds)}\n${sharingText}\n  ${link}\n`,
 		);
 		return;
 	}
@@ -4246,6 +4407,57 @@ async function runTraceCommand(options, runtime) {
 	}
 
 	const traceId = assertIdentifier(rest[0], "trace ID");
+	if (subcommand === "audiences") {
+		if (rest.length !== 1) throw new CliError(traceUsage("audiences"));
+		const pathname = `${base}/${encodeURIComponent(traceId)}/audiences`;
+		const session = await openTraceSession(options, runtime);
+		let result;
+		try {
+			result = wantsAudienceChange(options)
+				? await traceRequest(session, { method: "PUT", pathname, body: JSON.stringify(await audienceBody(options, runtime.cwd)) })
+				: await traceRequest(session, { pathname });
+		} finally {
+			await session.close();
+		}
+		const audiences = Array.isArray(result.audiences) ? result.audiences : [];
+		write(
+			{ ok: true, traceId, sharing: result.sharing, audiences },
+			`Trace ${traceId} is ${result.sharing === "shared" ? "shared" : "private"}.\n${
+				audiences.length
+					? audiences.map((audience) => `  ${audience.targetType}${audience.targetType === "organization" || audience.targetType === "link" ? "" : `:${audience.targetId}`} = ${audience.profile?.level}${audience.profile?.rules?.length ? ` + ${audience.profile.rules.length} rule(s)` : ""}`).join("\n")
+					: "  No audiences."
+			}\n`,
+		);
+		return;
+	}
+	if (subcommand === "preview") {
+		if (rest.length !== 1) throw new CliError(traceUsage("preview"));
+		let profile;
+		if (options.profile) {
+			try {
+				profile = JSON.parse(await fs.readFile(path.resolve(runtime.cwd, options.profile), "utf8"));
+			} catch {
+				throw new CliError(`--profile must be a JSON file: ${options.profile}.`);
+			}
+		} else if (TRACE_LEVELS.has(options.level)) profile = { level: options.level, rules: [] };
+		else throw new CliError(traceUsage("preview"));
+		const session = await openTraceSession(options, runtime);
+		let result;
+		try {
+			result = await traceRequest(session, { method: "POST", pathname: `${base}/${encodeURIComponent(traceId)}/preview`, body: JSON.stringify({ profile }) });
+		} finally {
+			await session.close();
+		}
+		const events = Array.isArray(result.events) ? result.events : [];
+		const kinds = {};
+		for (const event of events) kinds[event.kind] = (kinds[event.kind] || 0) + 1;
+		const manifest = responseRecord(result.manifest);
+		write(
+			{ ok: true, traceId, profile, manifest, events },
+			`Preview of ${traceId} at ${profile.level}${profile.rules?.length ? ` + ${profile.rules.length} rule(s)` : ""} (first segment):\n  Events: ${events.length} (${Object.entries(kinds).map(([kind, count]) => `${kind} ${count}`).join(", ") || "none"})\n  Attachments visible: ${(manifest.attachments || []).length}\n  Files touched shown: ${(manifest.summary?.filesTouched || []).join(", ") || "none"}\n`,
+		);
+		return;
+	}
 	if (subcommand === "delete") {
 		if (rest.length !== 1) throw new CliError(traceUsage("delete"));
 		const session = await openTraceSession(options, runtime);

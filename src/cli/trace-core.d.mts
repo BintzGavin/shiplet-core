@@ -51,6 +51,8 @@ export interface TraceAttachment {
   bytes: number;
   data: Uint8Array;
   source?: "inline" | "file";
+  name?: string;
+  deferred?: boolean;
 }
 
 export interface MaskCounts {
@@ -88,7 +90,7 @@ export interface TraceManifest {
   };
   summary: TraceSummaryBlock;
   segments: Array<{ index: number; firstSeq: number; lastSeq: number; events: number; bytes: number; sha256: string }>;
-  attachments: Array<{ sha256: string; mediaType: string; bytes: number; source: string }>;
+  attachments: Array<{ sha256: string; mediaType: string; bytes: number; source: string; name?: string }>;
   masking: {
     coreVersion: string;
     clientCount: number;
@@ -111,7 +113,7 @@ export interface TraceUpload {
   droppedAttachments?: number;
   clientMasking: { coreVersion: string; count: number; kinds: Record<string, number> };
   events: TraceEvent[];
-  attachments: Array<{ sha256: string; mediaType: string; bytes: number; base64: string }>;
+  attachments: Array<{ sha256: string; mediaType: string; bytes: number; base64?: string; deferred?: boolean; source?: "inline" | "file"; name?: string }>;
 }
 
 export class TraceFormatError extends Error {}
@@ -169,6 +171,7 @@ export function finalizeTrace(input: {
 }): Promise<{ manifest: TraceManifest; segments: Array<{ index: number; ndjson: string }>; events: TraceEvent[] }>;
 export function validateUpload(upload: unknown): Promise<{ ok: true } | { ok: false; errors: Array<{ path: string; message: string }> }>;
 export function decodeUploadAttachments(upload: TraceUpload): TraceAttachment[];
+export function deferredUploadAttachments(upload: TraceUpload): Array<Omit<TraceAttachment, "data">>;
 export function buildContext(
   manifest: TraceManifest,
   events: TraceEvent[],
@@ -184,3 +187,31 @@ export function prepareTraceUpload(input: {
   importer?: string;
   noAttachments?: boolean;
 }): Promise<{ upload: TraceUpload; format: "claude-code" | "codex"; masked: MaskCounts; attachments: TraceAttachment[] }>;
+
+export const LEVELS: readonly TraceLevel[];
+export const RULE_OPS: readonly string[];
+export type TraceLevel = "full" | "conversation" | "summary" | "hidden";
+export type TraceRule = { op: string } & Record<string, unknown>;
+export interface TraceProfile {
+  level: TraceLevel;
+  rules?: TraceRule[];
+}
+export function validateProfile(profile: unknown): { ok: true } | { ok: false; errors: Array<{ path: string; message: string }> };
+export function canonicalJson(value: unknown): string;
+export function normalizeProfile(profile: TraceProfile): { level: TraceLevel; rules: TraceRule[] };
+export function profileDigest(profile: TraceProfile): Promise<string>;
+export function globToRegExp(glob: string): RegExp;
+export function profileDroppedCallIds(events: TraceEvent[], profile: TraceProfile, options?: { cwd?: string | null }): Set<string>;
+export function applyProfileToEvents(
+  events: TraceEvent[],
+  profile: TraceProfile,
+  options?: { cwd?: string | null; droppedCallIds?: Set<string>; keepAttachment?: (sha256: string) => boolean },
+): TraceEvent[];
+export function applyProfileToManifest(
+  manifest: TraceManifest,
+  profile: TraceProfile,
+  options?: { attachmentsInEvents?: Set<string> | null },
+): TraceManifest & { level: TraceLevel };
+export function attachmentKeeper(manifest: TraceManifest, profile: TraceProfile): (sha256: string) => boolean;
+export const PRODUCED_FILE_TYPES: Readonly<Record<string, string>>;
+export function referencedMediaPaths(events: TraceEvent[]): Array<{ path: string; eventId: string; mediaType: string }>;
