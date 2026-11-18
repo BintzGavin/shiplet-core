@@ -296,6 +296,27 @@ describe("shiplet trace (CLI)", () => {
     expect(preview.stdout).toContain("user_message 1, omitted 1");
   });
 
+  it("uploads with an MCP upload link without signing in", async () => {
+    const token = `shiplet_trace_upload_${"ab".repeat(32)}`;
+    const server = stubServer([
+      (call) =>
+        call.method === "POST" && call.url === `https://shiplet.test/api/trace-uploads/${token}`
+          ? Response.json({ trace: { id: "trc_link", projectId: "proj_9" }, serverMasked: { count: 0, kinds: {} }, pendingAttachments: [] }, { status: 201 })
+          : undefined,
+    ]);
+    const result = await run(["trace", "share", path.join(fixtures, "codex-rollout.jsonl"), "--upload-url", `https://shiplet.test/api/trace-uploads/${token}`], {
+      fetch: server.fetch,
+      sessionBootstrap: async () => {
+        throw new Error("must not sign in");
+      },
+    });
+    expect(result.stderr).toBe("");
+    expect(result.code).toBe(0);
+    expect(server.calls[0].authorization).toBeNull();
+    expect(result.stdout).toContain("https://shiplet.test/shiplets/proj_9/traces/trc_link");
+    expect((await run(["trace", "share", path.join(fixtures, "codex-rollout.jsonl"), "--upload-url", "http://evil.test/x"])).stderr).toContain("https Shiplet trace upload link");
+  });
+
   it("reports when traces are not enabled", async () => {
     const server = stubServer([() => Response.json({ error: "traces_not_enabled", message: "off" }, { status: 404 })]);
     const result = await run(["trace", "list", "--shiplet", "p", "--api-url", "https://shiplet.test"], {

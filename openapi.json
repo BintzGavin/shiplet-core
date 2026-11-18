@@ -26,6 +26,14 @@
       }
     },
     "parameters": {
+      "TraceId": {
+        "name": "traceId",
+        "in": "path",
+        "required": true,
+        "schema": {
+          "type": "string"
+        }
+      },
       "ProjectId": {
         "name": "projectId",
         "in": "path",
@@ -58,6 +66,137 @@
       }
     },
     "schemas": {
+      "TraceUpload": {
+        "type": "object",
+        "description": "A shiplet.trace/v1 upload: normalized events plus attachments, built by the Shiplet CLI (`shiplet trace share --dry-run --json`). At most 16 MiB.",
+        "required": [
+          "schemaVersion",
+          "title",
+          "source",
+          "models",
+          "clientMasking",
+          "events",
+          "attachments"
+        ],
+        "properties": {
+          "schemaVersion": {
+            "const": "shiplet.trace/v1"
+          },
+          "title": {
+            "type": "string",
+            "maxLength": 200
+          },
+          "revisionId": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "source": {
+            "type": "object"
+          },
+          "events": {
+            "type": "array"
+          },
+          "attachments": {
+            "type": "array"
+          }
+        }
+      },
+      "TraceProfile": {
+        "type": "object",
+        "required": [
+          "level"
+        ],
+        "properties": {
+          "level": {
+            "enum": [
+              "full",
+              "conversation",
+              "summary",
+              "hidden"
+            ]
+          },
+          "rules": {
+            "type": "array",
+            "maxItems": 50,
+            "items": {
+              "type": "object",
+              "required": [
+                "op"
+              ],
+              "properties": {
+                "op": {
+                  "enum": [
+                    "mask_terms",
+                    "drop_paths",
+                    "drop_kinds",
+                    "drop_tools",
+                    "drop_agents",
+                    "drop_events",
+                    "drop_attachments",
+                    "truncate"
+                  ]
+                }
+              }
+            }
+          }
+        },
+        "additionalProperties": false
+      },
+      "TraceAudiencesRequest": {
+        "type": "object",
+        "properties": {
+          "sharing": {
+            "enum": [
+              "private",
+              "shared"
+            ]
+          },
+          "audiences": {
+            "type": "array",
+            "maxItems": 100,
+            "items": {
+              "type": "object",
+              "required": [
+                "targetType",
+                "profile"
+              ],
+              "properties": {
+                "targetType": {
+                  "enum": [
+                    "user",
+                    "email",
+                    "team",
+                    "organization",
+                    "link",
+                    "api_token"
+                  ]
+                },
+                "targetId": {
+                  "type": "string"
+                },
+                "profile": {
+                  "$ref": "#/components/schemas/TraceProfile"
+                }
+              }
+            }
+          }
+        },
+        "additionalProperties": false
+      },
+      "TracePreviewRequest": {
+        "type": "object",
+        "required": [
+          "profile"
+        ],
+        "properties": {
+          "profile": {
+            "$ref": "#/components/schemas/TraceProfile"
+          }
+        },
+        "additionalProperties": false
+      },
       "Error": {
         "type": "object",
         "required": ["ok", "code"],
@@ -361,6 +500,613 @@
     }
   },
   "paths": {
+    "/api/traces": {
+      "get": {
+        "operationId": "listReadableTraces",
+        "x-shiplet-code-mode": true,
+        "x-shiplet-scopes": [
+          "traces:read"
+        ],
+        "tags": [
+          "Traces"
+        ],
+        "summary": "List traces you can read across Shiplets",
+        "description": "A trace is the full log of an agent session: the prompts, the agent's replies, and every tool call and result, from Claude Code or Codex. New traces are private to their uploader and the Shiplet owner; sharing gives each audience a redaction level (full, conversation, summary, or hidden) plus optional rules. Returns the newest traces the caller can read, each with its Shiplet and the caller's level.",
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "description": "Not found, or not visible to the caller."
+          }
+        }
+      }
+    },
+    "/api/shiplets/{projectId}/traces": {
+      "get": {
+        "operationId": "listTraces",
+        "x-shiplet-code-mode": true,
+        "x-shiplet-scopes": [
+          "traces:read"
+        ],
+        "tags": [
+          "Traces"
+        ],
+        "summary": "List a Shiplet's traces you can read",
+        "description": "A trace is the full log of an agent session: the prompts, the agent's replies, and every tool call and result, from Claude Code or Codex. New traces are private to their uploader and the Shiplet owner; sharing gives each audience a redaction level (full, conversation, summary, or hidden) plus optional rules.",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ProjectId"
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 100
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "description": "Not found, or not visible to the caller."
+          }
+        }
+      },
+      "post": {
+        "operationId": "createTrace",
+        "x-shiplet-code-mode": false,
+        "x-shiplet-scopes": [
+          "traces:write"
+        ],
+        "tags": [
+          "Traces"
+        ],
+        "summary": "Upload a trace",
+        "description": "A trace is the full log of an agent session: the prompts, the agent's replies, and every tool call and result, from Claude Code or Codex. New traces are private to their uploader and the Shiplet owner; sharing gives each audience a redaction level (full, conversation, summary, or hidden) plus optional rules. Secrets are masked again on ingest. Agents connected through MCP should use createTraceUploadLink instead, because MCP request bodies are capped at 128 KiB.",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ProjectId"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TraceUpload"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Trace created.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "description": "Not found, or not visible to the caller."
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "413": {
+            "description": "Upload or quota too large."
+          }
+        }
+      }
+    },
+    "/api/shiplets/{projectId}/traces/{traceId}": {
+      "get": {
+        "operationId": "getTrace",
+        "x-shiplet-code-mode": true,
+        "x-shiplet-scopes": [
+          "traces:read"
+        ],
+        "tags": [
+          "Traces"
+        ],
+        "summary": "Read a trace's manifest at your level",
+        "description": "A trace is the full log of an agent session: the prompts, the agent's replies, and every tool call and result, from Claude Code or Codex. New traces are private to their uploader and the Shiplet owner; sharing gives each audience a redaction level (full, conversation, summary, or hidden) plus optional rules.",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ProjectId"
+          },
+          {
+            "$ref": "#/components/parameters/TraceId"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "description": "Not found, or not visible to the caller."
+          }
+        }
+      },
+      "delete": {
+        "operationId": "deleteTrace",
+        "x-shiplet-code-mode": true,
+        "x-shiplet-scopes": [
+          "traces:write"
+        ],
+        "tags": [
+          "Traces"
+        ],
+        "summary": "Delete a trace",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ProjectId"
+          },
+          {
+            "$ref": "#/components/parameters/TraceId"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Trace deleted.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "description": "Not found, or not visible to the caller."
+          }
+        }
+      }
+    },
+    "/api/shiplets/{projectId}/traces/{traceId}/segments/{index}": {
+      "get": {
+        "operationId": "getTraceSegment",
+        "x-shiplet-code-mode": true,
+        "x-shiplet-scopes": [
+          "traces:read"
+        ],
+        "tags": [
+          "Traces"
+        ],
+        "summary": "Read one page of a trace's events at your level",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ProjectId"
+          },
+          {
+            "$ref": "#/components/parameters/TraceId"
+          },
+          {
+            "name": "index",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "minimum": 0
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "description": "Not found, or not visible to the caller."
+          }
+        }
+      }
+    },
+    "/api/shiplets/{projectId}/traces/{traceId}/context": {
+      "get": {
+        "operationId": "getTraceContext",
+        "x-shiplet-code-mode": true,
+        "x-shiplet-scopes": [
+          "traces:read"
+        ],
+        "tags": [
+          "Traces"
+        ],
+        "summary": "Load a trace into your context",
+        "description": "Returns an agent-ready Markdown handoff of the trace at the caller's level: summary, files touched, checks, and the condensed conversation. A trace is the full log of an agent session: the prompts, the agent's replies, and every tool call and result, from Claude Code or Codex. New traces are private to their uploader and the Shiplet owner; sharing gives each audience a redaction level (full, conversation, summary, or hidden) plus optional rules.",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ProjectId"
+          },
+          {
+            "$ref": "#/components/parameters/TraceId"
+          },
+          {
+            "name": "maxTokens",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 500,
+              "maximum": 200000,
+              "default": 32000
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "description": "Not found, or not visible to the caller."
+          }
+        }
+      }
+    },
+    "/api/shiplets/{projectId}/traces/{traceId}/audiences": {
+      "get": {
+        "operationId": "getTraceAudiences",
+        "x-shiplet-code-mode": true,
+        "x-shiplet-scopes": [
+          "traces:read"
+        ],
+        "tags": [
+          "Traces"
+        ],
+        "summary": "List who can see a trace",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ProjectId"
+          },
+          {
+            "$ref": "#/components/parameters/TraceId"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "description": "Not found, or not visible to the caller."
+          }
+        }
+      },
+      "put": {
+        "operationId": "setTraceAudiences",
+        "x-shiplet-code-mode": true,
+        "x-shiplet-scopes": [
+          "traces:write"
+        ],
+        "tags": [
+          "Traces"
+        ],
+        "summary": "Choose who can see a trace and at what level",
+        "description": "Replaces the audience set. Adding the first audience shares the trace; send sharing: private to stop sharing. Omitting audiences keeps the current set. The most specific matching audience wins (person or email, then team, then organization, then link), then the most permissive level.",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ProjectId"
+          },
+          {
+            "$ref": "#/components/parameters/TraceId"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TraceAudiencesRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "description": "Not found, or not visible to the caller."
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          }
+        }
+      }
+    },
+    "/api/shiplets/{projectId}/traces/{traceId}/preview": {
+      "post": {
+        "operationId": "previewTraceProfile",
+        "x-shiplet-code-mode": true,
+        "x-shiplet-scopes": [
+          "traces:read"
+        ],
+        "tags": [
+          "Traces"
+        ],
+        "summary": "Preview what a level and rules would reveal",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ProjectId"
+          },
+          {
+            "$ref": "#/components/parameters/TraceId"
+          },
+          {
+            "name": "segment",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 0
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TracePreviewRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "description": "Not found, or not visible to the caller."
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          }
+        }
+      }
+    },
+    "/api/shiplets/{projectId}/trace-uploads": {
+      "post": {
+        "operationId": "createTraceUploadLink",
+        "x-shiplet-code-mode": true,
+        "x-shiplet-scopes": [
+          "traces:write"
+        ],
+        "tags": [
+          "Traces"
+        ],
+        "summary": "Get a link to upload a trace",
+        "description": "Returns a 30-minute upload URL for one trace on this Shiplet. POST the shiplet.trace/v1 upload JSON to it (for example with curl), then PUT any pending attachments to uploadUrl/attachments/<sha256>. Treat the link like a password. A trace is the full log of an agent session: the prompts, the agent's replies, and every tool call and result, from Claude Code or Codex. New traces are private to their uploader and the Shiplet owner; sharing gives each audience a redaction level (full, conversation, summary, or hidden) plus optional rules.",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ProjectId"
+          }
+        ],
+        "responses": {
+          "201": {
+            "description": "Upload link created.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "description": "Not found, or not visible to the caller."
+          }
+        }
+      }
+    },
+    "/api/trace-uploads/{token}": {
+      "post": {
+        "operationId": "uploadTraceWithLink",
+        "x-shiplet-code-mode": false,
+        "x-shiplet-scopes": [],
+        "tags": [
+          "Traces"
+        ],
+        "summary": "Upload a trace with an upload link",
+        "security": [],
+        "parameters": [
+          {
+            "name": "token",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TraceUpload"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Trace created.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "description": "Not found, or not visible to the caller."
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "413": {
+            "description": "Upload or quota too large."
+          }
+        }
+      }
+    },
     "/api/shiplets": {
       "get": {
         "operationId": "listShiplets",

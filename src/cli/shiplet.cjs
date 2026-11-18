@@ -486,6 +486,8 @@ Flags:
                         with full redaction rules (mask_terms, drop_paths, drop_kinds, ...).
   --share / --private   trace share/audiences: share or stop sharing the trace.
   --level / --profile   trace preview: the level, or a JSON { level, rules } file, to preview.
+  --upload-url <url>    trace share: upload with a link from MCP createTraceUploadLink,
+                        without signing in. Set audiences over MCP afterwards.
   --as context          trace pull: print an agent-ready handoff instead of writing files.
   --max-tokens <n>      trace pull --as context: approximate size budget (default 32000).
   --json                Print machine-readable JSON output.
@@ -549,6 +551,7 @@ function parseArguments(argv) {
 		audiences: "",
 		profile: "",
 		level: "",
+		uploadUrl: "",
 		providedFlags: new Set(),
 	};
 
@@ -632,6 +635,7 @@ function parseArguments(argv) {
 			else if (flag === "--audiences") options.audiences = value;
 			else if (flag === "--profile") options.profile = value;
 			else if (flag === "--level") options.level = value;
+			else if (flag === "--upload-url") options.uploadUrl = value;
 			else throw new CliError(`Unknown flag "${flag}".`);
 			continue;
 		}
@@ -691,6 +695,7 @@ function assertApplicableFlags(options) {
 		"--audiences": new Set(["trace"]),
 		"--profile": new Set(["trace"]),
 		"--level": new Set(["trace"]),
+		"--upload-url": new Set(["trace"]),
 		"--from-revision": new Set(["fork"]),
 		"--expected-active": new Set(["promote", "rollback"]),
 		"--version": new Set(["validate", "push", "diff"]),
@@ -4260,8 +4265,11 @@ async function runTraceCommand(options, runtime) {
 			`${traceUsage()}\nA trace is the full log of an agent session, including your prompts, the agent's replies, and every tool call and result.`,
 		);
 	}
-	if (!options.shiplet) throw new CliError(`${traceUsage(subcommand)}\nMissing --shiplet <shiplet-id>.`);
-	const shipletId = assertIdentifier(options.shiplet, "Shiplet ID");
+	if (options.uploadUrl && (subcommand !== "share" || wantsAudienceChange(options) || options.shiplet)) {
+		throw new CliError("--upload-url works with trace share alone; it already names the Shiplet, and audiences are set over MCP.");
+	}
+	if (!options.shiplet && !options.uploadUrl) throw new CliError(`${traceUsage(subcommand)}\nMissing --shiplet <shiplet-id>.`);
+	const shipletId = options.uploadUrl ? "upload-link" : assertIdentifier(options.shiplet, "Shiplet ID");
 	const base = `/api/shiplets/${encodeURIComponent(shipletId)}/traces`;
 	const write = (value, text) => {
 		if (options.json) writeJson(runtime.stdout, value);
@@ -4348,18 +4356,34 @@ async function runTraceCommand(options, runtime) {
 			write({ ok: true, dryRun: true, ...summary }, `${describe}\nDry run: nothing was uploaded.\n`);
 			return;
 		}
-		const session = await openTraceSession(options, runtime);
+		let uploadLink = null;
+		if (options.uploadUrl) {
+			let url;
+			try {
+				url = new URL(options.uploadUrl);
+			} catch {
+				throw new CliError("--upload-url must be a URL.");
+			}
+			const match = url.pathname.match(/^(.*)\/api\/trace-uploads\/(shiplet_trace_upload_[a-f0-9]{64})$/);
+			if (!match || (url.protocol !== "https:" && url.hostname !== "127.0.0.1" && url.hostname !== "localhost")) {
+				throw new CliError("--upload-url must be an https Shiplet trace upload link.");
+			}
+			uploadLink = { apiUrl: `${url.origin}${match[1]}`, pathname: `/api/trace-uploads/${match[2]}` };
+		}
+		const session = uploadLink
+			? { apiUrl: uploadLink.apiUrl, apiKey: "", fetch: runtime.fetch, reauth: null, close: async () => {} }
+			: await openTraceSession(options, runtime);
 		let result;
 		let shared = null;
 		try {
-			result = await traceRequest(session, { method: "POST", pathname: base, body, timeoutMs: TRACE_UPLOAD_TIMEOUT_MS, retryTransient: true });
+			result = await traceRequest(session, { method: "POST", pathname: uploadLink ? uploadLink.pathname : base, body, timeoutMs: TRACE_UPLOAD_TIMEOUT_MS, retryTransient: !uploadLink });
 			const traceId = String(responseRecord(result.trace).id || "");
 			const pending = new Set(Array.isArray(result.pendingAttachments) ? result.pendingAttachments : []);
 			for (const file of produced.files) {
 				if (!pending.has(file.sha256)) continue;
 				await traceRequest(session, {
 					method: "PUT",
-					pathname: `${base}/${encodeURIComponent(traceId)}/attachments/${file.sha256}`,
+					pathname: uploadLink ? `${uploadLink.pathname}/attachments/${file.sha256}` : `${base}/${encodeURIComponent(traceId)}/attachments/${file.sha256}`,
 					rawBody: file.data,
 					timeoutMs: TRACE_UPLOAD_TIMEOUT_MS,
 					retryTransient: true,
@@ -4372,7 +4396,7 @@ async function runTraceCommand(options, runtime) {
 			await session.close();
 		}
 		const trace = responseRecord(result.trace);
-		const link = `${session.apiUrl}/shiplets/${encodeURIComponent(shipletId)}/traces/${encodeURIComponent(String(trace.id || ""))}`;
+		const link = `${session.apiUrl}/shiplets/${encodeURIComponent(String(trace.projectId || shipletId))}/traces/${encodeURIComponent(String(trace.id || ""))}`;
 		const sharingText = shared && shared.sharing === "shared"
 			? `  Shared with: ${(shared.audiences || []).map((audience) => `${audience.targetType}${audience.targetType === "organization" || audience.targetType === "link" ? "" : `:${audience.targetId}`}=${audience.profile?.level}`).join(", ") || "nobody yet"} (organization admins can read shared traces)`
 			: "  Private to you and the Shiplet owner.";

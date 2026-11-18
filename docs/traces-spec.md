@@ -1104,6 +1104,28 @@ prefix; no other table references them.
    upload URLs (D7) and a cross-Shiplet listing of readable traces
    (`GET /api/traces`). Retires the agent-driven path, including colleagues
    pulling traces from any Shiplet they can read.
+
+   **Built.** What shipped:
+   - **Operations.** `listReadableTraces` (`GET /api/traces`), `listTraces`,
+     `getTrace`, `getTraceSegment`, `getTraceContext`, `getTraceAudiences`,
+     `setTraceAudiences`, `previewTraceProfile`, `deleteTrace`, and
+     `createTraceUploadLink`, all Code Mode operations sharing the REST
+     handlers in `src/traces/handlers.ts`. `createTrace` and
+     `uploadTraceWithLink` are REST only.
+   - **Upload links.** They live 30 minutes and create one trace. The
+     creator's access is rechecked at use, and attachments go to
+     `<link>/attachments/<sha256>`.
+   - **CLI.** `shiplet trace share --current --upload-url <link>` uploads with
+     a link and no sign-in.
+   - **Agents.** Delegated agents need `traces:read` or `traces:write` and are
+     limited to their selected organization.
+   - **Deletes** now return `200 { deleted: true }`, so every operation has a
+     JSON success schema.
+   - **Schema.** Kernel schema epoch 7.
+   - **WorkOS.** Agents registered through WorkOS can be granted the new
+     permissions only after they are added to the WorkOS application; that is
+     an operator step.
+
 4. **Dashboard.** Trace list on each Shiplet, the D15 viewer (as a Traces tab
    and as the page of a trace-only Shiplet, D19), the share screen (ladder plus
    simple rules, with preview as each audience), and the D14 drop zone.

@@ -81,6 +81,16 @@ describe("focused public OpenAPI contract", () => {
       "get /api/projects/{projectId}/review-feedback/{feedbackId}",
       "post /api/projects/{projectId}/review-feedback/{feedbackId}/replies",
       "post /api/projects/{projectId}/review-feedback/{feedbackId}/status",
+      "get /api/traces",
+      "get /api/shiplets/{projectId}/traces",
+      "get /api/shiplets/{projectId}/traces/{traceId}",
+      "delete /api/shiplets/{projectId}/traces/{traceId}",
+      "get /api/shiplets/{projectId}/traces/{traceId}/segments/{index}",
+      "get /api/shiplets/{projectId}/traces/{traceId}/context",
+      "get /api/shiplets/{projectId}/traces/{traceId}/audiences",
+      "put /api/shiplets/{projectId}/traces/{traceId}/audiences",
+      "post /api/shiplets/{projectId}/traces/{traceId}/preview",
+      "post /api/shiplets/{projectId}/trace-uploads",
     ]);
 
     for (const [path, pathItem] of Object.entries(paths)) {

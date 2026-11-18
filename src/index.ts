@@ -159,6 +159,8 @@ import {
 import { ensureTraceSchema } from "./traces/schema";
 import { registerTraceRoutes } from "./traces/routes";
 import { deleteProjectTraceObjects, sweepArchivedShipletTraces } from "./traces/store";
+import { sweepExpiredUploadLinks } from "./traces/uploads";
+import { executeTraceCodeModeRequest, isTraceCodeModePath } from "./traces/codemode";
 import {
   legacyStaticPackageEnvelopeBytes,
   migrateLegacyShipletRevision,
@@ -902,7 +904,8 @@ const KERNEL_SCHEMA_EPOCH_MARKER = "kernel";
 // 4: workos_membership_sync_state and the organization membership user index.
 // 5: project_traces for agent session traces.
 // 6: trace audiences, variants, and pending attachments.
-const CURRENT_KERNEL_SCHEMA_EPOCH = 6;
+// 7: trace upload links.
+const CURRENT_KERNEL_SCHEMA_EPOCH = 7;
 
 async function readKernelSchemaEpoch(db: D1Database): Promise<number | null> {
   const table = await db
@@ -10026,6 +10029,10 @@ async function executeCodeModeRequest(
     throw new Response("Code Mode request path is not supported.", {
       status: 404,
     });
+  }
+
+  if (isTraceCodeModePath(request.path)) {
+    return executeTraceCodeModeRequest(env, context, request, appBaseUrl(env, "https://shiplet.cc/"));
   }
 
   if (request.path === "/api/organizations" && request.method === "POST") {
@@ -23489,6 +23496,7 @@ scheduledApp.scheduled = async (controller, environment, context) => {
     await autoInitializeDatabase(environment.DB);
     try {
       await sweepArchivedShipletTraces(environment, controller.scheduledTime);
+      await sweepExpiredUploadLinks(environment, controller.scheduledTime);
     } catch {
       // Traces of archived Shiplets are retried on the next run; the sweep is
       // bounded and must not starve the work below.

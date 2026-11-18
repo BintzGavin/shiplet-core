@@ -28,9 +28,9 @@ const DOCS_PUBLIC_CONTENT_SHA256: Record<string, string> = {
   "review-feedback":
     "3cf5e78d73d4036525249aa494a73bf3d62b157726f27470db3f9e73df07df70",
   "code-mode-mcp":
-    "262b9c534331c1d7bc76a4e2b8708e18f8f54fb79dbcbff960ef96e6c889624a",
+    "9009edc39968abdd421149d17ea27e03af493a0b766545741caf3452e09aae13",
   "api-keys":
-    "9fb78882f2041ecf900e128ad19c53131617c987bcb347f084d46c871d2ed83a",
+    "3ac405405559cc9a7873e47db03ad3a80800e3077011c1a8a8d840c9587f7edd",
   "api-surface":
     "ae7d36eb6be9d7c20c4e9a493540d3b9f3d89ce7d31dbb1de9a25d8ee5f56f95",
   "embed": "9fef7053a6175f1aa55f8c7c5076596d104b2aa26538839c70a63e6a441c96b3",
@@ -332,7 +332,7 @@ shiplet --help</code></pre>
 <figure class="docs-figure"><img src="/brand/docs/agent-registration-flow.svg?v=2" alt="An agent reads Shiplet auth.md and asks for access. You approve one Shiplet organization, then the agent works with Shiplets and feedback through Code Mode MCP." width="1400" height="760" loading="lazy"><figcaption>You choose the Shiplet organization. Its membership, grants, and permissions bound every agent operation.</figcaption></figure>
 <h3>What the agent can do</h3>
 <p>The registered agent uses the same <code>search</code> and <code>execute</code> tools as any Code Mode client. It can discover Shiplet operations, publish or update Shiplets, and work with review feedback when its permissions allow those actions.</p>
-<p>Shiplet recognizes these agent permissions: <code>mcp</code>, <code>shiplets:read</code>, <code>shiplets:write</code>, <code>feedback:read</code>, and <code>feedback:write</code>. Current organization membership and Shiplet grants still apply to every request.</p>
+<p>Shiplet recognizes these agent permissions: <code>mcp</code>, <code>shiplets:read</code>, <code>shiplets:write</code>, <code>feedback:read</code>, <code>feedback:write</code>, <code>traces:read</code>, and <code>traces:write</code>. Current organization membership and Shiplet grants still apply to every request.</p>
 <h3>Approve access</h3>
 <ol><li>Give the agent <code>https://shiplet.cc/auth.md</code>.</li><li>Open the browser approval link it returns, sign in, and choose the Shiplet organization the agent can use.</li><li>Return to the agent after the approval page confirms access. The agent connects to <code>https://shiplet.cc/api/mcp</code>.</li></ol>
 <p>The registration remains a distinct agent actor in Shiplet's audit history. Your user identity records who approved it, and the selected organization sets the boundary for its work.</p>
@@ -386,6 +386,8 @@ shiplet --help</code></pre>
   <tr><td><code>shiplets:archive</code></td><td>Archive or restore authorized Shiplets.</td></tr>
   <tr><td><code>feedback:read</code></td><td>Read review feedback.</td></tr>
   <tr><td><code>feedback:write</code></td><td>Create replies and update feedback.</td></tr>
+  <tr><td><code>traces:read</code></td><td>Read traces (full agent session logs) shared with the key or uploaded by it.</td></tr>
+  <tr><td><code>traces:write</code></td><td>Upload traces, choose who can see them, and delete them.</td></tr>
   <tr><td><code>mcp</code></td><td>Use <code>/api/mcp</code>.</td></tr>
 </tbody></table>
 <p>Choose <strong>Only selected</strong> for a bounded job. A selected-project key cannot create a new Shiplet because the new identity has no pre-existing allow rule.</p>

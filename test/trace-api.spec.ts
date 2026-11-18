@@ -188,7 +188,7 @@ describe("trace API (slice 1)", () => {
       expect(outOfRange.status).toBe(404);
 
       const removed = await request(`/api/shiplets/${projectId}/traces/${trace.id}`, { method: "DELETE", headers: OWNER });
-      expect(removed.status).toBe(204);
+      expect(removed.status).toBe(200);
       const gone = await request(`/api/shiplets/${projectId}/traces/${trace.id}`, { headers: OWNER });
       expect(gone.status).toBe(404);
       const objects = await testEnv.REVIEW_ASSETS.list({ prefix: `traces/v1/${projectId}/${trace.id}/` });
@@ -236,7 +236,7 @@ describe("trace API (slice 1)", () => {
       expect(memberUpload.status).toBe(403);
       // organization admins cannot read a private trace, but may delete it
       const adminDelete = await request(`/api/shiplets/${projectId}/traces/${trace.id}`, { method: "DELETE", headers: ADMIN });
-      expect(adminDelete.status).toBe(204);
+      expect(adminDelete.status).toBe(200);
     });
   });
 

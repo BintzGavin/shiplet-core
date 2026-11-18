@@ -12,8 +12,8 @@ import app, { schemaInitializationTest } from "../src/index";
 // Pin the two together: when this digest changes, bump
 // CURRENT_KERNEL_SCHEMA_EPOCH in src/index.ts and update both values here.
 const PINNED_KERNEL_SCHEMA = {
-  epoch: 6,
-  digest: "27081cb482c9c68166a9dc25aaf83d8012444f057f5a5aa94855c6af70bd6915",
+  epoch: 7,
+  digest: "c09d47ac700c2e5f537ef4ea1df61d6ca6c85cc475c7be2d08365276340458a1",
 };
 
 // Releases up to v0.1.43 recorded epoch 1 before the invite link tables existed.
@@ -26,6 +26,8 @@ const EPOCH_BEFORE_MEMBERSHIP_SYNC = 3;
 const EPOCH_BEFORE_TRACES = 4;
 // Builds with only private traces recorded epoch 5.
 const EPOCH_BEFORE_TRACE_SHARING = 5;
+// Builds before trace upload links recorded epoch 6.
+const EPOCH_BEFORE_TRACE_UPLOAD_LINKS = 6;
 const EPOCH_TABLE = "shiplet_kernel_schema_epoch";
 
 function db() {
@@ -158,6 +160,16 @@ describe("kernel schema epoch", () => {
     await db().prepare("DROP TABLE project_traces").run();
     await recordEpoch(EPOCH_BEFORE_TRACES);
     expect((await request(`/join/${"D".repeat(32)}`)).status).toBe(404);
+  });
+
+  it("adds the trace upload link table to a database that recorded epoch 6", async () => {
+    await request("/health");
+    await recordEpoch(EPOCH_BEFORE_TRACE_UPLOAD_LINKS);
+    await db().prepare("DROP TABLE IF EXISTS trace_upload_links").run();
+
+    expect((await request(`/join/${"D".repeat(32)}`)).status).toBe(404);
+
+    expect(await tableExists("trace_upload_links")).toBe(true);
   });
 
   it("pins the kernel schema to its epoch so schema changes cannot ship without a bump", async () => {

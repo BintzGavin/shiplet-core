@@ -1,4 +1,5 @@
 import { ensureTraceAudienceSchema } from "./audiences";
+import { ensureTraceUploadSchema } from "./uploads";
 
 // D1 schema for traces. A trace is the full log of an agent session (prompts,
 // replies, tool calls and results) stored against a Shiplet. Event bodies live
@@ -66,4 +67,5 @@ export async function ensureTraceSchema(db: D1Database) {
 		await db.prepare("ALTER TABLE project_traces ADD COLUMN pending_attachments INTEGER NOT NULL DEFAULT 0").run();
 	}
 	await ensureTraceAudienceSchema(db);
+	await ensureTraceUploadSchema(db);
 }

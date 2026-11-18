@@ -5672,6 +5672,8 @@ export const BuildSettingsPage = (nonce: KernelDocumentNonce) => `
           <label class="scope-pill"><input type="checkbox" name="tokenScope" value="shiplets:archive"> shiplets:archive</label>
           <label class="scope-pill"><input type="checkbox" name="tokenScope" value="feedback:read"> feedback:read</label>
           <label class="scope-pill"><input type="checkbox" name="tokenScope" value="feedback:write"> feedback:write</label>
+          <label class="scope-pill"><input type="checkbox" name="tokenScope" value="traces:read"> traces:read</label>
+          <label class="scope-pill"><input type="checkbox" name="tokenScope" value="traces:write"> traces:write</label>
           <label class="scope-pill"><input type="checkbox" name="tokenScope" value="mcp"> mcp</label>
         </div>
         <div id="tokenResult" class="result-slot"></div>
