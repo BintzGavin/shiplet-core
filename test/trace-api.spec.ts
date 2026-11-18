@@ -289,6 +289,45 @@ describe("trace API (slice 1)", () => {
     });
   });
 
+  it("lets a CLI session with trace scopes reach every trace route the CLI calls", async () => {
+    await withTraces(async () => {
+      const organizationId = await createOrganization();
+      const projectId = await createShiplet(organizationId);
+      const token = `shiplet_cli_session_${crypto.randomUUID().replace(/-/g, "")}`;
+      const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(token));
+      const hash = [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, "0")).join("");
+      await testEnv.DB.prepare(
+        "INSERT INTO cli_sessions (session_hash, authorization_request_id, user_id, scopes_json, expires_on, created_on) VALUES (?, ?, ?, ?, ?, ?)",
+      )
+        .bind(hash, `cli_req_${crypto.randomUUID()}`, "user_trace_owner", JSON.stringify(["session:read", "trace:read", "trace:write"]), new Date(Date.now() + 3_600_000).toISOString(), new Date().toISOString())
+        .run();
+      const cli = { authorization: `Bearer ${token}` };
+      const created = await post(projectId, await fixtureUpload(), cli);
+      expect(created.status).toBe(201);
+      const traceId = ((await created.json()) as { trace: { id: string } }).trace.id;
+      const trace = `/api/shiplets/${projectId}/traces/${traceId}`;
+      const json = (method: string, body: unknown) => ({
+        method,
+        headers: { "Content-Type": "application/json", ...cli },
+        body: JSON.stringify(body),
+      });
+      const routes: Array<[string, RequestInit]> = [
+        ["/api/trace-shiplets", json("POST", { name: "CLI trace-only", organizationId })],
+        ["/api/traces", { headers: cli }],
+        [`${trace}/context`, { headers: cli }],
+        [`${trace}/audiences`, { headers: cli }],
+        [`${trace}/audiences`, json("PUT", { audiences: [] })],
+        [`${trace}/preview`, json("POST", { level: "conversation" })],
+        [`${trace}/attachments/${"0".repeat(64)}`, { method: "PUT", headers: { "Content-Type": "application/octet-stream", ...cli }, body: "x" }],
+        [`/api/shiplets/${projectId}/trace-uploads`, json("POST", {})],
+      ];
+      for (const [path, init] of routes) {
+        const response = await request(path, init);
+        expect({ path, method: init.method ?? "GET", status: response.status }).not.toMatchObject({ status: 401 });
+      }
+    });
+  });
+
   it("refuses cross-site trace changes from a browser session", async () => {
     await withTraces(async () => {
       const projectId = await createShiplet(await createOrganization());
