@@ -352,11 +352,19 @@ function scopeForRequest(request: Request) {
 
 const TRACE_LIST_PATH = /^\/api\/shiplets\/[^/]+\/traces$/;
 const TRACE_ITEM_PATH = /^\/api\/shiplets\/[^/]+\/traces\/[^/]+$/;
-const TRACE_READ_PATH = /^\/api\/shiplets\/[^/]+\/traces(?:\/[^/]+(?:\/(?:segments|attachments)\/[^/]+)?)?$/;
+const TRACE_READ_PATH = /^\/api\/shiplets\/[^/]+\/traces(?:\/[^/]+(?:\/(?:segments\/[^/]+|attachments\/[^/]+|context|audiences))?)?$/;
+const TRACE_ATTACHMENT_PATH = /^\/api\/shiplets\/[^/]+\/traces\/[^/]+\/attachments\/[^/]+$/;
+const TRACE_AUDIENCES_PATH = /^\/api\/shiplets\/[^/]+\/traces\/[^/]+\/audiences$/;
+const TRACE_PREVIEW_PATH = /^\/api\/shiplets\/[^/]+\/traces\/[^/]+\/preview$/;
+const TRACE_UPLOAD_LINK_PATH = /^\/api\/shiplets\/[^/]+\/trace-uploads$/;
 
+// Every trace route a CLI session may call. A route missing here makes the
+// CLI's bearer token count as no sign-in at all, so the route answers 401.
 function traceScopeForRequest(method: string, path: string) {
-  if (method === "GET" && TRACE_READ_PATH.test(path)) return "trace:read";
-  if (method === "POST" && TRACE_LIST_PATH.test(path)) return "trace:write";
+  if (method === "GET" && (TRACE_READ_PATH.test(path) || path === "/api/traces")) return "trace:read";
+  if (method === "POST" && TRACE_PREVIEW_PATH.test(path)) return "trace:read";
+  if (method === "POST" && (TRACE_LIST_PATH.test(path) || TRACE_UPLOAD_LINK_PATH.test(path) || path === "/api/trace-shiplets")) return "trace:write";
+  if (method === "PUT" && (TRACE_ATTACHMENT_PATH.test(path) || TRACE_AUDIENCES_PATH.test(path))) return "trace:write";
   if (method === "DELETE" && TRACE_ITEM_PATH.test(path)) return "trace:write";
   return null;
 }
