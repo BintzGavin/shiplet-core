@@ -5,7 +5,9 @@ description: "Create least-privilege organization credentials for REST and MCP a
 
 API keys are organization-level credentials for CI, CLIs, and non-interactive
 service accounts. For interactive MCP use, connect through browser-based AuthKit
-OAuth instead.
+OAuth instead. An agent you work with, including one in the cloud, should sign in
+with OAuth too: Shiplet MCP, or `shiplet login --device`. See
+[Choosing how to sign in](/docs/authentication).
 
 Treat every key as a secret. Store it in the automation platform's established
 secret store. Keep it out of artifacts, custom widgets, browser scripts, source
