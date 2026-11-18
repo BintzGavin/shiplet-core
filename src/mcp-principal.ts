@@ -19,6 +19,8 @@ const RECOGNIZED_AGENT_REGISTRATION_PERMISSIONS = new Set([
 	"shiplets:rollback",
 	"feedback:read",
 	"feedback:write",
+	"traces:read",
+	"traces:write",
 ]);
 
 export interface VerifiedMcpOAuthClaims {

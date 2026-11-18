@@ -72,7 +72,7 @@ function spoolLeaseKey(baseKey: string) {
   return `${baseKey}/${SPOOL_LEASE_KEY}`;
 }
 
-async function deleteR2Keys(bucket: R2Bucket, keys: string[]) {
+export async function deleteR2Keys(bucket: R2Bucket, keys: string[]) {
   for (let index = 0; index < keys.length; index += R2_DELETE_BATCH_SIZE) {
     await bucket.delete(keys.slice(index, index + R2_DELETE_BATCH_SIZE));
   }

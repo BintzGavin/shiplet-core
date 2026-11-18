@@ -22,7 +22,7 @@ test("the distributable installs in isolation and runs the real CLI, including b
 	const [packed] = JSON.parse(stdout);
 	assert.deepEqual(packed.files.map((file) => file.path).sort(), [
 		"LICENSE", "README.md", "package.json",
-		...((await readdir(path.join(root, "src/cli"))).filter((file) => file.endsWith(".cjs")).map((file) => `lib/${file}`)),
+		...((await readdir(path.join(root, "src/cli"))).filter((file) => file.endsWith(".cjs") || file.endsWith(".mjs")).map((file) => `lib/${file}`)),
 	].sort());
 	assert.ok(packed.files.find((file) => file.path === "lib/shiplet.cjs").mode & 0o111);
 	await writeFile(path.join(directory, "package.json"), '{"private":true}');
@@ -42,6 +42,9 @@ test("the distributable installs in isolation and runs the real CLI, including b
 	assert.match(prepared.stdout, /packed-cli-review/);
 	assert.match(prepared.stdout, /index.html/);
 	await assert.rejects(run(["not-a-command"]), (error) => error.code === 1 && /Unknown command/.test(error.stderr));
+	// The packed CLI loads the shared trace core from lib/.
+	const traced = await run(["trace", "share", path.join(root, "test/fixtures/traces/codex-rollout.jsonl"), "--shiplet", "proj_packed", "--dry-run", "--json"]);
+	assert.match(traced.stdout, /"format": "codex"/);
 	const auth = await exec(process.execPath, ["--test-reporter=tap", path.join(root, "scripts/cli-subprocess.test.mjs"), path.join(installed, "lib/shiplet.cjs")], options);
 	assert.match(auth.stdout, /# fail 0/);
 	assert.match(auth.stdout, /# tests 3/);

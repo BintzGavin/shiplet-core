@@ -2924,6 +2924,9 @@ details textarea { margin-top: 8px; }
   white-space: nowrap;
   border: 0;
 }
+/* Form controls in the dashboard get width: 100%, which would otherwise widen
+   a visually hidden control past the page. */
+.dashboard-shell :is(input, select, textarea).sr-only { width: 1px !important; min-width: 0 !important; padding: 0 !important; border: 0 !important; }
 
 /* --------------------------------------------------------------------------
    Harbor chrome: decoration art
@@ -3087,6 +3090,70 @@ details textarea { margin-top: 8px; }
   .app-page-topbar { align-items: flex-start; }
   .artifact-preview-frame { height: 60vh; }
 }
+
+/* Traces: full agent session logs (docs/traces-spec.md D15). */
+.trace-page { display: grid; gap: 16px; }
+.trace-viewer { display: grid; gap: 16px; }
+.trace-header h1 { margin: 4px 0 6px; font-size: var(--type-display); overflow-wrap: anywhere; }
+.trace-definition { color: var(--text-muted); margin: 0 0 12px; }
+.trace-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; color: var(--text-muted); font-size: var(--type-small); }
+.trace-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+.trace-hint { color: var(--text-muted); font-size: var(--type-small); margin: 10px 0 0; }
+.trace-layout { display: grid; grid-template-columns: minmax(0, 2fr) minmax(0, 1fr); gap: 16px; align-items: start; }
+.trace-viewer-embedded { display: grid; gap: 16px; margin-bottom: 16px; min-width: 0; }
+.trace-viewer-embedded .trace-layout { grid-template-columns: 1fr; }
+.trace-viewer-embedded .trace-header h2 { font-size: clamp(24px, 3vw, 34px); line-height: 1.1; margin: 8px 0; }
+.trace-side { display: grid; gap: 16px; }
+.trace-level { color: var(--harbor-700); background: var(--harbor-100); }
+.trace-level-full { color: var(--buoy-700); background: var(--buoy-100); }
+.trace-level-summary { color: var(--ink-700); background: var(--paper-100); }
+.trace-outcome-last-check-passed, .trace-check-ok { color: var(--ok); background: var(--ok-surface); }
+.trace-outcome-last-check-failed, .trace-check-failed { color: var(--err); background: var(--err-surface); }
+.trace-sharing-private { color: var(--ink-700); background: var(--paper-100); }
+.trace-sharing-shared { color: var(--harbor-700); background: var(--harbor-100); }
+.trace-timeline { list-style: none; margin: 12px 0 0; padding: 0; display: grid; gap: 8px; }
+.trace-event { border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--surface); padding: 10px 12px; display: grid; gap: 6px; min-width: 0; }
+.trace-event-user { border-left: 4px solid var(--buoy-600); }
+.trace-event-agent { border-left: 4px solid var(--harbor-600); }
+.trace-event-subagent { margin-left: 24px; border-style: dashed; }
+.trace-event-failed { border-color: var(--err); }
+.trace-event-omitted, .trace-event-note, .trace-event-marker { color: var(--text-muted); font-size: var(--type-small); background: var(--surface-sunken); }
+.trace-event-reasoning summary, .trace-event-tool summary { cursor: pointer; display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.trace-role { font-family: var(--font-mono); font-size: var(--type-micro); text-transform: uppercase; letter-spacing: 0.08em; color: var(--text-muted); }
+.trace-text { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; font-family: var(--font-body); font-size: var(--type-body); line-height: 1.5; max-height: 32em; overflow: auto; }
+.trace-event-tool .trace-text { font-family: var(--font-mono); font-size: var(--type-small); background: var(--surface-sunken); padding: 8px; border-radius: var(--radius-sm); }
+.trace-tool-name { font-family: var(--font-mono); font-weight: 600; font-size: var(--type-small); }
+.trace-tool-summary { font-size: var(--type-small); color: var(--text-muted); overflow-wrap: anywhere; }
+.trace-tool-result { display: grid; gap: 4px; margin-top: 6px; }
+.trace-inline-media { display: block; max-width: 100%; }
+.trace-inline-media img, video.trace-inline-media { max-width: 100%; max-height: 420px; border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--paper-0); }
+.trace-file-link, .trace-attachment-list a { font-weight: 600; overflow-wrap: anywhere; }
+.trace-attachment-list, .trace-audience-list, .trace-list, .trace-checks, .trace-files-touched { list-style: none; margin: 8px 0 0; padding: 0; display: grid; gap: 8px; }
+.trace-attachment-list li, .trace-list li, .trace-audience-list li { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; padding: 8px 0; border-bottom: 1px dashed var(--line); }
+.trace-attachment-meta { color: var(--text-muted); font-size: var(--type-small); }
+.trace-checks li { display: flex; gap: 8px; align-items: baseline; min-width: 0; }
+.trace-checks code, .trace-files-touched code { font-size: var(--type-small); overflow-wrap: anywhere; }
+.trace-facts { display: grid; grid-template-columns: auto 1fr; gap: 4px 12px; margin: 8px 0; }
+.trace-facts dt { color: var(--text-muted); }
+.trace-facts dd { margin: 0; font-weight: 600; }
+.trace-empty { color: var(--text-muted); }
+.trace-load-more { margin-top: 12px; }
+.trace-share-form { display: grid; gap: 10px; margin-top: 12px; }
+.trace-levels { border: 1px solid var(--line); border-radius: var(--radius-sm); padding: 8px 12px; display: grid; gap: 6px; }
+.trace-level-option, .trace-check-option { display: flex; gap: 8px; align-items: baseline; font-size: var(--type-small); }
+.trace-status { font-size: var(--type-small); color: var(--text-muted); }
+.trace-dropzone-panel { display: grid; gap: 12px; margin: 12px 0; }
+.trace-agent-first { display: block; line-height: 1.5; }
+.trace-agent-first code { overflow-wrap: anywhere; word-break: break-word; }
+.trace-agent-first .trace-actions { margin-top: 10px; }
+.trace-dropzone { display: grid; gap: 6px; border: 2px dashed var(--line-strong); border-radius: var(--radius); padding: 20px; background: var(--surface-sunken); cursor: pointer; color: var(--text-muted); font-size: var(--type-small); }
+.trace-dropzone strong { color: var(--text); font-size: var(--type-body); }
+.trace-dropzone-active { border-color: var(--harbor-600); background: var(--harbor-100); }
+@media (max-width: 640px) {
+  .trace-layout { grid-template-columns: 1fr; }
+  .trace-event-subagent { margin-left: 12px; }
+}
+
 `;
 
 const BRAND_MARK_SVG = `<svg viewBox="0 0 128 128" xmlns="http://www.w3.org/2000/svg" aria-hidden="true" focusable="false" shape-rendering="geometricPrecision">
@@ -5672,6 +5739,8 @@ export const BuildSettingsPage = (nonce: KernelDocumentNonce) => `
           <label class="scope-pill"><input type="checkbox" name="tokenScope" value="shiplets:archive"> shiplets:archive</label>
           <label class="scope-pill"><input type="checkbox" name="tokenScope" value="feedback:read"> feedback:read</label>
           <label class="scope-pill"><input type="checkbox" name="tokenScope" value="feedback:write"> feedback:write</label>
+          <label class="scope-pill"><input type="checkbox" name="tokenScope" value="traces:read"> traces:read</label>
+          <label class="scope-pill"><input type="checkbox" name="tokenScope" value="traces:write"> traces:write</label>
           <label class="scope-pill"><input type="checkbox" name="tokenScope" value="mcp"> mcp</label>
         </div>
         <div id="tokenResult" class="result-slot"></div>
@@ -5928,7 +5997,10 @@ export function BuildShipletReviewPage(options: {
 	created?: boolean;
 	canEditLifecycle?: boolean;
 	canPermanentlyDelete?: boolean;
+	tracesPanel?: string;
+	traceOnlyViewer?: string;
 }) {
+  const traceOnly = Boolean(options.traceOnlyViewer);
   const projectJson = scriptJson({
     id: options.project.id,
     organization_id: options.project.organization_id || "",
@@ -5964,10 +6036,10 @@ export function BuildShipletReviewPage(options: {
       <div>
         <span class="success-card-label stamp-xl">${isArchived ? "Archived" : options.created ? "Ready for review" : "Review bridge"}</span>
         <h1>${createdTitle}</h1>
-        <p>${projectName} ${isArchived ? "is archived and no longer serves its artifact until restored." : "is prepared for review. Open the artifact, collect contextual comments, then hand clear notes to engineers or local agents through MCP."}</p>
+        <p>${projectName} ${isArchived ? "is archived and no longer serves its artifact until restored." : traceOnly ? "shares an agent session. Read the trace below, comment on it, or copy it into your own agent." : "is prepared for review. Open the artifact, collect contextual comments, then hand clear notes to engineers or local agents through MCP."}</p>
       </div>
       <div class="shiplet-detail-actions">
-        <a class="btn btn-primary btn-sm" href="${reviewUrl}" target="_blank" rel="noreferrer">${isArchived ? "View archived page" : "Open review page"}</a>
+        ${traceOnly ? "" : `<a class="btn btn-primary btn-sm" href="${reviewUrl}" target="_blank" rel="noreferrer">${isArchived ? "View archived page" : "Open review page"}</a>`}
         <a class="btn btn-secondary btn-sm" href="/">Create another shiplet</a>
       </div>
     </div>
@@ -5976,7 +6048,10 @@ export function BuildShipletReviewPage(options: {
 
   <div class="review-command-grid">
     <section class="artifact-preview-shell">
-      <div class="dashboard-section-header" style="margin-bottom: 12px;">
+      ${
+        traceOnly
+          ? options.traceOnlyViewer
+          : `<div class="dashboard-section-header" style="margin-bottom: 12px;">
         <div>
           <span class="success-card-label">Review window</span>
           <h2>Artifact and review</h2>
@@ -5987,7 +6062,8 @@ export function BuildShipletReviewPage(options: {
           <a class="btn btn-secondary btn-sm" href="${artifactUrl}" target="_blank" rel="noreferrer">Open URL</a>
         </div>
       </div>
-      <iframe id="artifactPreviewFrame" class="artifact-preview-frame" src="${previewUrl}" title="${projectName} preview"></iframe>
+      <iframe id="artifactPreviewFrame" class="artifact-preview-frame" src="${previewUrl}" title="${projectName} preview"></iframe>`
+      }
       <section class="review-comments-panel" aria-labelledby="reviewCommentsTitle">
         <div class="dashboard-section-header">
           <div>
@@ -6015,6 +6091,7 @@ export function BuildShipletReviewPage(options: {
     </section>
 
     <aside class="review-side-stack">
+      ${options.tracesPanel || ""}
       ${
         options.created && !isArchived
           ? `<section class="success-card shiplet-panel"><span class="success-card-label">Ready</span><h2>Published for review.</h2><p>Share the review link when its visibility setting is right for your audience.</p></section>`

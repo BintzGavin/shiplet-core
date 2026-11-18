@@ -600,7 +600,7 @@ function AgentsSection() {
 					</button>
 				</form>
 				<div className="scope-grid">
-					{["shiplets:read", "shiplets:write", "shiplets:archive", "feedback:read", "feedback:write", "mcp"].map((scope) => (
+					{["shiplets:read", "shiplets:write", "shiplets:archive", "feedback:read", "feedback:write", "traces:read", "traces:write", "mcp"].map((scope) => (
 						<label className="scope-pill" key={scope}>
 							<input type="checkbox" name="tokenScope" value={scope} /> {scope}
 						</label>

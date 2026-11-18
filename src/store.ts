@@ -1370,6 +1370,21 @@ export async function permanentlyDeleteProjectRecords(
       .prepare("DELETE FROM review_notifications WHERE project_id = ?")
       .bind(projectId),
     db
+      .prepare("DELETE FROM trace_pending_attachments WHERE trace_id IN (SELECT id FROM project_traces WHERE project_id = ?)")
+      .bind(projectId),
+    db
+      .prepare("DELETE FROM trace_variants WHERE trace_id IN (SELECT id FROM project_traces WHERE project_id = ?)")
+      .bind(projectId),
+    db
+      .prepare("DELETE FROM trace_audiences WHERE project_id = ?")
+      .bind(projectId),
+    db
+      .prepare("DELETE FROM project_traces WHERE project_id = ?")
+      .bind(projectId),
+    db
+      .prepare("DELETE FROM trace_shiplets WHERE project_id = ?")
+      .bind(projectId),
+    db
       .prepare("DELETE FROM review_feedback_mentions WHERE project_id = ?")
       .bind(projectId),
     db

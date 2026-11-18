@@ -28,6 +28,8 @@ Choose only the scopes required for one automation job:
 | `shiplets:archive` | Archive and restore authorized Shiplets        | The job owns lifecycle cleanup            |
 | `feedback:read`    | Read review feedback                           | The job consumes review tickets           |
 | `feedback:write`   | Create replies and update feedback             | The job acts on review tickets            |
+| `traces:read`      | Read traces shared with the key or uploaded by it | The job loads agent session context    |
+| `traces:write`     | Upload traces and choose who can see them      | The job shares agent sessions             |
 | `mcp`              | Use `/api/mcp`                                 | The credential connects through MCP       |
 
 The retired organization-key alias `feedback:manage` is not accepted for new

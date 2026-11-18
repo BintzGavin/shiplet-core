@@ -1,0 +1,19 @@
+{"type": "summary", "summary": "ignored"}
+{"type": "user", "isMeta": true, "timestamp": "2026-11-18T10:00:00.000Z", "cwd": "/work/app", "message": {"role": "user", "content": "meta"}}
+{"type": "user", "timestamp": "2026-11-18T10:00:01.000Z", "cwd": "/work/app", "version": "2.3.1", "sessionId": "s1", "message": {"role": "user", "content": [{"type": "text", "text": "<system-reminder>only a reminder</system-reminder>"}]}}
+{"type": "user", "timestamp": "2026-11-18T10:00:02.000Z", "cwd": "/work/app", "message": {"role": "user", "content": [{"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAA="}}, {"type": "text", "text": "Add pagination to orders. <system-reminder>x</system-reminder>"}]}}
+{"type": "assistant", "timestamp": "2026-11-18T10:00:03.000Z", "message": {"id": "m1", "model": "model-a", "role": "assistant", "content": [{"type": "thinking", "thinking": "Plan the change."}, {"type": "text", "text": "I'll look at the API first."}]}}
+{"type": "assistant", "timestamp": "2026-11-18T10:00:04.000Z", "message": {"id": "m1", "model": "model-a", "role": "assistant", "content": [{"type": "tool_use", "id": "t1", "name": "Read", "input": {"file_path": "/work/app/src/orders.ts"}}]}}
+{"type": "user", "timestamp": "2026-11-18T10:00:05.000Z", "message": {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "t1", "content": "export const orders = []"}]}}
+{"type": "assistant", "timestamp": "2026-11-18T10:00:06.000Z", "message": {"id": "m2", "model": "model-a", "role": "assistant", "content": [{"type": "tool_use", "id": "t2", "name": "Agent", "input": {"description": "Find tests", "prompt": "Find the order tests"}}]}}
+{"type": "assistant", "timestamp": "2026-11-18T10:00:09.000Z", "isSidechain": true, "agentId": "inline1", "message": {"id": "m3", "model": "model-b", "role": "assistant", "content": [{"type": "text", "text": "Inline sidechain note."}]}}
+{"type": "user", "timestamp": "2026-11-18T10:00:12.000Z", "message": {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "t2", "content": [{"type": "text", "text": "Found test/orders.spec.ts"}]}]}}
+{"type": "assistant", "timestamp": "2026-11-18T10:00:13.000Z", "message": {"id": "m4", "model": "model-a", "role": "assistant", "content": [{"type": "tool_use", "id": "t3", "name": "Bash", "input": {"command": "npm test -- --token=abc123def456ghi"}}]}}
+{"type": "user", "timestamp": "2026-11-18T10:00:14.000Z", "message": {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "t3", "is_error": true, "content": "Exit code 1\nFAIL test/orders.spec.ts"}]}}
+{"type": "user", "timestamp": "2026-11-18T10:00:15.000Z", "isCompactSummary": true, "message": {"role": "user", "content": "Summary of the earlier conversation."}}
+{"type": "assistant", "timestamp": "2026-11-18T10:00:16.000Z", "message": {"id": "m5", "model": "model-a", "role": "assistant", "content": [{"type": "tool_use", "id": "t4", "name": "Write", "input": {"file_path": "/work/app/src/orders.ts", "content": "export const orders = [1]"}}]}}
+{"type": "user", "timestamp": "2026-11-18T10:00:17.000Z", "message": {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "t4", "content": "ok"}]}}
+{"type": "assistant", "timestamp": "2026-11-18T10:00:18.000Z", "message": {"id": "m6", "model": "model-a", "role": "assistant", "content": [{"type": "tool_use", "id": "t5", "name": "Bash", "input": {"command": "npm test"}}]}}
+{"type": "user", "timestamp": "2026-11-18T10:00:19.000Z", "message": {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "t5", "content": "pass"}]}}
+{"type": "assistant", "timestamp": "2026-11-18T10:00:20.000Z", "message": {"id": "m7", "model": "model-a", "role": "assistant", "content": [{"type": "text", "text": "Done. Pagination added."}]}}
+{"type":"assistant","timestamp":"2026-11-18T10:00:21.000Z","mess

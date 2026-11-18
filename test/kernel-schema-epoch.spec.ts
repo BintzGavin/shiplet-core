@@ -12,8 +12,8 @@ import app, { schemaInitializationTest } from "../src/index";
 // Pin the two together: when this digest changes, bump
 // CURRENT_KERNEL_SCHEMA_EPOCH in src/index.ts and update both values here.
 const PINNED_KERNEL_SCHEMA = {
-  epoch: 4,
-  digest: "9c42566a65cbd31f92fc4a9319771561fe70a56da74c7306bd3e51f28cd8b9b6",
+  epoch: 8,
+  digest: "b16483d7e49ac5f543adc136ec437265d377bb1000107dcf92ee1a26a440e077",
 };
 
 // Releases up to v0.1.43 recorded epoch 1 before the invite link tables existed.
@@ -22,6 +22,14 @@ const EPOCH_BEFORE_INVITE_LINKS = 1;
 const EPOCH_BEFORE_REUSABLE_CLI_SESSIONS = 2;
 // Releases before WorkOS membership reconciliation recorded epoch 3.
 const EPOCH_BEFORE_MEMBERSHIP_SYNC = 3;
+// Releases before traces recorded epoch 4.
+const EPOCH_BEFORE_TRACES = 4;
+// Builds with only private traces recorded epoch 5.
+const EPOCH_BEFORE_TRACE_SHARING = 5;
+// Builds before trace upload links recorded epoch 6.
+const EPOCH_BEFORE_TRACE_UPLOAD_LINKS = 6;
+// Builds before trace-only Shiplets recorded epoch 7.
+const EPOCH_BEFORE_TRACE_SHIPLETS = 7;
 const EPOCH_TABLE = "shiplet_kernel_schema_epoch";
 
 function db() {
@@ -118,6 +126,62 @@ describe("kernel schema epoch", () => {
       .bind("idx_organization_memberships_user")
       .first<{ name: string }>();
     expect(index).not.toBeNull();
+  });
+
+  it("creates the traces table on a database that recorded the epoch from before it", async () => {
+    await request("/health");
+    await recordEpoch(EPOCH_BEFORE_TRACES);
+    await db().prepare("DROP TABLE IF EXISTS project_traces").run();
+
+    expect((await request(`/join/${"D".repeat(32)}`)).status).toBe(404);
+
+    expect(await tableExists("project_traces")).toBe(true);
+  });
+
+  it("adds trace sharing tables and columns to a database that recorded epoch 5", async () => {
+    await request("/health");
+    await recordEpoch(EPOCH_BEFORE_TRACE_SHARING);
+    await db().prepare("DROP TABLE IF EXISTS trace_audiences").run();
+    await db().prepare("DROP TABLE IF EXISTS project_traces").run();
+    await db().prepare(
+      `CREATE TABLE project_traces (id TEXT PRIMARY KEY, project_id TEXT NOT NULL, organization_id TEXT, revision_id TEXT,
+        uploader_user_id TEXT, uploader_token_id TEXT, upload_sha256 TEXT NOT NULL, sharing TEXT NOT NULL DEFAULT 'private',
+        title TEXT NOT NULL, harness TEXT NOT NULL, started_on TEXT, ended_on TEXT, event_count INTEGER NOT NULL,
+        segment_count INTEGER NOT NULL, canonical_bytes INTEGER NOT NULL, attachment_count INTEGER NOT NULL,
+        attachment_bytes INTEGER NOT NULL, client_masked_count INTEGER NOT NULL, server_masked_count INTEGER NOT NULL,
+        manifest_sha256 TEXT NOT NULL, created_on TEXT NOT NULL)`,
+    ).run();
+
+    expect((await request(`/join/${"D".repeat(32)}`)).status).toBe(404);
+
+    expect(await tableExists("trace_audiences")).toBe(true);
+    const columns = await db().prepare("PRAGMA table_info(project_traces)").all<{ name: string }>();
+    expect(columns.results.map((column) => column.name)).toContain("pending_attachments");
+
+    // Restore the canonical table so the schema pin below sees the real schema.
+    await db().prepare("DROP TABLE project_traces").run();
+    await recordEpoch(EPOCH_BEFORE_TRACES);
+    expect((await request(`/join/${"D".repeat(32)}`)).status).toBe(404);
+  });
+
+  it("adds the trace upload link table to a database that recorded epoch 6", async () => {
+    await request("/health");
+    await recordEpoch(EPOCH_BEFORE_TRACE_UPLOAD_LINKS);
+    await db().prepare("DROP TABLE IF EXISTS trace_upload_links").run();
+
+    expect((await request(`/join/${"D".repeat(32)}`)).status).toBe(404);
+
+    expect(await tableExists("trace_upload_links")).toBe(true);
+  });
+
+  it("adds the trace-only Shiplet table to a database that recorded epoch 7", async () => {
+    await request("/health");
+    await recordEpoch(EPOCH_BEFORE_TRACE_SHIPLETS);
+    await db().prepare("DROP TABLE IF EXISTS trace_shiplets").run();
+
+    expect((await request(`/join/${"D".repeat(32)}`)).status).toBe(404);
+
+    expect(await tableExists("trace_shiplets")).toBe(true);
   });
 
   it("pins the kernel schema to its epoch so schema changes cannot ship without a bump", async () => {

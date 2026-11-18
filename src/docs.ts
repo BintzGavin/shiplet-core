@@ -28,12 +28,13 @@ const DOCS_PUBLIC_CONTENT_SHA256: Record<string, string> = {
   "review-feedback":
     "3cf5e78d73d4036525249aa494a73bf3d62b157726f27470db3f9e73df07df70",
   "code-mode-mcp":
-    "262b9c534331c1d7bc76a4e2b8708e18f8f54fb79dbcbff960ef96e6c889624a",
+    "9009edc39968abdd421149d17ea27e03af493a0b766545741caf3452e09aae13",
   "api-keys":
-    "9fb78882f2041ecf900e128ad19c53131617c987bcb347f084d46c871d2ed83a",
+    "3ac405405559cc9a7873e47db03ad3a80800e3077011c1a8a8d840c9587f7edd",
   "api-surface":
     "ae7d36eb6be9d7c20c4e9a493540d3b9f3d89ce7d31dbb1de9a25d8ee5f56f95",
   "embed": "9fef7053a6175f1aa55f8c7c5076596d104b2aa26538839c70a63e6a441c96b3",
+  "traces": "6001569b5f1495cd118584c2feadb598dd65de04c85cb0f207f6e393cc33f851",
   "security": "5b52e175c0b5cb8630e199c1bfc126895eadaa47e5f0fa3ec19d7878b6e7caa6"
 };
 
@@ -277,6 +278,36 @@ const DOCS_PAGES: DocsPage[] = [
 <p><strong>Next:</strong> open <a href="/feedback">Feedback</a> to work through review tickets.</p>`,
   },
   {
+    slug: "traces",
+    title: "Traces",
+    description: "Share the full log of an agent session and let colleagues read or continue it.",
+    group: "Review",
+    body: `
+<p>A <strong>trace</strong> is the full chat log of an agent session: your prompts, the agent's replies, and every tool call and result. Shiplet keeps traces next to the work they produced, so a reviewer can see how a change was made and a colleague can pick the session up in their own agent.</p>
+<p>Traces are rolling out. If a Shiplet's detail page has no <strong>Traces</strong> panel, they are not enabled on this server yet.</p>
+<h2>Share the session you are in</h2>
+<p>The easiest way is to ask your agent: say “Share this session to Shiplet &lt;name or id&gt;” in Claude Code or Codex. Your agent knows which session it is in, including subagents, screenshots, and videos. From a terminal, run:</p>
+<pre><code>npx shiplet-cli trace share --current --shiplet &lt;id&gt;</code></pre>
+<p>The CLI masks secrets on your computer before anything is sent, and Shiplet scans again when the trace arrives. Screenshots, videos, and PDFs the session produced are attached automatically (up to 20 MiB each). Add <code>--dry-run</code> to see what would be sent, or <code>--no-files</code> to leave the files out.</p>
+<p>To share a session that has no artifact to review, add <code>--new</code> instead of <code>--shiplet</code>: <code>npx shiplet-cli trace share --current --new --title "Fix the flaky test"</code>. Shiplet creates an ordinary Shiplet for it, whose page is the trace viewer.</p>
+<p>No terminal? Drop a session file (<code>.jsonl</code>) onto the drop zone in the Shiplet's Traces panel. The browser masks secrets before uploading. Claude Code keeps sessions in <code>~/.claude/projects/</code> and Codex keeps them in <code>~/.codex/sessions/</code>.</p>
+<h2>Who sees what</h2>
+<p>A new trace is private: only you and the Shiplet's owner can open it. Share it with a person or email, a team, the whole organization, or anyone with the link, and choose a level for each audience:</p>
+<div class="docs-table" tabindex="0"><table><thead><tr><th>Level</th><th>What that audience sees</th></tr></thead><tbody>
+<tr><td>Full</td><td>Everything except secrets.</td></tr>
+<tr><td>Conversation</td><td>Messages and tool steps, without tool output or reasoning.</td></tr>
+<tr><td>Summary</td><td>What was done, files touched, checks, and the outcome. No text.</td></tr>
+</tbody></table></div>
+<p>A more specific audience wins: a person or email over their team, a team over the organization. Organization administrators can read every shared trace in full, but not private ones. You can also mask extra terms, hide paths, hide reasoning, or hide videos for one audience, and use <strong>Preview as this audience</strong> before sharing.</p>
+<pre><code>npx shiplet-cli trace audiences &lt;trace&gt; --shiplet &lt;id&gt; --audience organization=conversation --audience email:dana@example.com=full</code></pre>
+<h2>Read a trace and continue it</h2>
+<p>Open a trace from the Shiplet's Traces panel to read the timeline, images, videos, and files. The page shows which level you are seeing. Your browser cannot write into Claude Code or Codex, so the viewer gives you two ways to continue:</p>
+<ul><li><strong>Copy prompt for your agent:</strong> paste it into your agent, which loads the trace over <a href="/docs/code-mode-mcp">Shiplet MCP</a>.</li><li><strong>Copy CLI command:</strong> <code>npx shiplet-cli trace pull &lt;trace&gt; --shiplet &lt;id&gt; --as context</code> prints an agent-ready handoff.</li></ul>
+<h2>Limits and retention</h2>
+<ul><li>The session itself can be up to 16 MiB per upload after masking. Files go up separately: up to 20 MiB each and 256 MiB per trace.</li><li>An organization can store up to 10 GiB of traces.</li><li>Deleting a trace or its Shiplet deletes its files. Traces of a Shiplet archived for more than 7 days are deleted.</li><li>API keys need the <code>traces:read</code> or <code>traces:write</code> scope. See <a href="/docs/api-keys">API keys</a>.</li></ul>
+<p><strong>Next:</strong> run <code>search</code> in <a href="/docs/code-mode-mcp">Code Mode MCP</a> for the trace operations, or read <a href="/docs/access-control">Access control</a>.</p>`,
+  },
+  {
     slug: "cli",
     title: "CLI setup and authentication",
     description: "Authorize a local CLI command in your browser with a short-lived session.",
@@ -332,7 +363,7 @@ shiplet --help</code></pre>
 <figure class="docs-figure"><img src="/brand/docs/agent-registration-flow.svg?v=2" alt="An agent reads Shiplet auth.md and asks for access. You approve one Shiplet organization, then the agent works with Shiplets and feedback through Code Mode MCP." width="1400" height="760" loading="lazy"><figcaption>You choose the Shiplet organization. Its membership, grants, and permissions bound every agent operation.</figcaption></figure>
 <h3>What the agent can do</h3>
 <p>The registered agent uses the same <code>search</code> and <code>execute</code> tools as any Code Mode client. It can discover Shiplet operations, publish or update Shiplets, and work with review feedback when its permissions allow those actions.</p>
-<p>Shiplet recognizes these agent permissions: <code>mcp</code>, <code>shiplets:read</code>, <code>shiplets:write</code>, <code>feedback:read</code>, and <code>feedback:write</code>. Current organization membership and Shiplet grants still apply to every request.</p>
+<p>Shiplet recognizes these agent permissions: <code>mcp</code>, <code>shiplets:read</code>, <code>shiplets:write</code>, <code>feedback:read</code>, <code>feedback:write</code>, <code>traces:read</code>, and <code>traces:write</code>. Current organization membership and Shiplet grants still apply to every request.</p>
 <h3>Approve access</h3>
 <ol><li>Give the agent <code>https://shiplet.cc/auth.md</code>.</li><li>Open the browser approval link it returns, sign in, and choose the Shiplet organization the agent can use.</li><li>Return to the agent after the approval page confirms access. The agent connects to <code>https://shiplet.cc/api/mcp</code>.</li></ol>
 <p>The registration remains a distinct agent actor in Shiplet's audit history. Your user identity records who approved it, and the selected organization sets the boundary for its work.</p>
@@ -386,6 +417,8 @@ shiplet --help</code></pre>
   <tr><td><code>shiplets:archive</code></td><td>Archive or restore authorized Shiplets.</td></tr>
   <tr><td><code>feedback:read</code></td><td>Read review feedback.</td></tr>
   <tr><td><code>feedback:write</code></td><td>Create replies and update feedback.</td></tr>
+  <tr><td><code>traces:read</code></td><td>Read traces (full agent session logs) shared with the key or uploaded by it.</td></tr>
+  <tr><td><code>traces:write</code></td><td>Upload traces, choose who can see them, and delete them.</td></tr>
   <tr><td><code>mcp</code></td><td>Use <code>/api/mcp</code>.</td></tr>
 </tbody></table>
 <p>Choose <strong>Only selected</strong> for a bounded job. A selected-project key cannot create a new Shiplet because the new identity has no pre-existing allow rule.</p>

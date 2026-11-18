@@ -1,0 +1,76 @@
+---
+title: "Traces"
+description: "Share the full log of an agent session and let colleagues read or continue it."
+---
+
+A **trace** is the full chat log of an agent session: your prompts, the agent's
+replies, and every tool call and result. Shiplet keeps traces next to the work
+they produced, so a reviewer can see how a change was made and a colleague can
+pick the session up in their own agent.
+
+Traces are behind the `traces` feature flag while they roll out. If a Shiplet's
+detail page has no **Traces** panel, they are not enabled on that server yet.
+The design and decisions are in `docs/traces-spec.md`; user flows are in
+`docs/traces-user-flows.md`.
+
+## Share the session you are in
+
+The easiest way is to ask your agent: "Share this session to Shiplet <name or
+id>" in Claude Code or Codex. From a terminal:
+
+```bash
+npx shiplet-cli trace share --current --shiplet <id>
+```
+
+- The CLI masks secrets on your computer before anything is sent, and the
+  server scans again on ingest.
+- Screenshots, videos, and PDFs the session produced are attached
+  automatically (up to 20 MiB each). `--no-files` leaves them out and
+  `--dry-run` shows what would be sent.
+- An MCP agent calls `createTraceUploadLink` and then runs
+  `npx shiplet-cli trace share --current --upload-url <link>`.
+- `--new` (instead of `--shiplet`) creates a trace-only Shiplet for a session
+  with no artifact: an ordinary Shiplet whose page is the trace viewer. Over
+  MCP, call `createTraceShiplet`, then `createTraceUploadLink`.
+- The dashboard drop zone accepts session `.jsonl` files and masks them in the
+  browser. It recommends asking your agent first.
+
+## Who sees what
+
+A new trace is private: only the uploader and the Shiplet owner can open it.
+Each audience (person, email, team, organization, link, or API key) gets a
+level:
+
+| Level | What that audience sees |
+| --- | --- |
+| Full | Everything except secrets. |
+| Conversation | Messages and tool steps, without tool output or reasoning. |
+| Summary | What was done, files touched, checks, and the outcome. No text. |
+
+The most specific audience wins. Organization administrators read every shared
+trace in full, but never private ones. Custom rules (`mask_terms`,
+`drop_paths`, `drop_kinds`, `drop_tools`, `drop_agents`, `drop_events`,
+`drop_attachments`, `truncate`) refine a level per audience.
+
+```bash
+npx shiplet-cli trace audiences <trace> --shiplet <id> \
+  --audience organization=conversation --audience email:dana@example.com=full
+npx shiplet-cli trace preview <trace> --shiplet <id> --level summary
+```
+
+## Read a trace and continue it
+
+The viewer at `/shiplets/<id>/traces/<trace>` shows the timeline, images,
+videos, and files at the reader's level. A browser cannot write into Claude Code
+or Codex, so the viewer offers **Copy prompt for your agent** (loads the trace
+over MCP with `getTraceContext`) and **Copy CLI command**
+(`npx shiplet-cli trace pull <trace> --shiplet <id> --as context`).
+
+## Limits and retention
+
+- 16 MiB per upload request after masking; files go up separately at 20 MiB
+  each and 256 MiB per trace; 10 GiB per organization.
+- Deleting a trace or its Shiplet deletes its stored objects. Traces of a
+  Shiplet archived for more than 7 days are deleted by the scheduled sweep.
+- API keys need `traces:read` or `traces:write`; CLI sessions need
+  `trace:read` or `trace:write`.

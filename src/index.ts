@@ -156,6 +156,14 @@ import {
   type RevisionKernelAuthorizationBinding,
   type ShipletActor,
 } from "./self-owned/revisions";
+import { ensureTraceSchema } from "./traces/schema";
+import { registerTraceRoutes } from "./traces/routes";
+import { deleteProjectTraceObjects, sweepArchivedShipletTraces } from "./traces/store";
+import { sweepExpiredUploadLinks } from "./traces/uploads";
+import { executeTraceCodeModeRequest, isTraceCodeModePath } from "./traces/codemode";
+import { BuildTraceOnlyViewerMount, BuildTraceViewerPage, TracesPanelMount } from "./platform/traces-page";
+import { isTraceOnlyShiplet, setTraceShipletCreator } from "./traces/trace-shiplets";
+import { TRACES_FLAG } from "./feature-flags";
 import {
   legacyStaticPackageEnvelopeBytes,
   migrateLegacyShipletRevision,
@@ -887,6 +895,7 @@ async function ensureKernelSchemas(db: D1Database) {
   await ensureD1TemporaryDeploymentAuthoritySchema(db);
   await ensureRevisionDeploymentCoordinatorSchema(db);
   await ensureManagedRuntimeKernelSchema(db);
+  await ensureTraceSchema(db);
 }
 
 const KERNEL_SCHEMA_EPOCH_TABLE = "shiplet_kernel_schema_epoch";
@@ -896,7 +905,10 @@ const KERNEL_SCHEMA_EPOCH_MARKER = "kernel";
 // 2: organization and team invite link tables.
 // 3: cli_authorization_requests.session_ttl_seconds for reusable CLI sessions.
 // 4: workos_membership_sync_state and the organization membership user index.
-const CURRENT_KERNEL_SCHEMA_EPOCH = 4;
+// 5: project_traces for agent session traces.
+// 6: trace audiences, variants, and pending attachments.
+// 7: trace upload links.
+const CURRENT_KERNEL_SCHEMA_EPOCH = 8;
 
 async function readKernelSchemaEpoch(db: D1Database): Promise<number | null> {
   const table = await db
@@ -4202,6 +4214,9 @@ async function deleteProjectPermanently(env: Env, project: Project) {
     } catch {
       cleanupIncomplete = true;
     }
+  }
+  if (!(await deleteProjectTraceObjects(env, project.id))) {
+    cleanupIncomplete = true;
   }
   return cleanupIncomplete;
 }
@@ -10017,6 +10032,10 @@ async function executeCodeModeRequest(
     throw new Response("Code Mode request path is not supported.", {
       status: 404,
     });
+  }
+
+  if (isTraceCodeModePath(request.path)) {
+    return executeTraceCodeModeRequest(env, context, request, appBaseUrl(env, "https://shiplet.cc/"));
   }
 
   if (request.path === "/api/organizations" && request.method === "POST") {
@@ -17004,6 +17023,48 @@ app.post("/api/shiplets", async (c) => {
   }
 });
 
+registerTraceRoutes(app);
+
+// Trace-only Shiplets (docs/traces-spec.md D19) are created through the same
+// publish path as every other Shiplet, with a page Shiplet writes as the
+// artifact.
+setTraceShipletCreator(async (env, { actor, organizationId, name, subdomain, html }) => {
+  const db = new D1QB(env.DB);
+  const bytes = new TextEncoder().encode(html);
+  let binary = "";
+  for (const byte of bytes) binary += String.fromCharCode(byte);
+  const payload: PublishShipletPayload = {
+    name,
+    subdomain,
+    visibility: "organization",
+    assets: [{ path: "index.html", content: btoa(binary) }],
+  } as PublishShipletPayload;
+  if (actor.kind === "token") {
+    requireOrganizationApiShipletCreationAccess(actor.token);
+    if (organizationId && organizationId !== actor.token.organization_id) {
+      throw new Response("This API key belongs to a different organization.", { status: 403 });
+    }
+    const result = await publishShipletForOrganization(
+      env,
+      db,
+      actor.token.created_by_user_id,
+      actor.token.organization_id,
+      { ...payload, organization_id: actor.token.organization_id } as PublishShipletPayload,
+      { kind: "agent", id: actor.token.id },
+    );
+    return result.project;
+  }
+  if (actor.kind !== "user") throw new Response("Sign in to share a session.", { status: 401 });
+  const result = await publishShiplet(
+    env,
+    db,
+    actor.user,
+    { ...payload, ...(organizationId ? { organization_id: organizationId } : {}) } as PublishShipletPayload,
+    { listOrganizationChoices: true },
+  );
+  return result.project;
+});
+
 app.get("/api/shiplets/:projectId/review-layer", async (c) => {
   try {
     const project = await getProjectById(c.env.DB, c.req.param("projectId"));
@@ -20442,6 +20503,32 @@ app.get("/shiplets/:projectId/review-layer/preview/:previewId", async (c) => {
   }
 });
 
+// The trace viewer (docs/traces-spec.md D15). The API decides what the
+// viewer may see; this page is only the shell.
+app.get("/shiplets/:projectId/traces/:traceId", async (c) => {
+  if (!useFeatureFlag(c.env, TRACES_FLAG)) return c.text("Not found", 404);
+  const user = await getCurrentUser(c.req.raw, c.env);
+  const project = await getProjectById(c.env.DB, c.req.param("projectId"));
+  const publicLink = project && (project.visibility === "public" || project.visibility === "unlisted");
+  if (!user && !publicLink) {
+    const url = new URL(c.req.url);
+    return c.redirect(`/auth/login?return_to=${encodeURIComponent(url.pathname)}`);
+  }
+  return c.html(
+    renderPage(
+      BuildTraceViewerPage({ nonce: kernelDocumentNonce(c), projectId: c.req.param("projectId"), traceId: c.req.param("traceId") }),
+      {
+        nonce: kernelDocumentNonce(c),
+        customDomain: c.env.CUSTOM_DOMAIN,
+        appUrl: appBaseUrl(c.env, c.req.url),
+        user,
+        title: "Trace · Shiplet",
+        indexing: "noindex",
+      },
+    ),
+  );
+});
+
 app.get("/shiplets/:projectId", async (c) => {
   try {
     const user = await getCurrentUser(c.req.raw, c.env);
@@ -20475,6 +20562,13 @@ app.get("/shiplets/:projectId", async (c) => {
           created: url.searchParams.get("created") === "1",
           canEditLifecycle,
           canPermanentlyDelete: isProjectOwner(project, user.id),
+          tracesPanel: useFeatureFlag(c.env, TRACES_FLAG)
+            ? TracesPanelMount({ nonce: kernelDocumentNonce(c), projectId: project.id, canEdit: canEditLifecycle })
+            : "",
+          traceOnlyViewer:
+            useFeatureFlag(c.env, TRACES_FLAG) && (await isTraceOnlyShiplet(c.env.DB, project.id))
+              ? BuildTraceOnlyViewerMount({ nonce: kernelDocumentNonce(c), projectId: project.id })
+              : "",
         }),
         {
           nonce: kernelDocumentNonce(c),
@@ -23476,6 +23570,13 @@ scheduledApp.scheduled = async (controller, environment, context) => {
       // unrelated database and OAuth reconciliation work in this cron run.
     }
     await autoInitializeDatabase(environment.DB);
+    try {
+      await sweepArchivedShipletTraces(environment, controller.scheduledTime);
+      await sweepExpiredUploadLinks(environment, controller.scheduledTime);
+    } catch {
+      // Traces of archived Shiplets are retried on the next run; the sweep is
+      // bounded and must not starve the work below.
+    }
     try {
       await sweepWorkOSMemberships(environment);
     } catch {

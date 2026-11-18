@@ -34,5 +34,22 @@ Draft writes require the expected `--version`; activation requires
 The CLI has no feedback list/reply/status commands: use the review link or
 [Feedback](https://shiplet.cc/feedback), with MCP and REST also supported for automation.
 
+## Share an agent session
+
+A trace is the full log of an agent session: your prompts, the agent's replies,
+and every tool call and result. From inside Claude Code or Codex, share the
+session you are in:
+
+```sh
+npx shiplet-cli trace share --current --shiplet <shiplet-id>
+npx shiplet-cli trace share --current --new --title "Fix the flaky test"
+```
+
+The CLI masks secrets before anything leaves your computer. New traces are
+private until you share them with `--audience`. Colleagues read them in the
+browser or load them into their own agent with
+`npx shiplet-cli trace pull <trace-id> --shiplet <shiplet-id> --as context`.
+See [Traces](https://shiplet.cc/docs/traces).
+
 See the [CLI guide](https://shiplet.cc/docs/cli) for all commands, session storage,
 scope restrictions, and trusted `--api-url` overrides.
