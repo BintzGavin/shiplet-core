@@ -6,6 +6,7 @@ import {
 import { describe, expect, it } from "vitest";
 
 import app from "../src/index";
+import { setCookiePairs, signInWithCode } from "./helpers/auth-flow";
 import {
   loadWorkspaceInviteLinksSeed,
   redeemInviteLinkUse,
@@ -339,12 +340,7 @@ async function signInThroughOrganization(
 ): Promise<Actor> {
   const suffix = crypto.randomUUID().replace(/-/g, "").slice(0, 16);
   const signInEmail = `invite-links-${label}-${suffix}@example.com`;
-  const callback = await request(
-    `/auth/callback?code=${encodeURIComponent(
-      `test-code:${organizationId}:${encodeURIComponent(signInEmail)}`,
-    )}`,
-    { redirect: "manual" },
-  );
+  const callback = await signInWithCode(request, `test-code:${organizationId}:${encodeURIComponent(signInEmail)}`);
   expect(callback.status).toBe(302);
   return {
     "x-shiplet-user-id": `user_${signInEmail
@@ -1845,8 +1841,11 @@ describe("invite link audit and sign-in", () => {
     const callback = await request(
       `/auth/callback?code=${encodeURIComponent(
         `test-code::${encodeURIComponent(signInEmail)}`,
-      )}&state=${encodeURIComponent(btoa(JSON.stringify({ returnTo })))}`,
-      { redirect: "manual" },
+      )}&state=${encodeURIComponent(state)}`,
+      {
+        headers: { cookie: setCookiePairs(login).join("; ") },
+        redirect: "manual",
+      },
     );
     expect(callback.status).toBe(302);
     expect(callback.headers.get("location")).toBe(returnTo);

@@ -35,7 +35,7 @@ then it lists only canonical, indexable HTML pages and excludes `llms.txt`, `ope
 Given a guide is added to or removed from the public documentation registry,
 when Shiplet builds the sitemap,
 then its canonical URL is added or removed automatically without maintaining a second list.
-The website-widget and browser-capture guides are included; retired WordPress and introduction aliases are excluded.
+The website-widget and browser-capture guides are included; retired guides and the introduction alias are excluded.
 
 Given a crawler follows any sitemap entry anonymously,
 when the page responds,

@@ -5,7 +5,7 @@ import { describe, expect, it } from "vitest";
 import { createStandaloneAssetPreviewIndex } from "../src/asset-preview";
 
 describe("standalone asset preview", () => {
-	it("Given a standalone image, when Shiplet generates its preview index, then the image is self-contained and fills the viewport without decorative framing", () => {
+	it("Given a standalone image, when Shiplet generates its preview index, then it shows the stored image filling the viewport without decorative framing", () => {
 		const imageBytes = "png-preview-bytes";
 		const preview = createStandaloneAssetPreviewIndex("Image preview", [
 			{
@@ -16,9 +16,12 @@ describe("standalone asset preview", () => {
 		]);
 		const html = Buffer.from(preview.content, "base64").toString("utf8");
 
+		expect(html).toContain('src="./CleanShot%202026-08-14.png"');
 		expect(html).toContain(
-			`src="data:image/png;base64,${Buffer.from(imageBytes).toString("base64")}"`,
+			'href="./CleanShot%202026-08-14.png?shiplet_download=1"',
 		);
+		expect(html).not.toContain("data:");
+		expect(html).not.toContain(Buffer.from(imageBytes).toString("base64"));
 		expect(html).toContain("height: 100dvh");
 		expect(html).toContain("width: 100%");
 		expect(html).toContain("object-fit: contain");
@@ -37,7 +40,7 @@ describe("standalone asset preview", () => {
 		["Ogg video", "review.ogv", "video/ogg", "video"],
 		["QuickTime video", "review.mov", "video/quicktime", "video"],
 	])(
-		"Given a standalone %s, when Shiplet generates its preview, then it uses a self-contained viewport media surface",
+		"Given a standalone %s, when Shiplet generates its preview, then it plays the stored file on a viewport media surface",
 		(_label, path, mediaType, element) => {
 			const content = Buffer.from(`${path}-bytes`).toString("base64");
 			const preview = createStandaloneAssetPreviewIndex("Media preview", [
@@ -46,7 +49,9 @@ describe("standalone asset preview", () => {
 			const html = Buffer.from(preview.content, "base64").toString("utf8");
 
 			expect(html).toContain(`<${element}`);
-			expect(html).toContain(`src="data:${mediaType};base64,${content}"`);
+			expect(html).toContain(`src="./${path}"`);
+			expect(html).not.toContain(`data:${mediaType}`);
+			expect(html).not.toContain(content);
 			expect(html).toContain("height: 100dvh");
 			expect(html).toContain("object-fit: contain");
 			expect(html).not.toContain('class="asset-card"');
@@ -54,7 +59,7 @@ describe("standalone asset preview", () => {
 		},
 	);
 
-	it("Given JSON with markup-shaped content, when Shiplet generates its preview, then it renders escaped readable text and a self-contained download", () => {
+	it("Given JSON with markup-shaped content, when Shiplet generates its preview, then it renders escaped readable text and downloads the stored file", () => {
 		const json = JSON.stringify({ title: "Map", note: "<script>alert(1)</script>" });
 		const preview = createStandaloneAssetPreviewIndex("No-index preview", [
 			{
@@ -69,11 +74,11 @@ describe("standalone asset preview", () => {
 		expect(html).toContain("&lt;script&gt;alert(1)&lt;/script&gt;");
 		expect(html).not.toContain("<script>alert(1)</script>");
 		expect(html).toContain(
-			`href="data:application/json;charset=utf-8;base64,${Buffer.from(json).toString("base64")}"`,
+			'href="./data/review.json?shiplet_download=1"',
 		);
 		expect(html).toContain('download="review.json"');
 		expect(html).toContain(">Download<");
-		expect(html).not.toContain('href="./data/review.json"');
+		expect(html).not.toContain("data:");
 		expect(html).not.toContain('class="asset-card"');
 	});
 
@@ -107,7 +112,8 @@ describe("standalone asset preview", () => {
 						.replace(/"/g, "&quot;")
 						.replace(/'/g, "&#39;");
 			expect(html).toContain(expectedSource);
-			expect(html).toContain("base64,");
+			expect(html).toContain(`href="./${path}?shiplet_download=1"`);
+			expect(html).not.toContain("base64,");
 			expect(html).toContain(">Download<");
 			expect(html).not.toContain('class="asset-card"');
 		},
@@ -122,7 +128,7 @@ describe("standalone asset preview", () => {
 		["LAZ point cloud", "survey.laz", "application/vnd.laszip"],
 		["GeoParquet", "parcels.parquet", "application/vnd.apache.parquet"],
 	])(
-		"Given a standalone %s file, when Shiplet cannot safely render it, then it shows metadata and a self-contained download",
+		"Given a standalone %s file, when Shiplet cannot safely render it, then it shows metadata and downloads the stored file",
 		(_label, path, mediaType) => {
 			const bytes = `${path}-binary`;
 			const content = Buffer.from(bytes).toString("base64");
@@ -133,9 +139,9 @@ describe("standalone asset preview", () => {
 
 			expect(html).toContain('class="asset-binary-preview"');
 			expect(html).toContain(`${Buffer.byteLength(bytes)} bytes`);
-			expect(html).toContain(
-				`href="data:${mediaType};base64,${content}"`,
-			);
+			expect(html).toContain(`href="./${path}?shiplet_download=1"`);
+			expect(html).not.toContain(`data:${mediaType}`);
+			expect(html).not.toContain(content);
 			expect(html).toContain(">Download<");
 			expect(html).not.toContain("<iframe");
 			expect(html).not.toContain('class="asset-card"');
@@ -158,5 +164,38 @@ describe("standalone asset preview", () => {
 		for (const path of ["roads.shp", "roads.shx", "roads.dbf", "roads.prj"]) {
 			expect(html).toContain(path);
 		}
+	});
+
+	it("Given several large text files, when Shiplet generates their preview, then the files share one bounded preview budget", () => {
+		const text = "x".repeat(600_000);
+		const preview = createStandaloneAssetPreviewIndex(
+			"Notes",
+			[0, 1, 2, 3].map((index) => ({
+				path: `notes/part-${index}.txt`,
+				content: Buffer.from(text).toString("base64"),
+				size: text.length,
+			})),
+		);
+		const html = Buffer.from(preview.content, "base64").toString("utf8");
+
+		expect(html.match(/class="asset-text-preview"/g)).toHaveLength(4);
+		expect(html.match(/Showing the first 131\.1 KB\./g)).toHaveLength(4);
+		expect(preview.size).toBeLessThan(600_000);
+	});
+
+	it("Given JSON that grows when it is formatted, when Shiplet generates its preview, then the formatted text stays within the preview budget", () => {
+		const json = JSON.stringify(Array.from({ length: 150_000 }, () => 0));
+		const preview = createStandaloneAssetPreviewIndex("Data", [
+			{
+				path: "data/zeros.json",
+				content: Buffer.from(json).toString("base64"),
+				size: json.length,
+			},
+		]);
+		const html = Buffer.from(preview.content, "base64").toString("utf8");
+
+		expect(html).toContain("[\n  0,\n  0,");
+		expect(html).toContain("Showing the first 524.3 KB.");
+		expect(preview.size).toBeLessThan(600_000);
 	});
 });

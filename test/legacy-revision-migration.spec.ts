@@ -1,12 +1,24 @@
 import { env } from "cloudflare:test";
 import { beforeAll, describe, expect, it } from "vitest";
+import { createStandaloneAssetPreviewIndex } from "../src/asset-preview";
 import { ensureSchema } from "../src/schema";
 import {
 	buildLegacyCompatibilityPackage,
+	legacyStaticPackageEnvelopeBytes,
 	migrateLegacyShipletRevision,
 } from "../src/self-owned/legacy-migration";
 import { ensureRevisionSchema } from "../src/self-owned/revisions";
-import { parseShipletPackage } from "../src/self-owned/package";
+import {
+	MAX_PACKAGE_BYTES,
+	parseShipletPackage,
+	serializeShipletPackage,
+} from "../src/self-owned/package";
+import { storeStaticAssets } from "../src/static-assets";
+import type { Project } from "../src/types";
+import {
+	MAX_STATIC_ASSET_FILES,
+	MAX_STATIC_ASSET_TOTAL_BYTES,
+} from "../src/upload-policy";
 
 const db = (env as Env).DB;
 
@@ -211,5 +223,98 @@ describe("representative legacy revision migration", () => {
 		]) {
 			expect(row?.package_json).not.toContain(`\"${forbidden}\"`);
 		}
+	});
+});
+
+describe("static upload package size before storage", () => {
+	async function insertStaticProject(prefix: string) {
+		const projectId = `${prefix}_${crypto.randomUUID()}`;
+		await insertLegacyProject({
+			id: projectId,
+			sourceType: "static",
+			visibility: "organization",
+		});
+		const project = await db
+			.prepare("SELECT * FROM projects WHERE id = ?")
+			.bind(projectId)
+			.first<Project>();
+		if (!project) throw new Error("static project was not inserted");
+		return project;
+	}
+
+	it("Given static files that are not stored yet, When their package size is computed, Then it equals the envelope migration serializes after storing them", async () => {
+		const bucket = (env as Env).SHIPLET_ASSETS;
+		for (const files of [
+			[
+				{ path: "index.html", text: "<!doctype html><h1>Sized</h1>" },
+				{ path: "styles/site.css", text: "body{color:#172243}" },
+				{ path: "data/points.json", text: '{"points":[1,2,3]}' },
+			],
+			[
+				{ path: "docs/index.html", text: "<!doctype html><h1>Nested</h1>" },
+				{
+					path: "images/café-logo.svg",
+					text: '<svg xmlns="http://www.w3.org/2000/svg"/>',
+				},
+			],
+		]) {
+			const project = await insertStaticProject("project_static_sized");
+			const assets = files.map(({ path, text }) => ({
+				path,
+				content: btoa(text),
+				size: new TextEncoder().encode(text).byteLength,
+			}));
+
+			const computed = await legacyStaticPackageEnvelopeBytes(project, assets);
+			await storeStaticAssets(db, bucket, project.id, assets);
+			const serialized = await serializeShipletPackage(
+				await buildLegacyCompatibilityPackage(db, project.id, bucket),
+			);
+
+			expect(computed).toBe(new TextEncoder().encode(serialized).byteLength);
+		}
+	});
+
+	it("Given the largest static upload the policy accepts, When its package size is computed, Then the advertised total fits the package envelope", async () => {
+		const project = await insertStaticProject("project_static_largest");
+		// Every file but index.html gets the longest path a portable package
+		// accepts: 1,024 UTF-8 bytes with the artifact/ prefix, in 347 characters.
+		const segment = "界".repeat(85);
+		const fileBytes = MAX_STATIC_ASSET_TOTAL_BYTES / MAX_STATIC_ASSET_FILES;
+		const assets = Array.from({ length: MAX_STATIC_ASSET_FILES }, (_, index) => ({
+			path:
+				index === 0
+					? "index.html"
+					: `${segment}/${segment}/${segment}/${"界".repeat(79)}ab-${String(index).padStart(3, "0")}.css`,
+			content: "",
+			size: fileBytes,
+		}));
+		expect(Number.isInteger(fileBytes)).toBe(true);
+		for (const asset of assets.slice(1)) {
+			expect(asset.path.length).toBeLessThanOrEqual(512);
+			expect(
+				new TextEncoder().encode(`artifact/${asset.path}`).byteLength,
+			).toBe(1_024);
+		}
+
+		expect(
+			await legacyStaticPackageEnvelopeBytes(project, assets),
+		).toBeLessThanOrEqual(MAX_PACKAGE_BYTES);
+	});
+
+	it("Given standalone text files at the advertised total, When Shiplet adds their file review page, Then the package still fits", async () => {
+		const project = await insertStaticProject("project_static_review_page");
+		const fileBytes = MAX_STATIC_ASSET_TOTAL_BYTES / 3;
+		const content = btoa("x".repeat(fileBytes));
+		const assets = [0, 1, 2].map((index) => ({
+			path: `notes/part-${index}.txt`,
+			content,
+			size: fileBytes,
+		}));
+		const reviewPage = createStandaloneAssetPreviewIndex(project.name, assets);
+
+		expect(
+			await legacyStaticPackageEnvelopeBytes(project, [reviewPage, ...assets]),
+		).toBeLessThanOrEqual(MAX_PACKAGE_BYTES);
 	});
 });

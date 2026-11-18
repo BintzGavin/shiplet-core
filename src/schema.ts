@@ -111,6 +111,7 @@ export async function ensureSchema(db: D1Database) {
 						approved_on TEXT,
 						exchanged_on TEXT,
 						exchange_marker TEXT UNIQUE,
+						session_ttl_seconds INTEGER,
 						created_on TEXT NOT NULL
 					)`,
 				),
@@ -168,6 +169,16 @@ export async function ensureSchema(db: D1Database) {
 					UNIQUE (organization_id, user_id),
 					FOREIGN KEY (organization_id) REFERENCES organizations(id),
 					FOREIGN KEY (user_id) REFERENCES users(id)
+				)`,
+			),
+		db
+			.prepare(
+				`CREATE TABLE IF NOT EXISTS workos_membership_sync_state (
+					id TEXT PRIMARY KEY,
+					cursor_user_id TEXT NOT NULL,
+					failing_user_id TEXT,
+					failure_count INTEGER NOT NULL DEFAULT 0,
+					updated_on TEXT NOT NULL
 				)`,
 			),
 		db
@@ -609,6 +620,10 @@ export async function ensureSchema(db: D1Database) {
 		name: "exchange_marker",
 		ddl: "exchange_marker TEXT",
 	});
+	await addColumnIfMissing(db, "cli_authorization_requests", {
+		name: "session_ttl_seconds",
+		ddl: "session_ttl_seconds INTEGER",
+	});
 	await addColumnIfMissing(db, "cli_sessions", {
 		name: "authorization_request_id",
 		ddl: "authorization_request_id TEXT",
@@ -709,6 +724,10 @@ export async function ensureSchema(db: D1Database) {
 		db.prepare(
 			`CREATE INDEX IF NOT EXISTS idx_workos_user_identities_user
 			 ON workos_user_identities(user_id, last_authenticated_on)`,
+		),
+		db.prepare(
+			`CREATE INDEX IF NOT EXISTS idx_organization_memberships_user
+			 ON organization_memberships(user_id)`,
 		),
 		db.prepare(
 			`CREATE INDEX IF NOT EXISTS idx_cli_authorization_expiry

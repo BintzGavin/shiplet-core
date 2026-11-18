@@ -87,7 +87,7 @@ access to article content.
 
 ## DOC-011 — compatibility and troubleshooting
 
-Given an existing static, external URL, review, WordPress, or API-key user, when
+Given an existing static, external URL, review, website-widget, or API-key user, when
 they read the new docs, then existing behavior remains findable. Given a path
 is denied, expired, conflicted, failed, revoked, or externally unavailable, the
 relevant guide explains the safe recovery or non-destructive outcome.

@@ -1211,6 +1211,7 @@ export async function createReviewFeedback(
 			null,
 			user,
 			payload.mentions,
+			{ agent: !user && eventActor?.kind === "agent" },
 		);
 	} else {
 		await notifyWatchersForReviewEvent(env, {
@@ -1756,6 +1757,7 @@ export async function createReviewReplyWithNotifications(
 			replyId,
 			user,
 			mentions,
+			{ agent: !user && eventActor?.kind === "agent" },
 		);
 	} else {
 		await notifyWatchersForReviewEvent(env, {

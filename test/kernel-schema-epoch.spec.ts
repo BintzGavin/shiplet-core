@@ -12,12 +12,16 @@ import app, { schemaInitializationTest } from "../src/index";
 // Pin the two together: when this digest changes, bump
 // CURRENT_KERNEL_SCHEMA_EPOCH in src/index.ts and update both values here.
 const PINNED_KERNEL_SCHEMA = {
-  epoch: 2,
-  digest: "fe68895f27cb6263350dc5f418b944f7f555475d001c54eed597190cc367ff8c",
+  epoch: 4,
+  digest: "9c42566a65cbd31f92fc4a9319771561fe70a56da74c7306bd3e51f28cd8b9b6",
 };
 
 // Releases up to v0.1.43 recorded epoch 1 before the invite link tables existed.
 const EPOCH_BEFORE_INVITE_LINKS = 1;
+// Releases before reusable CLI sessions recorded epoch 2.
+const EPOCH_BEFORE_REUSABLE_CLI_SESSIONS = 2;
+// Releases before WorkOS membership reconciliation recorded epoch 3.
+const EPOCH_BEFORE_MEMBERSHIP_SYNC = 3;
 const EPOCH_TABLE = "shiplet_kernel_schema_epoch";
 
 function db() {
@@ -99,6 +103,23 @@ describe("kernel schema epoch", () => {
     expect(marker?.epoch).toBe(schemaInitializationTest.currentEpoch);
   });
 
+  it("creates the membership sweep state table on a database that recorded the epoch from before it", async () => {
+    await request("/health");
+    await recordEpoch(EPOCH_BEFORE_MEMBERSHIP_SYNC);
+    await db().prepare("DROP TABLE IF EXISTS workos_membership_sync_state").run();
+    await db().prepare("DROP INDEX IF EXISTS idx_organization_memberships_user").run();
+
+    expect((await request(`/join/${"D".repeat(32)}`)).status).toBe(404);
+
+    expect(await tableExists("workos_membership_sync_state")).toBe(true);
+    const index = await db().prepare(
+      "SELECT name FROM sqlite_master WHERE type = 'index' AND name = ?",
+    )
+      .bind("idx_organization_memberships_user")
+      .first<{ name: string }>();
+    expect(index).not.toBeNull();
+  });
+
   it("pins the kernel schema to its epoch so schema changes cannot ship without a bump", async () => {
     // Force a full setup pass, then fingerprint what it created.
     await recordEpoch(0);
@@ -108,5 +129,24 @@ describe("kernel schema epoch", () => {
       epoch: schemaInitializationTest.currentEpoch,
       digest: await kernelSchemaDigest(),
     }).toEqual(PINNED_KERNEL_SCHEMA);
+  });
+
+  // Runs last: re-adding the column changes the stored table SQL, and with it
+  // the digest the pin above fingerprints.
+  it("adds the reusable CLI session lifetime column on a database that recorded the epoch from before it", async () => {
+    await request("/health");
+    await recordEpoch(EPOCH_BEFORE_REUSABLE_CLI_SESSIONS);
+    await db().prepare(
+      "ALTER TABLE cli_authorization_requests DROP COLUMN session_ttl_seconds",
+    ).run();
+
+    expect((await request(`/join/${"C".repeat(32)}`)).status).toBe(404);
+
+    const columns = await db().prepare(
+      "PRAGMA table_info(cli_authorization_requests)",
+    ).all<{ name: string }>();
+    expect(columns.results.map((column) => column.name)).toContain(
+      "session_ttl_seconds",
+    );
   });
 });

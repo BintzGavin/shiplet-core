@@ -2,13 +2,17 @@ import type { Env } from "./env";
 import type { Project } from "./types";
 import {
   getOrganizationMentionUser,
-  getShipletParticipation,
   newId,
   timestamps,
   type OrganizationMentionUserRecord,
   type ShipletUser,
 } from "./store";
-import type { ReviewMentionInput } from "./notifications";
+import {
+  getReviewMentionAuthority,
+  planReviewMentionTarget,
+  type ReviewMentionInput,
+  type ReviewMentionPlan,
+} from "./notifications";
 
 export const REVIEW_OPERATION_REQUEST_ID = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,255}$/;
 
@@ -353,29 +357,47 @@ type PlannedMention = {
   email: string;
   name: string | null;
   grantId: string | null;
+  createGrant: boolean;
   accessStatus: "active" | "invited";
 };
 
+// Every mention must resolve to a workspace member the actor may mention:
+// editors may mention (and so invite) any member, everyone else only members
+// who can already view. Any other mention fails with the same response, so a
+// rejection never tells a non-editor whether the person exists or is a member.
 async function resolveDurableReviewMentionMembers(
   db: D1Database,
   project: Project,
+  actor: Pick<ShipletUser, "id" | "email">,
   mentions: ReviewMentionInput[],
 ) {
   if (mentions.length === 0) return [];
   if (!project.organization_id) {
     throw new Response("Invalid review mentions", { status: 400 });
   }
-  const members: OrganizationMentionUserRecord[] = [];
+  const authority = await getReviewMentionAuthority(db, project, actor);
+  const members: Array<{
+    member: OrganizationMentionUserRecord;
+    plan: ReviewMentionPlan;
+  }> = [];
   for (const mention of mentions) {
-    const member = await getOrganizationMentionUser(
-      db,
-      project.organization_id,
-      mention,
-    );
-    if (!member) {
+    const member =
+      authority === "none"
+        ? null
+        : await getOrganizationMentionUser(
+            db,
+            project.organization_id,
+            mention,
+          );
+    const plan = member
+      ? await planReviewMentionTarget(db, project, authority, member)
+      : null;
+    if (!member || !plan) {
       throw new Response("Invalid review mentions", { status: 400 });
     }
-    if (!members.some((item) => item.id === member.id)) members.push(member);
+    if (!members.some((item) => item.member.id === member.id)) {
+      members.push({ member, plan });
+    }
   }
   return members;
 }
@@ -383,9 +405,10 @@ async function resolveDurableReviewMentionMembers(
 export async function requireDurableReviewMentionRecipients(
   db: D1Database,
   project: Project,
+  actor: Pick<ShipletUser, "id" | "email">,
   mentions: ReviewMentionInput[],
 ) {
-  await resolveDurableReviewMentionMembers(db, project, mentions);
+  await resolveDurableReviewMentionMembers(db, project, actor, mentions);
 }
 
 async function planMentions(
@@ -398,16 +421,17 @@ async function planMentions(
   const members = await resolveDurableReviewMentionMembers(
     env.DB,
     project,
+    actor,
     mentions,
   );
-  for (const member of members) {
-    const participation = await getShipletParticipation(env.DB, project, member);
+  for (const { member, plan } of members) {
     planned.push({
       userId: member.id,
       email: member.email,
       name: [member.first_name, member.last_name].filter(Boolean).join(" ") || null,
-      grantId: participation.grant_id || (participation.status === "none" ? newId("grant") : null),
-      accessStatus: participation.status === "active" ? "active" : "invited",
+      grantId: plan.createGrant ? newId("grant") : plan.grantId,
+      createGrant: plan.createGrant,
+      accessStatus: plan.accessStatus,
     });
   }
   return planned;
@@ -484,7 +508,7 @@ export async function buildDurableReviewSideEffects(
   const mentionIds: string[] = [];
   const notificationKeys: string[] = [];
   for (const mention of mentions) {
-    if (mention.grantId) {
+    if (mention.createGrant) {
       statements.push(
         env.DB.prepare(
           `INSERT OR IGNORE INTO shiplet_access_grants
@@ -777,7 +801,7 @@ export async function completeDurableThreadOperation(
     ),
   );
   for (const mention of mentions) {
-    if (mention.grantId) {
+    if (mention.createGrant) {
       statements.push(
         env.DB.prepare(
           `INSERT OR IGNORE INTO shiplet_access_grants

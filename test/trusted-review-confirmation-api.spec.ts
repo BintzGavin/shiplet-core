@@ -167,6 +167,95 @@ describe("managed trusted review confirmation", () => {
     expect(organization.id).toMatch(/^org_/);
   });
 
+  it("rejects a non-editor's managed mention of a member without access exactly like an unknown recipient", async () => {
+    const { organization, project, revisionId, pageUrl } = await fixture();
+    const identity = (label: string) => ({
+      "x-shiplet-user-id": `user_managed_${label}_${crypto.randomUUID()}`,
+      "x-shiplet-user-email": `managed-${label}-${crypto.randomUUID()}@example.com`,
+    });
+    const viewer = identity("viewer");
+    const target = identity("target");
+    const colleague = identity("colleague");
+    const now = new Date().toISOString();
+    for (const user of [viewer, target, colleague]) {
+      expect(
+        (
+          await request("/api/organizations", {
+            method: "POST",
+            headers: { "Content-Type": "application/json", ...user },
+            body: JSON.stringify({ name: `Managed identity ${crypto.randomUUID()}` }),
+          })
+        ).status,
+      ).toBe(201);
+      await (env as Env).DB.prepare(
+        `INSERT INTO organization_memberships
+         (id, organization_id, user_id, role, created_on)
+         VALUES (?, ?, ?, 'member', ?)`,
+      )
+        .bind(`membership_${crypto.randomUUID()}`, organization.id, user["x-shiplet-user-id"], now)
+        .run();
+    }
+    for (const [user, role] of [[viewer, "viewer"], [colleague, "reviewer"]] as const) {
+      await (env as Env).DB.prepare(
+        `INSERT INTO shiplet_access_grants
+         (id, project_id, organization_id, target_type, target_id, email, role,
+          invited_by_user_id, workos_invitation_id, created_on, accepted_on)
+         VALUES (?, ?, ?, 'user', ?, ?, ?, ?, NULL, ?, ?)`,
+      )
+        .bind(
+          `grant_${crypto.randomUUID().replace(/-/g, "")}`,
+          project.id,
+          organization.id,
+          user["x-shiplet-user-id"],
+          user["x-shiplet-user-email"],
+          role,
+          OWNER["x-shiplet-user-id"],
+          now,
+          now,
+        )
+        .run();
+    }
+    const confirm = (userId: string) =>
+      request("/review/confirm", {
+        method: "POST",
+        headers: {
+          Origin: "http://localhost",
+          "Content-Type": "application/x-www-form-urlencoded",
+          ...viewer,
+        },
+        body: new URLSearchParams({
+          request_id: `request_${crypto.randomUUID()}`,
+          operation: "feedback.create",
+          comment: "Managed viewer mention",
+          page_url: pageUrl,
+          client_feedback_id: `managed-${crypto.randomUUID()}`,
+          shiplet_id: project.id,
+          revision_id: revisionId,
+          mentions_json: JSON.stringify([{ userId }]),
+        }),
+      });
+    for (const userId of [
+      target["x-shiplet-user-id"],
+      `user_managed_unknown_${crypto.randomUUID()}`,
+    ]) {
+      const rejected = await confirm(userId);
+      expect(rejected.status).toBe(400);
+      expect(await rejected.text()).toBe("Invalid review mentions");
+    }
+    expect((await confirm(colleague["x-shiplet-user-id"])).status).toBe(200);
+    expect(
+      await (env as Env).DB.prepare(
+        `SELECT
+         (SELECT COUNT(*) FROM embed_review_operation_intents
+          WHERE project_id = ? AND actor_user_id = ?) AS intents,
+         (SELECT COUNT(*) FROM shiplet_access_grants
+          WHERE project_id = ? AND target_id = ?) AS grants`,
+      )
+        .bind(project.id, viewer["x-shiplet-user-id"], project.id, target["x-shiplet-user-id"])
+        .first(),
+    ).toEqual({ intents: 1, grants: 0 });
+  });
+
   it("rolls back a legacy receipt and every attributed effect when activation changes at commit time", async () => {
     const { project, revisionId, pageUrl } = await fixture();
     const installationId = `legacy_installation_${crypto.randomUUID()}`;

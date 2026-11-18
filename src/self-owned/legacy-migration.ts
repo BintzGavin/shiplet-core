@@ -1,8 +1,11 @@
+import type { AssetFile } from "../resource";
+import { staticAssetContentTypeForPath } from "../static-asset-types";
 import type { Project } from "../types";
 import { MAX_STATIC_ASSET_FILE_BYTES } from "../upload-policy";
 import {
 	SHIPLET_PACKAGE_MEDIA_TYPE,
 	parseShipletPackage,
+	shipletPackageEnvelopeBytes,
 	type ShipletPackageFile,
 	type ValidatedShipletPackage,
 } from "./package";
@@ -208,6 +211,47 @@ export async function buildLegacyCompatibilityPackage(
 	const files = await Promise.all(
 		(assetRows.results || []).map((asset) => assetFile(asset, bucket)),
 	);
+	return parseShipletPackage(
+		await legacyCompatibilityPackageInput(project, files),
+	);
+}
+
+/**
+ * Serialized envelope size of the compatibility package that
+ * migrateLegacyShipletRevision builds once these static assets are stored, so
+ * a publish can be refused before anything is written. Base64 contents are
+ * counted by length instead of being copied.
+ */
+export async function legacyStaticPackageEnvelopeBytes(
+	project: LegacyProject,
+	assets: readonly AssetFile[],
+) {
+	const files = assets.map(
+		(asset): ShipletPackageFile => ({
+			path: `artifact/${asset.path.replace(/^\/+/, "")}`,
+			mediaType: staticAssetContentTypeForPath(asset.path),
+			encoding: "base64",
+			content: "",
+			// Only the length matters: a SHA-256 hex digest is 64 characters.
+			sha256: "0".repeat(64),
+			size: asset.size,
+		}),
+	);
+	const base64Bytes = assets.reduce(
+		(total, asset) => total + Math.ceil(asset.size / 3) * 4,
+		0,
+	);
+	return (
+		shipletPackageEnvelopeBytes(
+			await legacyCompatibilityPackageInput(project, files),
+		) + base64Bytes
+	);
+}
+
+async function legacyCompatibilityPackageInput(
+	project: LegacyProject,
+	files: ShipletPackageFile[],
+) {
 	// A dashboard upload can be a complete page with any HTML filename.
 	// Keep its original path so links and revision exports retain that filename.
 	const htmlEntry =
@@ -247,7 +291,7 @@ export async function buildLegacyCompatibilityPackage(
 	}
 	files.push(...(await generatedContractFiles(project, artifactEntrypoint)));
 
-	return parseShipletPackage({
+	return {
 		mediaType: SHIPLET_PACKAGE_MEDIA_TYPE,
 		manifest: {
 			schemaVersion: "shiplet.package/v1",
@@ -267,7 +311,7 @@ export async function buildLegacyCompatibilityPackage(
 			staticFirst: project.source_type !== "worker",
 		},
 		files,
-	});
+	};
 }
 
 async function activeRevision(

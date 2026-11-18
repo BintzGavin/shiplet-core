@@ -3,6 +3,19 @@ import { deflateSync } from "node:zlib";
 
 import { expect, type APIRequestContext, type Page } from "@playwright/test";
 
+/**
+ * Headless Chrome 155 routes synthesized pointer input aimed at the bottom
+ * ~86px of the viewport over an out-of-process (cross-site) iframe to the
+ * parent page's <iframe> element instead of into the frame, so clicks on a
+ * docked review widget never reach it. Headed Chrome and older headless
+ * builds deliver the same clicks into the frame. Keeping cross-site frames
+ * in-process restores real-browser input routing; origins, postMessage
+ * checks and storage partitioning are unchanged.
+ */
+export const crossSiteFrameInputLaunchOptions = {
+	args: ["--disable-site-isolation-trials"],
+};
+
 const e2eBaseURL = "http://localhost:8787";
 const controlPlaneOrigin = new URL(e2eBaseURL).origin;
 
@@ -50,7 +63,8 @@ export async function loginAs(
 	user: E2EUser,
 	options: { organizationId?: string; returnTo?: string } = {},
 ) {
-	await page.goto(authCallbackPath(user, options), { waitUntil: "networkidle" });
+	const callbackPath = await startSignIn(page.request, user, options);
+	await page.goto(callbackPath, { waitUntil: "networkidle" });
 	if (options.returnTo) {
 		await expect(page).toHaveURL(
 			new RegExp(`${escapeRegex(options.returnTo)}(?:$|[?#])`),
@@ -63,9 +77,8 @@ export async function establishMembership(
 	organizationId: string,
 	user: E2EUser,
 ) {
-	const response = await request.get(authCallbackPath(user, { organizationId }), {
-		maxRedirects: 0,
-	});
+	const callbackPath = await startSignIn(request, user, { organizationId });
+	const response = await request.get(callbackPath, { maxRedirects: 0 });
 	expect(response.status()).toBe(302);
 }
 
@@ -197,20 +210,38 @@ export function largePngBuffer(options: { minBytes?: number; maxBytes?: number }
 	throw new Error("Unable to generate a large PNG within the requested size.");
 }
 
-function authCallbackPath(
+/**
+ * Starts sign-in at /auth/login the way a browser does, so Shiplet binds the
+ * AuthKit state to this context's cookies, and returns the callback path that
+ * AuthKit would redirect to. The request context must share the cookie jar
+ * that will follow the callback (page.request for a page).
+ */
+async function startSignIn(
+	request: APIRequestContext,
 	user: E2EUser,
 	options: { organizationId?: string; returnTo?: string } = {},
 ) {
-	const code = `test-code:${options.organizationId || ""}:${encodeURIComponent(user.email)}`;
-	const params = new URLSearchParams({ code });
-	if (options.returnTo) {
-		params.set(
-			"state",
-			Buffer.from(JSON.stringify({ returnTo: options.returnTo })).toString(
-				"base64",
-			),
-		);
-	}
+	const authorize = async (accountAction?: "add") => {
+		const params = new URLSearchParams();
+		if (options.returnTo) params.set("return_to", options.returnTo);
+		// A context that is already signed in skips AuthKit unless it is adding
+		// an account, as a browser switching users would.
+		if (accountAction) params.set("account_action", accountAction);
+		const query = params.toString();
+		const response = await request.get(`/auth/login${query ? `?${query}` : ""}`, {
+			maxRedirects: 0,
+		});
+		const location = response.headers()["location"] || "";
+		return response.status() === 302 && location.startsWith("https://authkit.test/")
+			? new URL(location)
+			: null;
+	};
+	const authorizationUrl = (await authorize()) ?? (await authorize("add"));
+	if (!authorizationUrl) throw new Error("/auth/login did not redirect to AuthKit");
+	const params = new URLSearchParams({
+		code: `test-code:${options.organizationId || ""}:${encodeURIComponent(user.email)}`,
+		state: authorizationUrl.searchParams.get("state") || "",
+	});
 	return `/auth/callback?${params.toString()}`;
 }
 

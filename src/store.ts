@@ -656,18 +656,57 @@ export async function listProjectsForUser(
   return result.results || [];
 }
 
+// SQL form of canViewProject for a row of the project's own organization
+// members. Expects `users` and `organization_memberships` in scope and binds
+// the project ID once. Keep it in step with canViewProject.
+export const ORGANIZATION_MEMBER_CAN_VIEW_PROJECT_SQL = `EXISTS (
+  SELECT 1 FROM projects viewable_project
+  WHERE viewable_project.id = ?
+    AND viewable_project.organization_id = organization_memberships.organization_id
+    AND (
+      viewable_project.visibility IN ('public', 'unlisted', 'organization')
+      OR viewable_project.owner_user_id = users.id
+      OR lower(trim(organization_memberships.role)) IN ('admin', 'owner')
+      OR EXISTS (
+        SELECT 1 FROM shiplet_access_grants viewable_grant
+        WHERE viewable_grant.project_id = viewable_project.id
+          AND viewable_grant.target_type = 'user'
+          AND viewable_grant.target_id = users.id
+      )
+      OR EXISTS (
+        SELECT 1 FROM shiplet_access_grants viewable_grant
+        WHERE viewable_grant.project_id = viewable_project.id
+          AND viewable_grant.target_type = 'organization'
+          AND viewable_grant.target_id = viewable_project.organization_id
+      )
+      OR EXISTS (
+        SELECT 1 FROM shiplet_access_grants viewable_grant
+        JOIN team_memberships viewable_team
+          ON viewable_team.team_id = viewable_grant.target_id
+        WHERE viewable_grant.project_id = viewable_project.id
+          AND viewable_grant.target_type = 'team'
+          AND viewable_team.user_id = users.id
+      )
+    )
+)`;
+
 export async function listOrganizationMentionUsers(
   db: D1Database,
   organizationId: string,
   query = "",
   limit = 20,
+  options: { viewersOfProjectId?: string } = {},
 ) {
   const normalizedQuery = query.trim().toLowerCase();
   const cappedLimit = Math.min(Math.max(limit, 1), 50);
   const bindings: Array<string | number> = [organizationId];
   let searchClause = "";
+  if (options.viewersOfProjectId) {
+    searchClause += `AND ${ORGANIZATION_MEMBER_CAN_VIEW_PROJECT_SQL}\n`;
+    bindings.push(options.viewersOfProjectId);
+  }
   if (normalizedQuery) {
-    searchClause = `AND (
+    searchClause += `AND (
 			lower(users.email) LIKE ?
 			OR lower(COALESCE(users.first_name, '')) LIKE ?
 			OR lower(COALESCE(users.last_name, '')) LIKE ?

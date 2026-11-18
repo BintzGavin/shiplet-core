@@ -1,7 +1,10 @@
 import type { Env } from "./env";
 import type { Project } from "./types";
 import {
+	canEditProject,
+	canViewProject,
 	createShipletGrant,
+	getOrganizationMembership,
 	getOrganizationMentionUser,
 	getShipletParticipation,
 	newId,
@@ -96,6 +99,61 @@ export function normalizeMentionInputs(value: unknown): ReviewMentionInput[] {
 	return mentions;
 }
 
+// "invite": the author has editor authority on the Shiplet, so a mention may
+// grant a workspace member access. "notify": the author is a workspace member
+// (or an agent credential acting for the workspace) and may only notify people
+// who can already view. "none": mentions have no effect.
+export type ReviewMentionAuthority = "invite" | "notify" | "none";
+
+export type ReviewMentionPlan = {
+	accessStatus: "active" | "invited";
+	grantId: string | null;
+	createGrant: boolean;
+};
+
+export async function getReviewMentionAuthority(
+	db: D1Database,
+	project: Project,
+	actor: Pick<ShipletUser, "id" | "email"> | null,
+	options: { agent?: boolean } = {},
+): Promise<ReviewMentionAuthority> {
+	if (!project.organization_id) return "none";
+	if (!actor) return options.agent ? "notify" : "none";
+	if (await canEditProject(db, project, actor)) return "invite";
+	const membership = await getOrganizationMembership(
+		db,
+		project.organization_id,
+		actor.id,
+	);
+	return membership ? "notify" : "none";
+}
+
+// Returns null when the mention must have no effect at all: no mention record,
+// no grant, no notification, and nothing that distinguishes the target from an
+// unknown person.
+export async function planReviewMentionTarget(
+	db: D1Database,
+	project: Project,
+	authority: ReviewMentionAuthority,
+	member: Pick<ShipletUser, "id" | "email">,
+): Promise<ReviewMentionPlan | null> {
+	if (authority === "none") return null;
+	const participation = await getShipletParticipation(db, project, member);
+	if (authority === "invite") {
+		return {
+			accessStatus: participation.status === "active" ? "active" : "invited",
+			grantId: participation.grant_id || null,
+			createGrant: participation.status === "none",
+		};
+	}
+	if (!(await canViewProject(db, project, member.id))) return null;
+	return {
+		accessStatus: participation.status === "invited" ? "invited" : "active",
+		grantId: participation.grant_id || null,
+		createGrant: false,
+	};
+}
+
 export async function createReviewMentionsAndNotifications(
 	env: Env,
 	project: Project,
@@ -103,12 +161,20 @@ export async function createReviewMentionsAndNotifications(
 	replyId: string | null,
 	actor: ShipletUser | null,
 	mentions: ReviewMentionInput[],
+	options: { agent?: boolean } = {},
 ) {
 	if (!project.organization_id || mentions.length === 0) return [];
 	const created: ReviewMentionRecord[] = [];
 	const mentionedUserIds = new Set<string>();
+	const authority = await getReviewMentionAuthority(
+		env.DB,
+		project,
+		actor,
+		options,
+	);
 
 	for (const mention of mentions) {
+		if (authority === "none") break;
 		const member = await getOrganizationMentionUser(env.DB, project.organization_id, {
 			userId: mention.userId || null,
 			email: mention.email || null,
@@ -116,6 +182,13 @@ export async function createReviewMentionsAndNotifications(
 		if (!member) {
 			continue;
 		}
+		const plan = await planReviewMentionTarget(
+			env.DB,
+			project,
+			authority,
+			member,
+		);
+		if (!plan) continue;
 
 		const mentionRecord = await createMentionForMember(
 			env,
@@ -124,6 +197,7 @@ export async function createReviewMentionsAndNotifications(
 			replyId,
 			actor,
 			member,
+			plan,
 		);
 		created.push(mentionRecord);
 		mentionedUserIds.add(member.id);
@@ -305,15 +379,14 @@ async function createMentionForMember(
 	replyId: string | null,
 	actor: ShipletUser | null,
 	member: OrganizationMentionUserRecord,
+	plan: ReviewMentionPlan,
 ) {
 	const now = timestamps.now();
-	const participation = await getShipletParticipation(env.DB, project, member);
-	let accessStatus: ReviewMentionAccessStatus =
-		participation.status === "active" ? "active" : "invited";
-	let grantId = participation.grant_id || null;
+	let accessStatus: ReviewMentionAccessStatus = plan.accessStatus;
+	let grantId = plan.grantId;
 	let inviteError: string | null = null;
 
-	if (participation.status === "none") {
+	if (plan.createGrant) {
 		try {
 			const grant = await createShipletGrant(env.DB, {
 				id: newId("grant"),

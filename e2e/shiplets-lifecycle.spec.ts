@@ -3,11 +3,18 @@ import { expect, test } from "@playwright/test";
 import {
 	collectPageErrors,
 	createOrganization,
+	crossSiteFrameInputLaunchOptions,
 	expectNoPageErrors,
 	loginAs,
 	publishStaticShiplet,
 	testUser,
 } from "./helpers";
+
+// The uploaded artifact runs in an opaque-origin sandboxed frame, which
+// Chrome isolates like a cross-site frame. After Playwright scrolls the
+// button into view, headless Chrome can deliver the click to the parent page
+// instead of the frame.
+test.use({ launchOptions: crossSiteFrameInputLaunchOptions });
 
 test.describe("publish and shiplets lifecycle", () => {
 	test("publishes an uploaded shiplet and lists it on the shiplets page", async ({

@@ -338,6 +338,14 @@ test("embedded canonical pin keeps the trusted thread inside a nearby iframe", a
 
     await page.setViewportSize({ width: 390, height: 844 });
     await expect(card).toBeVisible();
+    // The widget re-lays out on the page's resize event, which Chrome
+    // dispatches on a later frame than setViewportSize resolves.
+    await expect
+      .poll(async () => {
+        const box = await widget.locator("iframe").boundingBox();
+        return box ? box.x + box.width : Number.POSITIVE_INFINITY;
+      })
+      .toBeLessThanOrEqual(390);
     const narrowBox = await widget.locator("iframe").boundingBox();
     expect(narrowBox!.x).toBeGreaterThanOrEqual(0);
     expect(narrowBox!.y).toBeGreaterThanOrEqual(0);

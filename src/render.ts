@@ -4913,13 +4913,16 @@ export const DashboardRuntimeScript = (nonce: KernelDocumentNonce) => `
           payload.email = qs("shareEmail").value.trim();
           if (!payload.email) return;
         }
-        await requestJson("/api/projects/" + encodeURIComponent(projectId) + "/invitations", {
+        var shared = await requestJson("/api/projects/" + encodeURIComponent(projectId) + "/invitations", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify(payload)
         });
         if (qs("shareEmail")) qs("shareEmail").value = "";
-        if (qs("shareResult")) qs("shareResult").innerHTML = "<div class=\\"banner banner-success\\">Invite sent. The reviewer can open the shared shiplet and leave feedback.</div>";
+        var shareMessage = shared && shared.delivery === "invited"
+          ? "Invite sent. The reviewer can open the shared shiplet and leave feedback."
+          : "Access granted. They can open the shared shiplet and leave feedback now.";
+        if (qs("shareResult")) qs("shareResult").innerHTML = "<div class=\\"banner banner-success\\">" + shareMessage + "</div>";
         setStatus("Shiplet access updated.", "success");
       } catch (error) {
         showError(error, "shareResult");
@@ -5635,10 +5638,10 @@ export const BuildSettingsPage = (nonce: KernelDocumentNonce) => `
       <section class="success-card shiplet-panel" id="agents">
         <div class="agent-auth-recommendation">
           <span class="auth-recommendation">Recommended for agent work</span>
-          <h2>Connect with MCP</h2>
-          <p>Code Mode MCP is the preferred route for agent work. Connect your MCP client and approve access in your browser.</p>
-          <a class="btn btn-primary" href="/docs/code-mode-mcp">Set up MCP</a>
-          <p>For local command-line workflows, use <a href="/docs/cli">CLI authentication</a>.</p>
+          <h2>Start with the CLI</h2>
+          <p>The CLI is the recommended route for local and agent workflows. It runs without a custom MCP server. Approve access in your browser.</p>
+          <a class="btn btn-primary" href="/docs/cli">Set up the CLI</a>
+          <p>For API discovery and other operations, use optional <a href="/docs/code-mode-mcp">Code Mode MCP</a>.</p>
         </div>
         <span class="success-card-label">Dock crew</span>
         <h2>${glyph("plug", "section-glyph")}API Keys and MCP</h2>

@@ -5,8 +5,10 @@ import {
   trustedReviewHostScript,
   trustedReviewHostStyles,
 } from "../src/trusted-review-host";
+import { crossSiteFrameInputLaunchOptions } from "./helpers";
 
 test.use({
+  launchOptions: crossSiteFrameInputLaunchOptions,
   viewport: { width: 1080, height: 760 },
   screenshot: "off",
   trace: "off",
@@ -99,6 +101,16 @@ function bridgeScript() {
       port.addEventListener("message", (event) => {
         const command = event.data;
         if (!command || command.protocol !== "shiplet.artifact.capture.command.v1" || command.type !== "start") return;
+        // Mirror the real bridge: acknowledge selection readiness before the
+        // simulated element click delivers its capture result.
+        port.postMessage({
+          protocol: "shiplet.artifact.capture.state.v1",
+          type: "ready",
+          channelNonce: nonce,
+          shipletId,
+          revisionId,
+          requestId: command.requestId
+        });
         port.postMessage({
           protocol: "shiplet.artifact.capture.result.v1",
           type: "result",
@@ -695,7 +707,7 @@ test("keeps new-comment context on failure and confirmation, while explicit Canc
   await expect(mentions).toBeVisible();
   await mentions.selectOption("user_reviewer");
   await composer.getByRole("button", { name: "Draw on screenshot", exact: true }).first().click();
-  const canvas = page.getByRole("img", { name: "Screenshot drawing canvas" }).or(page.locator("[data-shiplet-annotation-canvas]"));
+  const canvas = page.locator('canvas[aria-label="Screenshot drawing canvas"][data-shiplet-annotation-canvas="v1"]');
   const box = await canvas.boundingBox();
   if (!box) throw new Error("Drawing canvas unavailable");
   await page.mouse.move(box.x + 80, box.y + 100);

@@ -141,8 +141,13 @@ describe("browser login session reuse", () => {
 		const project = await privateProject(owner.userId);
 		await pendingInvitation(project.id, owner.userId, invitee.userId);
 		const response = await request(`/auth/login?return_to=${encodeURIComponent(`/shiplets/${project.id}`)}`, { Cookie: invitee.cookie });
-		expect(response.status).toBe(200);
-		expect(await response.text()).toContain("Accept invitation");
+		expect(response.status).toBe(302);
+		const consentUrl = new URL(response.headers.get("location")!);
+		expect(consentUrl.origin).toBe(new URL(runtime.SHIPLET_APP_URL!).origin);
+		expect(consentUrl.searchParams.get("consent")).toBeTruthy();
+		const consent = await request(`${consentUrl.pathname}${consentUrl.search}`, { Cookie: invitee.cookie });
+		expect(consent.status).toBe(200);
+		expect(await consent.text()).toContain("Accept invitation and open Shiplet");
 	});
 
 	it("Given an authorized browser and another pending invite, when login resumes, then invitation handling adds no confirmation", async () => {

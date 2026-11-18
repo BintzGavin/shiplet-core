@@ -1,7 +1,30 @@
 const CLI_CODE_PREFIX = "shiplet_cli_code_";
 const CLI_SESSION_PREFIX = "shiplet_cli_session_";
 const REQUEST_TTL_MS = 5 * 60_000;
-const SESSION_TTL_MS = 10 * 60_000;
+// A command session lives for one CLI command and is revoked when it finishes.
+const COMMAND_SESSION_TTL_MS = 10 * 60_000;
+// A reusable session is cached by the CLI between commands. The CLI asks for a
+// lifetime; the server clamps it to these bounds whatever the CLI sends.
+export const REUSABLE_SESSION_MIN_TTL_SECONDS = 5 * 60;
+export const REUSABLE_SESSION_DEFAULT_TTL_SECONDS = 2 * 60 * 60;
+export const REUSABLE_SESSION_MAX_TTL_SECONDS = 8 * 60 * 60;
+const TTL_PATTERN = /^[0-9]{1,6}$/;
+const COMMAND_SESSION_SCOPES = [
+  "revision:read",
+  "revision:write",
+  "deployment:write",
+  "session:revoke",
+];
+// A reusable session carries deployment:write, so deploy, promote and rollback
+// run on the cached approval. Each still needs the CLI's explicit --approve
+// and the kernel's own approval rules; the server caps the lifetime above.
+const REUSABLE_SESSION_SCOPES = [
+  "revision:read",
+  "revision:write",
+  "deployment:write",
+  "session:read",
+  "session:revoke",
+];
 const STATE_PATTERN = /^[A-Za-z0-9_-]{32,256}$/;
 const CHALLENGE_PATTERN = /^[A-Za-z0-9_-]{43}$/;
 const VERIFIER_PATTERN = /^[A-Za-z0-9._~-]{43,128}$/;
@@ -17,6 +40,7 @@ type AuthorizationRow = {
   approved_on: string | null;
   exchanged_on: string | null;
   exchange_marker: string | null;
+  session_ttl_seconds: number | null;
 };
 
 async function sha256Hex(value: string) {
@@ -63,6 +87,20 @@ export function normalizeCliLoopbackRedirect(value: unknown) {
   }
 }
 
+/**
+ * Parses the optional `session_ttl` authorization parameter. Absent means a
+ * single-command session; present means a reusable session clamped to the
+ * server bounds. Returns undefined for a malformed value.
+ */
+export function normalizeCliSessionTtl(value: unknown): number | null | undefined {
+  if (value === null || value === undefined || value === "") return null;
+  if (typeof value !== "string" || !TTL_PATTERN.test(value)) return undefined;
+  return Math.min(
+    REUSABLE_SESSION_MAX_TTL_SECONDS,
+    Math.max(REUSABLE_SESSION_MIN_TTL_SECONDS, Number(value)),
+  );
+}
+
 export async function createCliAuthorizationRequest(
   db: D1Database,
   input: {
@@ -71,12 +109,15 @@ export async function createCliAuthorizationRequest(
     state: unknown;
     codeChallenge: unknown;
     method: unknown;
+    sessionTtl?: unknown;
     now?: Date;
   },
 ) {
   const redirectUri = normalizeCliLoopbackRedirect(input.redirectUri);
+  const sessionTtlSeconds = normalizeCliSessionTtl(input.sessionTtl);
   if (
     !redirectUri ||
+    sessionTtlSeconds === undefined ||
     typeof input.state !== "string" ||
     !STATE_PATTERN.test(input.state) ||
     typeof input.codeChallenge !== "string" ||
@@ -89,13 +130,15 @@ export async function createCliAuthorizationRequest(
   const request = {
     id: `cli_auth_${crypto.randomUUID().replace(/-/g, "")}`,
     expiresOn: new Date(now.getTime() + REQUEST_TTL_MS).toISOString(),
+    sessionTtlSeconds,
   };
   await db.batch([
     db.prepare(
       `INSERT INTO cli_authorization_requests (
        id, user_id, redirect_uri, state_value, code_challenge, code_hash,
-       expires_on, approved_on, exchanged_on, exchange_marker, created_on
-      ) VALUES (?, ?, ?, ?, ?, NULL, ?, NULL, NULL, NULL, ?)`,
+       expires_on, approved_on, exchanged_on, exchange_marker,
+       session_ttl_seconds, created_on
+      ) VALUES (?, ?, ?, ?, ?, NULL, ?, NULL, NULL, NULL, ?, ?)`,
     )
     .bind(
       request.id,
@@ -104,6 +147,7 @@ export async function createCliAuthorizationRequest(
       input.state,
       input.codeChallenge,
       request.expiresOn,
+      sessionTtlSeconds,
       now.toISOString(),
     ),
     db.prepare(
@@ -175,7 +219,7 @@ export async function exchangeCliAuthorizationCode(
   db: D1Database,
   input: { code: unknown; verifier: unknown; redirectUri: unknown; now?: Date },
 ): Promise<
-  | { ok: true; accessToken: string; expiresOn: string }
+  | { ok: true; accessToken: string; expiresOn: string; reusable: boolean }
   | { ok: false; reason: "invalid" | "replayed" }
 > {
   const redirectUri = normalizeCliLoopbackRedirect(input.redirectUri);
@@ -209,7 +253,15 @@ export async function exchangeCliAuthorizationCode(
   const sessionHash = await sha256Hex(accessToken);
   const nowIso = now.toISOString();
   const exchangeMarker = `cli_exchange_${crypto.randomUUID().replace(/-/g, "")}`;
-  const expiresOn = new Date(now.getTime() + SESSION_TTL_MS).toISOString();
+  const reusable = row.session_ttl_seconds !== null && row.session_ttl_seconds !== undefined;
+  const ttlMs = reusable
+    ? Math.min(
+        REUSABLE_SESSION_MAX_TTL_SECONDS,
+        Math.max(REUSABLE_SESSION_MIN_TTL_SECONDS, Number(row.session_ttl_seconds)),
+      ) * 1000
+    : COMMAND_SESSION_TTL_MS;
+  const scopes = reusable ? REUSABLE_SESSION_SCOPES : COMMAND_SESSION_SCOPES;
+  const expiresOn = new Date(now.getTime() + ttlMs).toISOString();
   try {
     await db.batch([
       db
@@ -231,12 +283,7 @@ export async function exchangeCliAuthorizationCode(
         )
         .bind(
           sessionHash,
-          JSON.stringify([
-            "revision:read",
-            "revision:write",
-            "deployment:write",
-            "session:revoke",
-          ]),
+          JSON.stringify(scopes),
           expiresOn,
           nowIso,
           row.id,
@@ -253,12 +300,9 @@ export async function exchangeCliAuthorizationCode(
       ).bind(
         `cli_audit_${crypto.randomUUID().replace(/-/g, "")}`,
         JSON.stringify({
-          scopes: [
-            "revision:read",
-            "revision:write",
-            "deployment:write",
-            "session:revoke",
-          ],
+          scopes,
+          reusable,
+          ttlSeconds: Math.round(ttlMs / 1000),
         }),
         nowIso,
         row.id,
@@ -285,7 +329,7 @@ export async function exchangeCliAuthorizationCode(
       .first<{ exchanged_on: string | null }>();
     return { ok: false, reason: replay?.exchanged_on ? "replayed" : "invalid" };
   }
-  return { ok: true, accessToken, expiresOn };
+  return { ok: true, accessToken, expiresOn, reusable };
 }
 
 function scopeForRequest(request: Request) {
@@ -298,6 +342,7 @@ function scopeForRequest(request: Request) {
   if ((method === "POST" || method === "PUT") && /^\/api\/(?:shiplets\/[^/]+\/drafts|drafts\/[^/]+\/(?:package|diff|validate))$/.test(path)) return "revision:write";
   if (method === "POST" && /^\/api\/(?:drafts\/[^/]+\/promote|shiplets\/[^/]+\/rollback|revisions\/[^/]+\/deployments)$/.test(path)) return "deployment:write";
   if (method === "POST" && path === "/api/cli/session/revoke") return "session:revoke";
+  if (method === "GET" && path === "/api/cli/session") return "session:read";
   return null;
 }
 
@@ -368,4 +413,45 @@ export async function authenticateCliSession(db: D1Database, request: Request) {
     return null;
   }
   return Array.isArray(scopes) && scopes.includes(scope) ? row.user_id : null;
+}
+
+/**
+ * Describes the presented CLI session for `shiplet whoami` and the CLI's reuse
+ * check. Only live, unrevoked sessions with session:read are described, so a
+ * revoked session fails on its very next use.
+ */
+export async function describeCliSession(db: D1Database, request: Request) {
+  const authorization = request.headers.get("authorization") || "";
+  const accessToken = authorization.match(/^Bearer\s+(shiplet_cli_session_[A-Za-z0-9]+)$/i)?.[1];
+  if (!accessToken) return null;
+  const row = await db
+    .prepare(
+      `SELECT cli_sessions.user_id, users.email, cli_sessions.scopes_json,
+        cli_sessions.expires_on, cli_sessions.created_on
+       FROM cli_sessions JOIN users ON users.id = cli_sessions.user_id
+       WHERE cli_sessions.session_hash = ? AND cli_sessions.expires_on > ?
+        AND cli_sessions.revoked_on IS NULL LIMIT 1`,
+    )
+    .bind(await sha256Hex(accessToken), new Date().toISOString())
+    .first<{
+      user_id: string;
+      email: string;
+      scopes_json: string;
+      expires_on: string;
+      created_on: string;
+    }>();
+  if (!row) return null;
+  let scopes: unknown;
+  try {
+    scopes = JSON.parse(row.scopes_json);
+  } catch {
+    return null;
+  }
+  if (!Array.isArray(scopes) || !scopes.includes("session:read")) return null;
+  return Object.freeze({
+    account: { id: row.user_id, email: row.email },
+    expiresOn: row.expires_on,
+    createdOn: row.created_on,
+    scopes: scopes.filter((scope): scope is string => typeof scope === "string"),
+  });
 }

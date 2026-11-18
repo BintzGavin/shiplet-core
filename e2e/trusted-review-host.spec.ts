@@ -1,4 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
+import { readFile } from "node:fs/promises";
 
 import { expect, test, type Response } from "@playwright/test";
 
@@ -344,6 +345,133 @@ test.describe("trusted review host", () => {
     await expect(artifact.getByText(content)).toBeVisible();
     await expect(artifact.getByRole("link", { name: "Open file" })).toHaveCount(0);
     await expect(page.locator("[data-shiplet-artifact-frame]")).toHaveCount(1);
+  });
+
+  test("shows and downloads the stored files of a generated no-index review page", async ({
+    page,
+    request,
+  }) => {
+    const user = testUser("trusted-no-index-stored-files");
+    const organization = await createOrganization(request, user);
+    const subdomain = `trusted-stored-${randomUUID().slice(0, 8)}`;
+    const pixel =
+      "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=";
+    const report = "%PDF-1.4 stored review report";
+    const publishResponse = await request.post("/projects", {
+      headers: {
+        ...authHeaders(user),
+        "Content-Type": "application/json",
+        Origin: "http://localhost:8787",
+      },
+      data: {
+        name: `Trusted stored files ${Date.now()}`,
+        organization_id: organization.id,
+        subdomain,
+        visibility: "organization",
+        assets: [
+          { path: "images/pixel.png", content: pixel },
+          {
+            path: "reports/review.pdf",
+            content: Buffer.from(report).toString("base64"),
+          },
+        ],
+      },
+    });
+    expect(publishResponse.ok(), await publishResponse.text()).toBe(true);
+    await loginAs(page, user);
+
+    await page.goto(`/${subdomain}`, { waitUntil: "domcontentloaded" });
+    const artifact = page.frameLocator("[data-shiplet-artifact-frame]");
+    const image = artifact.locator("img.asset-media");
+    await expect(image).toHaveAttribute("src", "./images/pixel.png");
+    await expect
+      .poll(() =>
+        image.evaluate((element) => (element as HTMLImageElement).naturalWidth),
+      )
+      .toBe(1);
+
+    const downloadPromise = page.waitForEvent("download");
+    await artifact
+      .locator('a[href="./reports/review.pdf?shiplet_download=1"]')
+      .dispatchEvent("click");
+    const download = await downloadPromise;
+    expect(download.suggestedFilename()).toBe("review.pdf");
+    expect(await readFile(await download.path(), "utf8")).toBe(report);
+    await expect(image).toBeVisible();
+    await expect(page.locator("[data-shiplet-artifact-frame]")).toHaveCount(1);
+  });
+
+  test("renders linked files in the in-app review host and the dashboard preview", async ({
+    page,
+    request,
+  }) => {
+    const user = testUser("trusted-in-app-linked-files");
+    const organization = await createOrganization(request, user);
+    const pixel =
+      "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII=";
+    const publish = async (assets: { path: string; content: string }[]) => {
+      const subdomain = `in-app-files-${randomUUID().slice(0, 8)}`;
+      const response = await request.post("/projects", {
+        headers: {
+          ...authHeaders(user),
+          "Content-Type": "application/json",
+          Origin: "http://localhost:8787",
+        },
+        data: {
+          name: `In-app linked files ${subdomain}`,
+          organization_id: organization.id,
+          subdomain,
+          visibility: "organization",
+          assets,
+        },
+      });
+      expect(response.ok(), await response.text()).toBe(true);
+      return ((await response.json()) as { project: { id: string } }).project;
+    };
+    const site = await publish([
+      {
+        path: "index.html",
+        content: Buffer.from(
+          '<!doctype html><link rel="stylesheet" href="style.css"><img id="photo" src="/images/pixel.png" alt="Pixel">',
+        ).toString("base64"),
+      },
+      {
+        path: "style.css",
+        content: Buffer.from("body { background-color: rgb(1, 2, 3); }").toString(
+          "base64",
+        ),
+      },
+      { path: "images/pixel.png", content: pixel },
+    ]);
+    const standalone = await publish([{ path: "pixel.png", content: pixel }]);
+    await loginAs(page, user);
+
+    const reviewHostFrame = page.frameLocator("[data-shiplet-artifact-frame]");
+    const dashboardFrame = page
+      .frameLocator("#artifactPreviewFrame")
+      .frameLocator("[data-shiplet-artifact-frame]");
+    const naturalWidth = (image: ReturnType<typeof page.locator>) =>
+      image.evaluate((element) => (element as HTMLImageElement).naturalWidth);
+    for (const [path, frame] of [
+      [`/shiplets/${site.id}/review-host`, reviewHostFrame],
+      [`/shiplets/${site.id}`, dashboardFrame],
+    ] as const) {
+      await page.goto(path, { waitUntil: "domcontentloaded" });
+      await expect.poll(() => naturalWidth(frame.locator("#photo"))).toBe(1);
+      await expect(frame.locator("body")).toHaveCSS(
+        "background-color",
+        "rgb(1, 2, 3)",
+      );
+    }
+    for (const [path, frame] of [
+      [`/shiplets/${standalone.id}/review-host`, reviewHostFrame],
+      [`/shiplets/${standalone.id}`, dashboardFrame],
+    ] as const) {
+      await page.goto(path, { waitUntil: "domcontentloaded" });
+      await expect
+        .poll(() => naturalWidth(frame.locator("img.asset-media")))
+        .toBe(1);
+    }
   });
 
   test("preserves exact tenant provenance without leaking its review path to confirmation", async ({
@@ -921,6 +1049,119 @@ test.describe("trusted review host", () => {
     });
     await expectNoPageErrors(errors);
   });
+
+  async function openWidget(
+    page: Parameters<typeof loginAs>[0],
+    request: Parameters<typeof createOrganization>[0],
+    label: string,
+    widget: { html: string; script: string },
+  ) {
+    const owner = testUser(label);
+    const organization = await createOrganization(request, owner);
+    const published = await publishStaticShiplet(request, owner, organization.id, {
+      name: `${label} ${Date.now()}`,
+    });
+    await promoteCustomWidget(
+      request,
+      owner,
+      published.project.id,
+      "This operation must never be requested",
+      widget,
+    );
+    await loginAs(page, owner);
+    await page.goto(`/${published.project.subdomain}`, { waitUntil: "domcontentloaded" });
+    const commentsLauncher = page.locator(".shiplet-review-comments-launcher");
+    await expect(commentsLauncher).toBeVisible();
+    await commentsLauncher.click();
+    await expect(page.locator("[data-shiplet-widget-frame]")).toBeVisible();
+    return page.frameLocator("[data-shiplet-widget-frame]");
+  }
+
+  test("keeps a healthy widget running when the review page stalls during a heartbeat", async ({ page, request }) => {
+    const errors = collectPageErrors(page);
+    const widget = await openWidget(page, request, "trusted-widget-page-stall", {
+      html: '<!doctype html><p id="state">Starting isolated widget</p><script src="./widget.js"></script>',
+      script: 'shipletWidget.text("#state", "Worker ready");',
+    });
+    await expect(widget.locator("#state")).toHaveText("Worker ready");
+    const compartment = await page
+      .locator("[data-shiplet-widget-frame]")
+      .elementHandle()
+      .then((handle) => handle?.contentFrame());
+    if (!compartment) throw new Error("Widget compartment frame is missing");
+    // Block the compartment's main thread right after each of the next three
+    // heartbeat pings, as a frozen tab, laptop sleep, or heavy page work
+    // would. The Worker answers on time; the page just cannot see it yet.
+    await compartment.evaluate(() => {
+      const original = Worker.prototype.postMessage;
+      let stalls = 0;
+      Worker.prototype.postMessage = function (this: Worker, value: unknown, ...rest: unknown[]) {
+        const result = (original as (...values: unknown[]) => void).call(this, value, ...rest);
+        if (stalls < 3 && (value as { type?: string } | null)?.type === "ping") {
+          stalls += 1;
+          const until = Date.now() + 2_500;
+          while (Date.now() < until) {}
+        }
+        return result;
+      } as typeof Worker.prototype.postMessage;
+    });
+    await page.waitForTimeout(12_000);
+    await expect(widget.getByRole("status")).toBeHidden();
+    await expect(widget.getByRole("button", { name: "Restart widget" })).toBeHidden();
+    await expectNoPageErrors(errors);
+  });
+
+  test("lets a widget finish one long turn without stopping it", async ({ page, request }) => {
+    const errors = collectPageErrors(page);
+    const widget = await openWidget(page, request, "trusted-widget-long-turn", {
+      html: '<!doctype html><p id="state">Starting isolated widget</p><button id="work" type="button">Do heavy work</button><script src="./widget.js"></script>',
+      script:
+        'shipletWidget.text("#state", "Worker ready"); shipletWidget.on("#work", "click", () => { const until = Date.now() + 1200; while (Date.now() < until) {} shipletWidget.text("#state", "Work finished"); });',
+    });
+    await expect(widget.locator("#state")).toHaveText("Worker ready");
+    for (let turn = 0; turn < 3; turn += 1) {
+      await widget.getByRole("button", { name: "Do heavy work" }).click();
+      await expect(widget.locator("#state")).toHaveText("Work finished");
+      await page.waitForTimeout(2_500);
+      await expect(widget.getByRole("status")).toBeHidden();
+    }
+    await expect(widget.getByRole("button", { name: "Restart widget" })).toBeHidden();
+    await expectNoPageErrors(errors);
+  });
+
+  test("limits widget message bursts per minute instead of over the widget's lifetime", async ({ page, request }) => {
+    test.setTimeout(150_000);
+    const errors = collectPageErrors(page);
+    const widget = await openWidget(page, request, "trusted-widget-message-rate", {
+      html: '<!doctype html><p id="state">Starting isolated widget</p><span id="count">0</span><button id="burst" type="button">Send burst</button><script src="./widget.js"></script>',
+      script:
+        'let sent = 0; shipletWidget.text("#state", "Worker ready"); shipletWidget.on("#burst", "click", () => { for (let index = 0; index < 300; index += 1) shipletWidget.text("#count", String(++sent)); });',
+    });
+    await expect(widget.locator("#state")).toHaveText("Worker ready");
+    const burst = widget.getByRole("button", { name: "Send burst" });
+    const restart = widget.getByRole("button", { name: "Restart widget" });
+
+    // Two bursts inside one minute exceed the 512-message rate.
+    await burst.click();
+    await expect(widget.locator("#count")).toHaveText("300");
+    await burst.click();
+    await expect(widget.getByRole("status")).toHaveText(
+      "Custom widget exceeded its runtime limit.",
+    );
+    await restart.click();
+    await expect(widget.locator("#state")).toHaveText("Worker ready");
+
+    // The same two bursts a minute apart are within budget, and a minute of
+    // heartbeats does not spend it.
+    await burst.click();
+    await expect(widget.locator("#count")).toHaveText("300");
+    await page.waitForTimeout(61_000);
+    await burst.click();
+    await expect(widget.locator("#count")).toHaveText("600");
+    await expect(widget.getByRole("status")).toBeHidden();
+    await expect(restart).toBeHidden();
+    await expectNoPageErrors(errors);
+  });
 });
 
 test.describe("ownership draft editor", () => {
@@ -1212,18 +1453,17 @@ test.describe("trusted review collaboration controls", () => {
     await page.locator(".shiplet-review-mentions summary").click();
     await mentionSelect.selectOption(owner.id);
     await page.locator("#shiplet-review-comment").fill(comment);
-    const popupPromise = page.waitForEvent("popup");
+    // The hosted review host saves new feedback directly, without a popup.
+    const pagesBeforeSubmit = page.context().pages().length;
+    const composer = page.locator("#shiplet-annotation-composer");
     await page
       .getByRole("button", { name: "Send annotation", exact: true })
       .click();
-    const confirmation = await popupPromise;
-    await confirmation.waitForLoadState("domcontentloaded");
-    await confirmation
-      .getByRole("button", { name: "Confirm and send feedback" })
-      .click();
     await expect(
-      confirmation.getByRole("heading", { name: "Feedback sent" }),
-    ).toBeVisible();
+      composer.locator(".shiplet-review-composer-message"),
+    ).toHaveText("Feedback sent");
+    await expect(composer).toBeHidden();
+    expect(page.context().pages()).toHaveLength(pagesBeforeSubmit);
 
     await loginAs(page, owner);
     await page.goto("/inbox", { waitUntil: "networkidle" });

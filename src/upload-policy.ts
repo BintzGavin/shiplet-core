@@ -1,5 +1,9 @@
 import type { AssetFile } from "./resource";
 import {
+	isPortablePath,
+	portableCollisionKey,
+} from "./self-owned/portable-path";
+import {
 	ALLOWED_STATIC_ASSET_EXTENSIONS,
 	ALLOWED_STATIC_ASSET_DOTFILES,
 	ALLOWED_STATIC_ASSET_FILENAMES,
@@ -11,7 +15,11 @@ import {
 export const MAX_UPLOAD_JSON_BYTES = 80 * 1024 * 1024;
 export const MAX_STATIC_ASSET_FILES = 200;
 export const MAX_STATIC_ASSET_FILE_BYTES = 10_000_000;
-export const MAX_STATIC_ASSET_TOTAL_BYTES = 50_000_000;
+// Every upload becomes one Shiplet package, which is capped at 32 MiB as
+// base64 JSON. That leaves about 25 MB of files once encoding and per-file
+// metadata are counted; 24 MB keeps room for 200 maximum-length paths.
+// assertStaticUploadFitsPackage enforces the exact package size.
+export const MAX_STATIC_ASSET_TOTAL_BYTES = 24_000_000;
 
 const MAX_STATIC_ASSET_PATH_LENGTH = 512;
 
@@ -26,6 +34,7 @@ export function validateAndNormalizeStaticAssets(value: unknown): AssetFile[] {
 
 	let totalBytes = 0;
 	const assets: AssetFile[] = [];
+	const storedPaths = new Map<string, string>();
 
 	for (const asset of value) {
 		if (!isRecord(asset)) {
@@ -38,6 +47,18 @@ export function validateAndNormalizeStaticAssets(value: unknown): AssetFile[] {
 		const content = normalizeBase64Content(asset.content, path);
 		const size = decodedBase64Size(content, path);
 		if (size === 0) continue;
+
+		// Stored files become one package, so refuse what it would reject.
+		assertPortableAssetPath(path);
+		const collisionKey = portableCollisionKey(path);
+		const collidingPath = storedPaths.get(collisionKey);
+		if (collidingPath !== undefined) {
+			throw new Response(
+				`Asset paths collide: ${collidingPath} and ${String(asset.path)} name the same file.`,
+				{ status: 400 },
+			);
+		}
+		storedPaths.set(collisionKey, String(asset.path));
 
 		if (size > MAX_STATIC_ASSET_FILE_BYTES) {
 			throw new Response(
@@ -58,6 +79,17 @@ export function validateAndNormalizeStaticAssets(value: unknown): AssetFile[] {
 	}
 
 	return assets;
+}
+
+export function assertStaticUploadFitsPackage(
+	packageBytes: number,
+	maxPackageBytes: number,
+) {
+	if (packageBytes <= maxPackageBytes) return;
+	throw new Response(
+		`Static upload is too large. Total files are limited to ${formatBytes(MAX_STATIC_ASSET_TOTAL_BYTES)}, including the file review page Shiplet creates when index.html is absent.`,
+		{ status: 413 },
+	);
 }
 
 function normalizeStaticAssetPath(value: unknown) {
@@ -92,6 +124,14 @@ function normalizeStaticAssetPath(value: unknown) {
 	}
 
 	return path;
+}
+
+function assertPortableAssetPath(path: string) {
+	if (isPortablePath(`artifact/${path}`)) return;
+	throw new Response(
+		`Unsupported asset path: ${path}. Paths must be portable: no < > : " | ? * or control characters, no names ending in a dot or space, no reserved names such as CON, and at most 255 bytes per name and 1,015 bytes in total.`,
+		{ status: 400 },
+	);
 }
 
 function assertSupportedAssetType(path: string) {

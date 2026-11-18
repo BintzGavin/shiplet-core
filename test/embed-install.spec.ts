@@ -204,9 +204,6 @@ describe("framework-independent widget installation", () => {
       "data-shiplet-private",
     ])
       expect(docs).toContain(text);
-    expect((await request("/docs/wordpress")).headers.get("location")).toBe(
-      "/docs/embed",
-    );
   });
   it("registers, lists, reuses, and revokes an editor-owned installation without exposing a secret", async () => {
     const id = await project();
@@ -280,6 +277,112 @@ describe("framework-independent widget installation", () => {
         })
       ).status,
     ).toBe(403);
+  });
+  it("accepts same-origin top-level setup forms whose no-referrer Origin is null", async () => {
+    const id = await project();
+    const page = await request(`/embed/install?project_id=${id}`, {
+      headers: { ...owner, Accept: "text/html" },
+    });
+    expect(page.headers.get("referrer-policy")).toBe("no-referrer");
+    const nullOriginForm = (extra = {}) => {
+      const init = form(id, "https://example.com", extra);
+      return {
+        ...init,
+        headers: {
+          ...owner,
+          Origin: "null",
+          "Sec-Fetch-Site": "same-origin",
+          "Sec-Fetch-Mode": "navigate",
+          "Sec-Fetch-Dest": "document",
+        },
+      };
+    };
+    const created = await request("/embed/install", nullOriginForm());
+    expect(created.status).toBe(200);
+    expect(await created.text()).toContain("shiplet-feedback");
+    const installation = (await (env as Env).DB.prepare(
+      "SELECT id FROM embed_installations WHERE project_id = ? AND revoked_on IS NULL",
+    )
+      .bind(id)
+      .first<{ id: string }>())!;
+    expect(installation).toBeTruthy();
+    const revoked = await request(
+      "/embed/install",
+      nullOriginForm({ action: "revoke", installation_id: installation.id }),
+    );
+    expect(revoked.status).toBe(200);
+    expect(await revoked.text()).toContain("Site disconnected");
+    expect(
+      (
+        await (env as Env).DB.prepare(
+          "SELECT revoked_on FROM embed_installations WHERE id = ?",
+        )
+          .bind(installation.id)
+          .first<any>()
+      )?.revoked_on,
+    ).toBeTruthy();
+  });
+  it("rejects null-Origin setup forms that are not same-origin top-level navigations", async () => {
+    const topLevelSameOrigin = {
+      "Sec-Fetch-Site": "same-origin",
+      "Sec-Fetch-Mode": "navigate",
+      "Sec-Fetch-Dest": "document",
+    };
+    const variants: Array<[string, Record<string, string>]> = [
+      ["no fetch metadata", {}],
+      // A sandboxed artifact frame has an opaque origin, so the browser
+      // labels its form submission cross-site even on Shiplet's host.
+      [
+        "sandboxed or foreign frame",
+        { ...topLevelSameOrigin, "Sec-Fetch-Site": "cross-site" },
+      ],
+      ["same-site", { ...topLevelSameOrigin, "Sec-Fetch-Site": "same-site" }],
+      ["iframe", { ...topLevelSameOrigin, "Sec-Fetch-Dest": "iframe" }],
+      ["fetch", { ...topLevelSameOrigin, "Sec-Fetch-Mode": "cors" }],
+    ];
+    const activeCount = async (projectId: string) =>
+      (
+        await (env as Env).DB.prepare(
+          "SELECT COUNT(*) AS count FROM embed_installations WHERE project_id = ? AND revoked_on IS NULL",
+        )
+          .bind(projectId)
+          .first<{ count: number }>()
+      )?.count;
+
+    const createId = await project();
+    for (const [label, fetchMetadata] of variants) {
+      const response = await request("/embed/install", {
+        ...form(createId),
+        headers: { ...owner, Origin: "null", ...fetchMetadata },
+      });
+      expect(response.status, label).toBe(403);
+    }
+    const originless = await request("/embed/install", {
+      ...form(createId),
+      headers: { ...owner, ...topLevelSameOrigin },
+    });
+    expect(originless.status).toBe(403);
+    expect(await activeCount(createId)).toBe(0);
+
+    const revokeId = await project();
+    await request("/embed/install", form(revokeId));
+    const installation = (await (env as Env).DB.prepare(
+      "SELECT id FROM embed_installations WHERE project_id = ? AND revoked_on IS NULL",
+    )
+      .bind(revokeId)
+      .first<{ id: string }>())!;
+    expect(installation).toBeTruthy();
+    for (const [label, fetchMetadata] of variants) {
+      const response = await request("/embed/install", {
+        ...form(revokeId, "https://example.com", {
+          action: "revoke",
+          installation_id: installation.id,
+        }),
+        headers: { ...owner, Origin: "null", ...fetchMetadata },
+      });
+      expect(response.status, label).toBe(403);
+    }
+    expect(await activeCount(revokeId)).toBe(1);
   });
   it("does not disconnect another project's installation for the same origin", async () => {
     const first = await project();

@@ -22,6 +22,9 @@ const VALID_COMMANDS = new Set([
 	"promote",
 	"rollback",
 	"eject",
+	"login",
+	"logout",
+	"whoami",
 ]);
 const VALID_VISIBILITIES = new Set([
 	"private",
@@ -32,7 +35,7 @@ const VALID_VISIBILITIES = new Set([
 const SUBDOMAIN_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 const MAX_STATIC_ASSET_FILES = 200;
 const MAX_STATIC_ASSET_FILE_BYTES = 10_000_000;
-const MAX_STATIC_ASSET_TOTAL_BYTES = 50_000_000;
+const MAX_STATIC_ASSET_TOTAL_BYTES = 24_000_000;
 const MAX_STATIC_ASSET_PATH_LENGTH = 512;
 const MAX_PACKAGE_FILES = 1_024;
 const MAX_PACKAGE_FILE_BYTES = 4 * 1024 * 1024;
@@ -47,6 +50,12 @@ const PACKAGE_MEDIA_TYPE = "application/vnd.shiplet.package+json;version=1";
 const PACKAGE_SCHEMA_VERSION = "shiplet.package/v1";
 const RUNTIME_COMPATIBILITY = "shiplet.runtime/v1";
 const IDENTIFIER_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,255}$/;
+// Every workspace ID Shiplet issues is an org_ identifier, in both WorkOS and
+// test modes, so anything else cannot name a workspace.
+const ORGANIZATION_ID_PATTERN = /^org_[A-Za-z0-9._:-]{1,252}$/;
+// Shiplet answers with exactly this when the signed-in account belongs to
+// several workspaces and the publish named none.
+const MISSING_ORGANIZATION_MESSAGE = "Missing required fields: organization_id";
 const REQUIRED_PACKAGE_ENTRYPOINTS = [
 	"artifact",
 	"widget",
@@ -133,6 +142,10 @@ const FORBIDDEN_PACKAGE_ROOTS = new Set([
 	"state",
 ]);
 const APPROVAL_COMMANDS = new Set(["deploy", "promote", "rollback"]);
+const DEFAULT_SESSION_TTL_SECONDS = 2 * 60 * 60;
+const MIN_SESSION_TTL_SECONDS = 5 * 60;
+const MAX_SESSION_TTL_SECONDS = 8 * 60 * 60;
+const SESSION_COMMANDS = new Set(["login", "logout", "whoami"]);
 const ALLOWED_STATIC_ASSET_EXTENSIONS = new Set([
 	"3gp",
 	"7z",
@@ -395,6 +408,9 @@ Usage:
   shiplet promote <draft-id> --expected-active <revision-id> [--target <target-id> ...] --approve
   shiplet rollback <shiplet-id> --revision <revision-id> --expected-active <revision-id> --approve
   shiplet eject <shiplet-id> <path>
+  shiplet login [--session-ttl <duration>]
+  shiplet whoami
+  shiplet logout
 
 Commands:
   publish   Prepare and upload a file or static folder to Shiplet for review.
@@ -408,23 +424,36 @@ Commands:
   promote   Atomically activate a validated draft.
   rollback  Atomically reactivate a prior known-good revision.
   eject     Export and materialize a kernel-authority-free portable package.
+  login     Approve a reusable CLI session in your browser (default 2 hours).
+  whoami    Show the saved CLI session's account, origin, and expiry.
+  logout    Revoke the saved CLI session on Shiplet and delete it locally.
 
 Configuration:
   SHIPLET_API_URL   Optional API base URL. Can be replaced by --api-url.
   SHIPLET_API_KEY   Optional least-privilege organization key injected by a secret store.
-  Authentication    Interactive commands use Shiplet's established OAuth/session path.
+  SHIPLET_ORGANIZATION_ID    Workspace ID for publish and prepare. Can be replaced by --organization.
+  SHIPLET_CLI_SESSION_TTL    Reusable session lifetime, such as 2h or 90m (max 8h).
+  SHIPLET_CLI_SESSION_CACHE  Set to 0 to approve every command separately.
+  SHIPLET_CLI_SESSION_STORE  auto (keychain, else file), keychain, or file.
+  SHIPLET_CONFIG_DIR         Absolute directory for the file store.
+  Authentication    One browser approval creates a reusable session for this API origin,
+                    kept in the OS keychain or a user-only file. Deploy, promote, and
+                    rollback use it too, and still require --approve.
                     Never place key material in source, package content, shell history, or logs.
 
 Flags:
   --name <name>          Artifact display name. Defaults to the file or folder name.
   --subdomain <slug>    DNS-safe review link slug. Defaults to a slug from the name.
   --visibility <mode>   private, organization, unlisted, or public. Defaults to organization.
+  --organization <id>   Workspace ID to publish into, such as org_123, when you belong to several.
   --api-url <url>        API base URL. Defaults to SHIPLET_API_URL or https://shiplet.cc.
   --token <token>        Organization key supplied by an established secret-store workflow.
   --dry-run             Build and print artifact metadata without making a network request.
   --approve             Confirm a deploy, promote, or rollback side effect.
   --target <id>         Exact deployment target ID.
   --idempotency-key <id> Reusable deploy/promote/rollback retry key.
+  --session-ttl <duration> Lifetime of a new reusable session, such as 2h or 90m.
+  --no-session-cache    Approve this command alone; do not read or save a session.
   --draft <id>          Exact mutable draft selected for pull.
   --revision <id>       Exact revision selected for rollback.
   --from-revision <id>  Exact source revision selected for a fork.
@@ -461,6 +490,7 @@ function parseArguments(argv) {
 		name: "",
 		subdomain: "",
 		visibility: DEFAULT_VISIBILITY,
+		organization: "",
 		apiUrl: "",
 		token: "",
 		dryRun: false,
@@ -476,6 +506,8 @@ function parseArguments(argv) {
 		expectedActive: "",
 		version: "",
 		idempotencyKey: "",
+		sessionTtl: "",
+		noSessionCache: false,
 		providedFlags: new Set(),
 	};
 
@@ -505,6 +537,11 @@ function parseArguments(argv) {
 			options.providedFlags.add("--force");
 			continue;
 		}
+		if (arg === "--no-session-cache") {
+			options.noSessionCache = true;
+			options.providedFlags.add("--no-session-cache");
+			continue;
+		}
 		if (arg.startsWith("--")) {
 			const equalsIndex = arg.indexOf("=");
 			const flag = equalsIndex === -1 ? arg : arg.slice(0, equalsIndex);
@@ -516,6 +553,7 @@ function parseArguments(argv) {
 			if (flag === "--name") options.name = value;
 			else if (flag === "--subdomain") options.subdomain = value;
 			else if (flag === "--visibility") options.visibility = value;
+			else if (flag === "--organization") options.organization = value;
 			else if (flag === "--api-url") options.apiUrl = value;
 			else if (flag === "--token") options.token = value;
 			else if (flag === "--target") {
@@ -527,6 +565,7 @@ function parseArguments(argv) {
 			else if (flag === "--expected-active") options.expectedActive = value;
 			else if (flag === "--version") options.version = value;
 			else if (flag === "--idempotency-key") options.idempotencyKey = value;
+			else if (flag === "--session-ttl") options.sessionTtl = value;
 			else throw new CliError(`Unknown flag "${flag}".`);
 			continue;
 		}
@@ -550,6 +589,9 @@ function parseArguments(argv) {
 			`Invalid visibility "${options.visibility}". Use private, organization, unlisted, or public.`,
 		);
 	}
+	if (SESSION_COMMANDS.has(command) && options.positionals.length > 0) {
+		throw new CliError(`shiplet ${command} takes no arguments.`);
+	}
 	assertApplicableFlags(options);
 	if (APPROVAL_COMMANDS.has(command) && !options.approve) {
 		throw new CliError(`${command} requires explicit --approve confirmation.`);
@@ -563,6 +605,7 @@ function assertApplicableFlags(options) {
 		"--name": new Set(["publish", "prepare"]),
 		"--subdomain": new Set(["publish", "prepare"]),
 		"--visibility": new Set(["publish", "prepare"]),
+		"--organization": new Set(["publish", "prepare"]),
 		"--dry-run": new Set(["publish", "prepare", ...APPROVAL_COMMANDS]),
 		"--approve": APPROVAL_COMMANDS,
 		"--force": new Set(["pull", "eject"]),
@@ -573,6 +616,15 @@ function assertApplicableFlags(options) {
 		"--expected-active": new Set(["promote", "rollback"]),
 		"--version": new Set(["validate", "push", "diff"]),
 		"--idempotency-key": APPROVAL_COMMANDS,
+		"--session-ttl": new Set(
+			[...VALID_COMMANDS].filter((name) => name !== "logout" && name !== "whoami"),
+		),
+		"--no-session-cache": new Set(
+			[...VALID_COMMANDS].filter((name) => !SESSION_COMMANDS.has(name)),
+		),
+		"--token": new Set(
+			[...VALID_COMMANDS].filter((name) => !SESSION_COMMANDS.has(name)),
+		),
 	};
 	for (const flag of options.providedFlags) {
 		const allowed = allowedCommands[flag];
@@ -629,6 +681,60 @@ function endpointFromOptions(options, env) {
 
 function apiKeyFromOptions(options, env) {
 	return String(options.token || env.SHIPLET_API_KEY || "").trim();
+}
+
+// The workspace a publish goes into. Left empty, Shiplet uses the account's
+// only workspace or the organization key's own, so it is required only when
+// the signed-in account belongs to several. The rejected value is not echoed
+// in case a credential was pasted in its place.
+function organizationIdFromOptions(options, env) {
+	const source = options.organization ? "--organization" : "SHIPLET_ORGANIZATION_ID";
+	const organizationId = String(
+		options.organization || env.SHIPLET_ORGANIZATION_ID || "",
+	).trim();
+	if (organizationId && !ORGANIZATION_ID_PATTERN.test(organizationId)) {
+		throw new CliError(
+			`Invalid ${source} value. Use the workspace ID, which starts with org_ (for example org_123), not the workspace name.`,
+		);
+	}
+	return organizationId;
+}
+
+// Reusable session lifetime. The server clamps to the same 5 minute to
+// 8 hour bounds; rejecting here keeps a typo from silently changing it.
+function parseSessionTtl(value) {
+	if (value === undefined || value === null || value === "") {
+		return DEFAULT_SESSION_TTL_SECONDS;
+	}
+	const match = String(value)
+		.trim()
+		.match(/^(?:(\d{1,2})h)?(?:(\d{1,3})m)?(?:(\d{1,5})s?)?$/);
+	if (!match || (!match[1] && !match[2] && !match[3])) {
+		throw new CliError(
+			'Session lifetime must look like "2h", "90m", "1h30m", or a number of seconds.',
+		);
+	}
+	const seconds =
+		Number(match[1] || 0) * 3600 +
+		Number(match[2] || 0) * 60 +
+		Number(match[3] || 0);
+	if (seconds < MIN_SESSION_TTL_SECONDS || seconds > MAX_SESSION_TTL_SECONDS) {
+		throw new CliError("Session lifetime must be between 5 minutes and 8 hours.");
+	}
+	return seconds;
+}
+
+function sessionTtlFromOptions(options, env) {
+	return parseSessionTtl(options.sessionTtl || env.SHIPLET_CLI_SESSION_TTL);
+}
+
+// What a session bootstrap needs to decide between a cached session and a
+// single-command approval.
+function sessionBootstrapOptions(options, env) {
+	return {
+		sessionCache: !options.noSessionCache,
+		sessionTtlSeconds: sessionTtlFromOptions(options, env),
+	};
 }
 
 function humanNameFromPath(artifactPath) {
@@ -832,15 +938,21 @@ function formatBytes(value) {
 	return `${value} bytes`;
 }
 
-async function buildPublishPayload(options, cwd = process.cwd()) {
+async function buildPublishPayload(
+	options,
+	cwd = process.cwd(),
+	env = process.env,
+) {
 	const absoluteArtifactPath = path.resolve(cwd, options.artifactPath);
 	const name = options.name.trim() || humanNameFromPath(absoluteArtifactPath);
 	const subdomain = options.subdomain.trim() || slugify(name);
 	assertDnsSafeSubdomain(subdomain);
+	const organizationId = organizationIdFromOptions(options, env);
 	return {
 		name,
 		subdomain,
 		visibility: options.visibility,
+		...(organizationId ? { organization_id: organizationId } : {}),
 		assets: await collectArtifactFiles(absoluteArtifactPath),
 	};
 }
@@ -950,6 +1062,9 @@ async function publishReviewArtifact(options) {
 	);
 	const body = parseJsonResponse(responseText);
 	if (!response.ok) {
+		const choices =
+			response.status === 400 ? missingOrganizationChoices(body) : null;
+		if (choices) throw missingOrganizationError(endpoint, choices);
 		const safe = sanitizeApiValue(body);
 		const detail =
 			typeof safe === "string"
@@ -961,6 +1076,62 @@ async function publishReviewArtifact(options) {
 	}
 
 	return body ?? { ok: true };
+}
+
+// Shiplet answers a publish that names no workspace, from an account in
+// several, with the caller's own workspaces as JSON, or with the bare message
+// from servers that predate the list. Returns null for any other response.
+function missingOrganizationChoices(body) {
+	if (typeof body === "string") {
+		return body.trim() === MISSING_ORGANIZATION_MESSAGE ? [] : null;
+	}
+	if (
+		!body ||
+		typeof body !== "object" ||
+		Array.isArray(body) ||
+		body.code !== "organization_required"
+	) {
+		return null;
+	}
+	const listed = Array.isArray(body.organizations) ? body.organizations : [];
+	return listed.flatMap((entry) =>
+		entry &&
+		typeof entry === "object" &&
+		typeof entry.id === "string" &&
+		ORGANIZATION_ID_PATTERN.test(entry.id)
+			? [{ id: entry.id, name: printableWorkspaceName(entry.name) }]
+			: [],
+	);
+}
+
+// Workspace names are chosen by people, so only printable text reaches the
+// terminal.
+function printableWorkspaceName(value) {
+	const printable = (typeof value === "string" ? value : "")
+		.replace(
+			/[\u0000-\u001f\u007f-\u009f\u200b-\u200f\u202a-\u202e\u2066-\u2069]/gu,
+			" ",
+		)
+		.replace(/\s+/gu, " ")
+		.trim();
+	return Array.from(printable).slice(0, 120).join("");
+}
+
+// Without a usable list, point at the Workspace page on the same Shiplet
+// origin the publish went to.
+function missingOrganizationError(endpoint, choices) {
+	const hint = `Shiplet API returned 400: ${MISSING_ORGANIZATION_MESSAGE}. Your Shiplet account belongs to more than one workspace, so Shiplet needs to know which one to publish into. Rerun with --organization <id> or set SHIPLET_ORGANIZATION_ID`;
+	if (choices.length === 0) {
+		return new CliError(
+			`${hint}. Workspace IDs start with org_, and your workspaces are listed on the Workspace page: ${new URL(endpoint).origin}/workspace`,
+		);
+	}
+	const lines = choices.map(({ id, name }) =>
+		name ? `  ${name}  ${id}` : `  ${id}`,
+	);
+	return new CliError(
+		`${hint} to one of these workspace IDs:\n${lines.join("\n")}`,
+	);
 }
 
 function parseJsonResponse(value) {
@@ -985,6 +1156,7 @@ function writeDryRun(stdout, payload, endpoint, summary, json) {
 		name: payload.name,
 		subdomain: payload.subdomain,
 		visibility: payload.visibility,
+		organizationId: payload.organization_id || null,
 		assetCount: summary.assetCount,
 		totalBytes: summary.totalBytes,
 		paths: summary.paths,
@@ -995,6 +1167,11 @@ function writeDryRun(stdout, payload, endpoint, summary, json) {
 	}
 	stdout.write(`Dry run prepared review artifact "${payload.name}".\n`);
 	stdout.write(`Endpoint: ${endpoint}\n`);
+	stdout.write(
+		payload.organization_id
+			? `Workspace: ${payload.organization_id}\n`
+			: "Workspace: not set (pass --organization <id> if your account has several)\n",
+	);
 	stdout.write(`Files: ${summary.assetCount} (${summary.totalBytes} bytes)\n`);
 	stdout.write("No network request made.\n");
 }
@@ -2267,6 +2444,7 @@ async function requestKernel(options, request) {
 			apiUrl: options.apiUrl || request.env.SHIPLET_API_URL || DEFAULT_API_URL,
 			fetch: request.fetch,
 			stdout: request.stdout,
+			...sessionBootstrapOptions(options, request.env),
 		});
 		ownsSession = true;
 	}
@@ -3398,6 +3576,7 @@ async function runCli({
 	fetch: fetchImpl = globalThis.fetch,
 	sessionFetch,
 	sessionBootstrap,
+	sessionCache,
 	stdout = process.stdout,
 	stderr = process.stderr,
 } = {}) {
@@ -3406,6 +3585,14 @@ async function runCli({
 		if (options.help) {
 			stdout.write(helpText());
 			return 0;
+		}
+		if (SESSION_COMMANDS.has(options.command)) {
+			return await runSessionCommand(options, {
+				env,
+				fetch: fetchImpl,
+				sessionCache,
+				stdout,
+			});
 		}
 		if (options.command !== "publish" && options.command !== "prepare") {
 			await runRevisionCommand(options, {
@@ -3420,7 +3607,7 @@ async function runCli({
 		}
 
 		const endpoint = endpointFromOptions(options, env);
-		const payload = await buildPublishPayload(options, cwd);
+		const payload = await buildPublishPayload(options, cwd, env);
 		const summary = payloadSummary(payload);
 
 		if (options.dryRun) {
@@ -3437,6 +3624,7 @@ async function runCli({
 							apiUrl: options.apiUrl || env.SHIPLET_API_URL || DEFAULT_API_URL,
 							fetch: fetchImpl,
 							stdout,
+							...sessionBootstrapOptions(options, env),
 						})
 					: fetchImpl;
 		let result;
@@ -3477,9 +3665,95 @@ async function runCli({
 	}
 }
 
+function formatExpiry(expiresOn) {
+	const minutes = Math.max(0, Math.round((Date.parse(expiresOn) - Date.now()) / 60_000));
+	const remaining =
+		minutes >= 60
+			? `${Math.floor(minutes / 60)}h ${minutes % 60}m`
+			: `${minutes}m`;
+	return `${expiresOn} (in ${remaining})`;
+}
+
+async function runSessionCommand(options, runtime) {
+	const { sessionCache } = runtime;
+	if (!sessionCache) {
+		throw new CliError(
+			`shiplet ${options.command} needs the reusable session store, which this integration does not provide.`,
+		);
+	}
+	if (typeof runtime.fetch !== "function") {
+		throw new CliError("This Node runtime does not provide fetch.");
+	}
+	const apiUrl = normalizeApiUrl(options.apiUrl || runtime.env.SHIPLET_API_URL);
+	const write = (value, text) => {
+		if (options.json) writeJson(runtime.stdout, value);
+		else runtime.stdout.write(text);
+	};
+	let result;
+	try {
+		if (options.command === "login") {
+			result = await sessionCache.login({
+				apiUrl,
+				fetch: runtime.fetch,
+				stdout: runtime.stdout,
+				sessionTtlSeconds: sessionTtlFromOptions(options, runtime.env),
+			});
+		} else if (options.command === "whoami") {
+			result = await sessionCache.status({
+				apiUrl,
+				fetch: runtime.fetch,
+				stdout: runtime.stdout,
+			});
+		} else {
+			result = await sessionCache.logout({ apiUrl, fetch: runtime.fetch });
+		}
+	} catch (error) {
+		if (error instanceof CliError) throw error;
+		throw new CliError(error instanceof Error ? error.message : String(error));
+	}
+	if (options.command === "logout") {
+		const lines = {
+			none: `No saved Shiplet CLI session for ${apiUrl}.\n`,
+			revoked: `Revoked the Shiplet CLI session for ${apiUrl} and deleted it from this computer.\n`,
+			"already-ended": `The Shiplet CLI session for ${apiUrl} had already ended. Deleted it from this computer.\n`,
+			unconfirmed: `Deleted the Shiplet CLI session from this computer, but Shiplet did not confirm revocation. It expires at ${result.expiresOn}.\n`,
+		};
+		write({ ok: result.revocation !== "unconfirmed", ...result }, lines[result.revocation]);
+		return result.revocation === "unconfirmed" ? 1 : 0;
+	}
+	if (!result) {
+		write(
+			{ ok: false, origin: apiUrl, signedIn: false },
+			`Not signed in to ${apiUrl}. Run shiplet login, or any command, to approve a session.\n`,
+		);
+		return 1;
+	}
+	const summary = {
+		ok: true,
+		signedIn: true,
+		origin: result.origin,
+		account: result.account,
+		expiresOn: result.expiresOn,
+		storage: result.storage,
+		...(options.command === "login" ? { reused: result.reused } : {}),
+	};
+	const heading =
+		options.command === "login" && !result.reused
+			? "Signed in to Shiplet CLI."
+			: options.command === "login"
+				? "Already signed in to Shiplet CLI."
+				: "Shiplet CLI session";
+	write(
+		summary,
+		`${heading}\n  Account: ${sanitizeOutputText(result.account.email)}\n  Origin:  ${result.origin}\n  Expires: ${formatExpiry(result.expiresOn)}\n  Stored:  ${sanitizeOutputText(result.storage)}\n`,
+	);
+	return 0;
+}
+
 module.exports = {
 	runCli,
 	parseArguments,
+	parseSessionTtl,
 	collectArtifactFiles,
 	buildPublishPayload,
 	publishReviewArtifact,
@@ -3488,8 +3762,9 @@ module.exports = {
 };
 
 if (require.main === module) {
-	const { createBrowserSessionFetch } = require("./browser-session.cjs");
-	runCli({ sessionBootstrap: createBrowserSessionFetch }).then((exitCode) => {
+	const { createSessionCache } = require("./session-cache.cjs");
+	const sessionCache = createSessionCache();
+	runCli({ sessionBootstrap: sessionCache.bootstrap, sessionCache }).then((exitCode) => {
 		process.exitCode = exitCode;
 	});
 }

@@ -19,3 +19,4 @@ jobs:
       - run: npm ci
       - run: npm run generate:public
       - run: npm run verify
+      - run: npm run test:cli-package
