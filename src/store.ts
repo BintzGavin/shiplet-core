@@ -1382,6 +1382,9 @@ export async function permanentlyDeleteProjectRecords(
       .prepare("DELETE FROM project_traces WHERE project_id = ?")
       .bind(projectId),
     db
+      .prepare("DELETE FROM trace_shiplets WHERE project_id = ?")
+      .bind(projectId),
+    db
       .prepare("DELETE FROM review_feedback_mentions WHERE project_id = ?")
       .bind(projectId),
     db

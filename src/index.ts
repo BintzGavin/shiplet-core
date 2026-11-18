@@ -161,7 +161,8 @@ import { registerTraceRoutes } from "./traces/routes";
 import { deleteProjectTraceObjects, sweepArchivedShipletTraces } from "./traces/store";
 import { sweepExpiredUploadLinks } from "./traces/uploads";
 import { executeTraceCodeModeRequest, isTraceCodeModePath } from "./traces/codemode";
-import { BuildTraceViewerPage, TracesPanelMount } from "./platform/traces-page";
+import { BuildTraceOnlyViewerMount, BuildTraceViewerPage, TracesPanelMount } from "./platform/traces-page";
+import { isTraceOnlyShiplet, setTraceShipletCreator } from "./traces/trace-shiplets";
 import { TRACES_FLAG } from "./feature-flags";
 import {
   legacyStaticPackageEnvelopeBytes,
@@ -907,7 +908,7 @@ const KERNEL_SCHEMA_EPOCH_MARKER = "kernel";
 // 5: project_traces for agent session traces.
 // 6: trace audiences, variants, and pending attachments.
 // 7: trace upload links.
-const CURRENT_KERNEL_SCHEMA_EPOCH = 7;
+const CURRENT_KERNEL_SCHEMA_EPOCH = 8;
 
 async function readKernelSchemaEpoch(db: D1Database): Promise<number | null> {
   const table = await db
@@ -17024,6 +17025,46 @@ app.post("/api/shiplets", async (c) => {
 
 registerTraceRoutes(app);
 
+// Trace-only Shiplets (docs/traces-spec.md D19) are created through the same
+// publish path as every other Shiplet, with a page Shiplet writes as the
+// artifact.
+setTraceShipletCreator(async (env, { actor, organizationId, name, subdomain, html }) => {
+  const db = new D1QB(env.DB);
+  const bytes = new TextEncoder().encode(html);
+  let binary = "";
+  for (const byte of bytes) binary += String.fromCharCode(byte);
+  const payload: PublishShipletPayload = {
+    name,
+    subdomain,
+    visibility: "organization",
+    assets: [{ path: "index.html", content: btoa(binary) }],
+  } as PublishShipletPayload;
+  if (actor.kind === "token") {
+    requireOrganizationApiShipletCreationAccess(actor.token);
+    if (organizationId && organizationId !== actor.token.organization_id) {
+      throw new Response("This API key belongs to a different organization.", { status: 403 });
+    }
+    const result = await publishShipletForOrganization(
+      env,
+      db,
+      actor.token.created_by_user_id,
+      actor.token.organization_id,
+      { ...payload, organization_id: actor.token.organization_id } as PublishShipletPayload,
+      { kind: "agent", id: actor.token.id },
+    );
+    return result.project;
+  }
+  if (actor.kind !== "user") throw new Response("Sign in to share a session.", { status: 401 });
+  const result = await publishShiplet(
+    env,
+    db,
+    actor.user,
+    { ...payload, ...(organizationId ? { organization_id: organizationId } : {}) } as PublishShipletPayload,
+    { listOrganizationChoices: true },
+  );
+  return result.project;
+});
+
 app.get("/api/shiplets/:projectId/review-layer", async (c) => {
   try {
     const project = await getProjectById(c.env.DB, c.req.param("projectId"));
@@ -20524,6 +20565,10 @@ app.get("/shiplets/:projectId", async (c) => {
           tracesPanel: useFeatureFlag(c.env, TRACES_FLAG)
             ? TracesPanelMount({ nonce: kernelDocumentNonce(c), projectId: project.id, canEdit: canEditLifecycle })
             : "",
+          traceOnlyViewer:
+            useFeatureFlag(c.env, TRACES_FLAG) && (await isTraceOnlyShiplet(c.env.DB, project.id))
+              ? BuildTraceOnlyViewerMount({ nonce: kernelDocumentNonce(c), projectId: project.id })
+              : "",
         }),
         {
           nonce: kernelDocumentNonce(c),

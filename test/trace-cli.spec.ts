@@ -147,6 +147,36 @@ describe("shiplet trace (CLI)", () => {
     expect(JSON.parse(result.stdout)).toMatchObject({ trace: { id: "trc_1" }, link: "https://shiplet.test/shiplets/proj_1/traces/trc_1" });
   });
 
+  it("creates a trace-only Shiplet with --new, then uploads to it", async () => {
+    const server = stubServer([
+      (call) =>
+        call.method === "POST" && call.url.endsWith("/api/trace-shiplets")
+          ? Response.json({ shiplet: { id: "project_new1", name: "Codex fix", traceOnly: true } }, { status: 201 })
+          : undefined,
+      (call) =>
+        call.method === "POST" && call.url.endsWith("/api/shiplets/project_new1/traces")
+          ? Response.json({ trace: { id: "trc_9", projectId: "project_new1", sharing: "private" }, serverMasked: { count: 0, kinds: {} } }, { status: 201 })
+          : undefined,
+    ]);
+    const result = await run(
+      ["trace", "share", path.join(fixtures, "codex-rollout.jsonl"), "--new", "--title", "Codex fix", "--organization", "org_1", "--api-url", "https://shiplet.test"],
+      { fetch: server.fetch, env: { SHIPLET_API_KEY: "shiplet_org_testkeyvalue1234567890" } },
+    );
+    expect(result.code, result.stderr).toBe(0);
+    expect(server.calls.map((call) => call.url)).toEqual([
+      "https://shiplet.test/api/trace-shiplets",
+      "https://shiplet.test/api/shiplets/project_new1/traces",
+    ]);
+    expect(JSON.parse(server.calls[0].body || "{}")).toEqual({ name: "Codex fix", organizationId: "org_1" });
+    expect(result.stdout).toContain("Created Shiplet: Codex fix (project_new1)");
+    expect(result.stdout).toContain("https://shiplet.test/shiplets/project_new1/traces/trc_9");
+
+    const dry = await run(["trace", "share", path.join(fixtures, "codex-rollout.jsonl"), "--new", "--dry-run"]);
+    expect(dry.stdout).toContain("a new Shiplet would be created");
+    const conflict = await run(["trace", "share", path.join(fixtures, "codex-rollout.jsonl"), "--new", "--shiplet", "p"]);
+    expect(conflict.stderr).toContain("--new works with trace share alone");
+  });
+
   it("re-approves a session once when the cached one lacks trace scopes", async () => {
     let bootstraps = 0;
     let revoked = 0;

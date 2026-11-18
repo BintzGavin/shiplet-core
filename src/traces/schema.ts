@@ -1,4 +1,5 @@
 import { ensureTraceAudienceSchema } from "./audiences";
+import { ensureTraceShipletSchema } from "./trace-shiplets";
 import { ensureTraceUploadSchema } from "./uploads";
 
 // D1 schema for traces. A trace is the full log of an agent session (prompts,
@@ -68,4 +69,5 @@ export async function ensureTraceSchema(db: D1Database) {
 	}
 	await ensureTraceAudienceSchema(db);
 	await ensureTraceUploadSchema(db);
+	await ensureTraceShipletSchema(db);
 }

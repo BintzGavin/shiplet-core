@@ -82,6 +82,7 @@ describe("focused public OpenAPI contract", () => {
       "post /api/projects/{projectId}/review-feedback/{feedbackId}/replies",
       "post /api/projects/{projectId}/review-feedback/{feedbackId}/status",
       "get /api/traces",
+      "post /api/trace-shiplets",
       "get /api/shiplets/{projectId}/traces",
       "get /api/shiplets/{projectId}/traces/{traceId}",
       "delete /api/shiplets/{projectId}/traces/{traceId}",

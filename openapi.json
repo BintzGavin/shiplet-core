@@ -185,6 +185,25 @@
         },
         "additionalProperties": false
       },
+      "TraceShipletRequest": {
+        "type": "object",
+        "required": [
+          "name"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 120,
+            "description": "A short title for the session."
+          },
+          "organizationId": {
+            "type": "string",
+            "description": "The organization to create it in. Required when the caller belongs to several."
+          }
+        }
+      },
       "TracePreviewRequest": {
         "type": "object",
         "required": [
@@ -542,6 +561,51 @@
           },
           "404": {
             "description": "Not found, or not visible to the caller."
+          }
+        }
+      }
+    },
+    "/api/trace-shiplets": {
+      "post": {
+        "operationId": "createTraceShiplet",
+        "x-shiplet-code-mode": true,
+        "x-shiplet-scopes": [
+          "traces:write"
+        ],
+        "tags": [
+          "Traces"
+        ],
+        "summary": "Create a Shiplet to share one agent session",
+        "description": "Creates an ordinary Shiplet whose page is the trace viewer, for sharing a session that has no artifact to review. Then upload the session to it: run npx shiplet-cli trace share --current --shiplet <id>, or call createTraceUploadLink. A trace is the full log of an agent session: the prompts, the agent's replies, and every tool call and result, from Claude Code or Codex. The Shiplet is visible to its organization, and new traces stay private to their uploader and the Shiplet owner until shared.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TraceShipletRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Shiplet created.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Missing name, or the caller belongs to several organizations and must choose one with organizationId."
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
           }
         }
       }

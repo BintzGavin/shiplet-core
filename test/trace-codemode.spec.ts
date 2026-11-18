@@ -139,6 +139,17 @@ describe("traces over Code Mode MCP (slice 3)", () => {
     });
   });
 
+  it("creates a trace-only Shiplet through execute", async () => {
+    await withTraces(async () => {
+      const { organizationId } = await setup();
+      const created = await execute(OWNER, `{ method: "POST", path: "/api/trace-shiplets", body: { name: "Agent session", organizationId: "${organizationId}" } }`);
+      expect(created.isError, created.text).toBe(false);
+      expect(created.output.shiplet).toMatchObject({ name: "Agent session", traceOnly: true, organizationId });
+      const link = await execute(OWNER, `{ method: "POST", path: "/api/shiplets/${created.output.shiplet.id}/trace-uploads" }`);
+      expect(link.isError, link.text).toBe(false);
+    });
+  });
+
   it("describes traces in search, including what a trace is", async () => {
     await withTraces(async () => {
       const found = await tool(

@@ -112,3 +112,53 @@ describe("traces docs", () => {
     expect(declared).toBe([...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, "0")).join(""));
   });
 });
+
+describe("trace-only Shiplets (D19)", () => {
+  it("creates a Shiplet whose page is the trace viewer", async () => {
+    await withFlags("traces", async () => {
+      const org = await request("/api/organizations", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", ...OWNER },
+        body: JSON.stringify({ name: `Trace only ${crypto.randomUUID()}` }),
+      });
+      const organizationId = ((await org.json()) as { organization: { id: string } }).organization.id;
+      const missing = await request("/api/trace-shiplets", { method: "POST", headers: { "Content-Type": "application/json", ...OWNER }, body: JSON.stringify({ organizationId }) });
+      expect(missing.status).toBe(400);
+      const crossSite = await request("/api/trace-shiplets", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "sec-fetch-site": "cross-site", ...OWNER },
+        body: JSON.stringify({ name: "Nope", organizationId }),
+      });
+      expect(crossSite.status).toBe(403);
+      const created = await request("/api/trace-shiplets", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", ...OWNER },
+        body: JSON.stringify({ name: "Fix the <flaky> checkout test", organizationId }),
+      });
+      expect(created.status).toBe(201);
+      const { shiplet } = (await created.json()) as { shiplet: { id: string; traceOnly: boolean; visibility: string; organizationId: string; url: string } };
+      expect(shiplet).toMatchObject({ traceOnly: true, visibility: "organization", organizationId });
+      expect(shiplet.url).toMatch(new RegExp(`/shiplets/${shiplet.id}$`));
+
+      const page = await (await request(`/shiplets/${shiplet.id}`, { headers: OWNER })).text();
+      expect(page).toContain('id="trace-viewer-root"');
+      expect(page).toContain('data-embedded="true"');
+      expect(page).not.toContain('id="artifactPreviewFrame"');
+      expect(page).toContain('id="traces-panel-root"');
+      expect(page).toContain("shares an agent session");
+
+      // an ordinary Shiplet still shows its artifact
+      const ordinary = await createShiplet();
+      const ordinaryPage = await (await request(`/shiplets/${ordinary}`, { headers: OWNER })).text();
+      expect(ordinaryPage).toContain('id="artifactPreviewFrame"');
+      expect(ordinaryPage).not.toContain('data-embedded="true"');
+
+      // signed out, or with traces off, nobody can create one
+      expect((await request("/api/trace-shiplets", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name: "x" }) })).status).toBe(401);
+    });
+    await withFlags(undefined, async () => {
+      const off = await request("/api/trace-shiplets", { method: "POST", headers: { "Content-Type": "application/json", ...OWNER }, body: JSON.stringify({ name: "x" }) });
+      expect(off.status).toBe(404);
+    });
+  });
+});

@@ -3,13 +3,15 @@
 import * as React from "react";
 import { createRoot } from "react-dom/client";
 
-import { TraceViewerApp, TracesPanel } from "./traces-app";
+import { TraceOnlyShipletViewer, TraceViewerApp, TracesPanel } from "./traces-app";
 
 const viewer = document.getElementById("trace-viewer-root");
 if (viewer?.dataset.projectId && viewer.dataset.traceId) {
 	createRoot(viewer).render(
 		<TraceViewerApp projectId={viewer.dataset.projectId} traceId={viewer.dataset.traceId} origin={window.location.origin} />,
 	);
+} else if (viewer?.dataset.projectId && viewer.dataset.embedded === "true") {
+	createRoot(viewer).render(<TraceOnlyShipletViewer projectId={viewer.dataset.projectId} origin={window.location.origin} />);
 }
 
 const panel = document.getElementById("traces-panel-root");

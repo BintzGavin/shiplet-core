@@ -414,6 +414,7 @@ Usage:
   shiplet logout
   shiplet trace share <session.jsonl | session-folder> --shiplet <shiplet-id> [--revision <revision-id>]
   shiplet trace share --current --shiplet <shiplet-id>
+  shiplet trace share --current --new [--title <text>] [--organization <id>]
   shiplet trace audiences <trace-id> --shiplet <shiplet-id> [--audience <type>:<id>=<level> ...] [--audiences <file.json>] [--private]
   shiplet trace preview <trace-id> --shiplet <shiplet-id> (--level <level> | --profile <file.json>)
   shiplet trace list --shiplet <shiplet-id>
@@ -475,6 +476,8 @@ Flags:
   --force               Permit pull/eject to write into a non-empty destination.
   --shiplet <id>        Shiplet a trace belongs to.
   --current             trace share: share the agent session this command runs in.
+  --new                 trace share: create a Shiplet for this session instead of
+                        naming one with --shiplet. Its page is the trace viewer.
   --title <text>        trace share: trace title. Defaults to the first prompt.
   --no-attachments      trace share: leave out images and other attachments.
   --no-files            trace share: leave out screenshots, videos, and PDFs the session produced.
@@ -543,6 +546,7 @@ function parseArguments(argv) {
 		as: "",
 		maxTokens: "",
 		current: false,
+		newShiplet: false,
 		noAttachments: false,
 		noFiles: false,
 		share: false,
@@ -584,6 +588,11 @@ function parseArguments(argv) {
 		if (arg === "--current") {
 			options.current = true;
 			options.providedFlags.add("--current");
+			continue;
+		}
+		if (arg === "--new") {
+			options.newShiplet = true;
+			options.providedFlags.add("--new");
 			continue;
 		}
 		if (arg === "--no-files" || arg === "--share" || arg === "--private") {
@@ -675,7 +684,7 @@ function assertApplicableFlags(options) {
 		"--name": new Set(["publish", "prepare"]),
 		"--subdomain": new Set(["publish", "prepare"]),
 		"--visibility": new Set(["publish", "prepare"]),
-		"--organization": new Set(["publish", "prepare"]),
+		"--organization": new Set(["publish", "prepare", "trace"]),
 		"--dry-run": new Set(["publish", "prepare", "trace", ...APPROVAL_COMMANDS]),
 		"--approve": APPROVAL_COMMANDS,
 		"--force": new Set(["pull", "eject"]),
@@ -687,6 +696,7 @@ function assertApplicableFlags(options) {
 		"--as": new Set(["trace"]),
 		"--max-tokens": new Set(["trace"]),
 		"--current": new Set(["trace"]),
+		"--new": new Set(["trace"]),
 		"--no-attachments": new Set(["trace"]),
 		"--no-files": new Set(["trace"]),
 		"--share": new Set(["trace"]),
@@ -3881,7 +3891,7 @@ async function loadTraceCore() {
 
 function traceUsage(subcommand) {
 	const usages = {
-		share: "trace share <session.jsonl | session-folder> --shiplet <shiplet-id>  (or --current)",
+		share: "trace share <session.jsonl | session-folder> --shiplet <shiplet-id>  (or --current, or --new instead of --shiplet)",
 		list: "trace list --shiplet <shiplet-id>",
 		pull: "trace pull <trace-id> --shiplet <shiplet-id> [<dir>] [--as context]",
 		delete: "trace delete <trace-id> --shiplet <shiplet-id>",
@@ -4268,9 +4278,15 @@ async function runTraceCommand(options, runtime) {
 	if (options.uploadUrl && (subcommand !== "share" || wantsAudienceChange(options) || options.shiplet)) {
 		throw new CliError("--upload-url works with trace share alone; it already names the Shiplet, and audiences are set over MCP.");
 	}
-	if (!options.shiplet && !options.uploadUrl) throw new CliError(`${traceUsage(subcommand)}\nMissing --shiplet <shiplet-id>.`);
-	const shipletId = options.uploadUrl ? "upload-link" : assertIdentifier(options.shiplet, "Shiplet ID");
-	const base = `/api/shiplets/${encodeURIComponent(shipletId)}/traces`;
+	if (options.newShiplet && (subcommand !== "share" || options.shiplet || options.uploadUrl)) {
+		throw new CliError("--new works with trace share alone, instead of --shiplet or --upload-url.");
+	}
+	if (options.organization && !options.newShiplet) throw new CliError("--organization applies to trace share --new only.");
+	if (!options.shiplet && !options.uploadUrl && !options.newShiplet) {
+		throw new CliError(`${traceUsage(subcommand)}\nMissing --shiplet <shiplet-id>, or --new to create a Shiplet for this session.`);
+	}
+	let shipletId = options.uploadUrl ? "upload-link" : options.newShiplet ? "new" : assertIdentifier(options.shiplet, "Shiplet ID");
+	let base = `/api/shiplets/${encodeURIComponent(shipletId)}/traces`;
 	const write = (value, text) => {
 		if (options.json) writeJson(runtime.stdout, value);
 		else runtime.stdout.write(text);
@@ -4353,7 +4369,10 @@ async function runTraceCommand(options, runtime) {
 			...produced.skipped.map((file) => `  Skipped:     ${sanitizeOutputText(file.path)} (${file.reason})`),
 		].join("\n");
 		if (options.dryRun) {
-			write({ ok: true, dryRun: true, ...summary }, `${describe}\nDry run: nothing was uploaded.\n`);
+			write(
+				{ ok: true, dryRun: true, ...summary, ...(options.newShiplet ? { newShiplet: { name: options.title || summary.title } } : {}) },
+				`${describe}\n${options.newShiplet ? `  Shiplet:     a new Shiplet would be created for this session\n` : ""}Dry run: nothing was uploaded.\n`,
+			);
 			return;
 		}
 		let uploadLink = null;
@@ -4375,7 +4394,20 @@ async function runTraceCommand(options, runtime) {
 			: await openTraceSession(options, runtime);
 		let result;
 		let shared = null;
+		let created = null;
 		try {
+			if (options.newShiplet) {
+				const organizationId = options.organization || runtime.env.SHIPLET_ORGANIZATION_ID || "";
+				const response = await traceRequest(session, {
+					method: "POST",
+					pathname: "/api/trace-shiplets",
+					body: JSON.stringify({ name: (options.title || prepared.upload.title).slice(0, 120), ...(organizationId ? { organizationId } : {}) }),
+				});
+				created = responseRecord(response.shiplet);
+				shipletId = String(created.id || "");
+				if (!shipletId) throw new CliError("Shiplet did not return the new Shiplet's ID.");
+				base = `/api/shiplets/${encodeURIComponent(shipletId)}/traces`;
+			}
 			result = await traceRequest(session, { method: "POST", pathname: uploadLink ? uploadLink.pathname : base, body, timeoutMs: TRACE_UPLOAD_TIMEOUT_MS, retryTransient: !uploadLink });
 			const traceId = String(responseRecord(result.trace).id || "");
 			const pending = new Set(Array.isArray(result.pendingAttachments) ? result.pendingAttachments : []);
@@ -4401,8 +4433,8 @@ async function runTraceCommand(options, runtime) {
 			? `  Shared with: ${(shared.audiences || []).map((audience) => `${audience.targetType}${audience.targetType === "organization" || audience.targetType === "link" ? "" : `:${audience.targetId}`}=${audience.profile?.level}`).join(", ") || "nobody yet"} (organization admins can read shared traces)`
 			: "  Private to you and the Shiplet owner.";
 		write(
-			{ ok: true, ...summary, trace, duplicate: result.duplicate === true, serverMasked: result.serverMasked || null, sharing: shared, link },
-			`${describe}\n${result.duplicate ? "Already uploaded" : "Uploaded"}: ${trace.id}\n  Masked by Shiplet: ${maskedKindsText(result.serverMasked?.kinds)}\n${sharingText}\n  ${link}\n`,
+			{ ok: true, ...summary, trace, duplicate: result.duplicate === true, serverMasked: result.serverMasked || null, sharing: shared, link, ...(created ? { shiplet: created } : {}) },
+			`${describe}\n${created ? `Created Shiplet: ${sanitizeOutputText(String(created.name || ""))} (${created.id})\n  ${session.apiUrl}/shiplets/${encodeURIComponent(String(created.id))}\n` : ""}${result.duplicate ? "Already uploaded" : "Uploaded"}: ${trace.id}\n  Masked by Shiplet: ${maskedKindsText(result.serverMasked?.kinds)}\n${sharingText}\n  ${link}\n`,
 		);
 		return;
 	}

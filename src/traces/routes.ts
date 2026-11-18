@@ -18,6 +18,7 @@ import {
 	handlePutAttachment,
 	handlePutAudiences,
 } from "./handlers";
+import { handleCreateTraceShiplet } from "./trace-shiplets";
 import { accessForUploadLink, handleCreateUploadLink, markUploadLinkUsed } from "./uploads";
 
 class PayloadTooLarge extends Error {}
@@ -83,6 +84,21 @@ function origin(request: Request, env: { SHIPLET_APP_URL?: string }) {
 export function registerTraceRoutes(app: Hono<any>) {
 	const project = "/api/shiplets/:projectId/traces";
 	const trace = `${project}/:traceId`;
+
+	// A Shiplet made to share one agent session (D19).
+	app.post("/api/trace-shiplets", async (c) => {
+		const unavailable = tracesAvailable(c.env);
+		if (unavailable) return unavailable;
+		const actor = await traceActorFromRequest(c.env, c.req.raw, "write");
+		if (actor instanceof Response) return actor;
+		let body: unknown;
+		try {
+			body = await c.req.json();
+		} catch {
+			return traceError(400, "invalid_request", "Send a JSON body: { name, organizationId? }.");
+		}
+		return handleCreateTraceShiplet(c.env, actor, body, new URL(c.req.url).origin);
+	});
 
 	app.post(project, async (c) => {
 		const access = await resolveTraceAccess(c.env, c.req.raw, c.req.param("projectId"), "write");

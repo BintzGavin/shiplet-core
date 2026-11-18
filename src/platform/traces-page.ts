@@ -20,3 +20,13 @@ export function TracesPanelMount(options: { nonce: KernelDocumentNonce; projectI
 	return `<div id="traces-panel-root" data-project-id="${attribute(options.projectId)}" data-can-edit="${options.canEdit ? "true" : "false"}"></div>
 <script data-shiplet-kernel-script="v1" ${kernelScriptNonceAttribute(options.nonce)} type="module" src="${TRACES_CLIENT_ASSET}"></script>`;
 }
+
+// The page of a trace-only Shiplet (D19): the viewer, showing the newest trace
+// this reader can open, where the artifact frame would be.
+export function BuildTraceOnlyViewerMount(options: { nonce: KernelDocumentNonce; projectId: string }) {
+	return `<div id="trace-viewer-root" class="trace-viewer-embedded" data-project-id="${attribute(options.projectId)}" data-trace-id="" data-embedded="true">
+  <div class="banner banner-info">Loading trace…</div>
+  <p class="trace-definition">A trace is the full log of an agent session: your prompts, the agent's replies, and every tool call and result.</p>
+</div>
+<script data-shiplet-kernel-script="v1" ${kernelScriptNonceAttribute(options.nonce)} type="module" src="${TRACES_CLIENT_ASSET}"></script>`;
+}

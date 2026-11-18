@@ -1153,10 +1153,15 @@ prefix; no other table references them.
      the context handoff all define a trace the first time it appears.
    - **Docs.** `/docs/traces` (and `docs/traces.mdx`).
    - **Browser writes** are refused unless `sec-fetch-site` is same-origin.
-   - **Not built: trace-only Shiplets (D19).** Creating a Shiplet still
-     requires an artifact, so a session alone is shared by adding it to any
-     Shiplet. Rendering the viewer in place of the artifact frame, and
-     `trace share --new`, are a follow-up.
+   - **Trace-only Shiplets (D19).** `POST /api/trace-shiplets`
+     (`createTraceShiplet` in Code Mode) and `shiplet trace share --new`
+     create an ordinary Shiplet through the normal publish path, visible to its
+     organization, with a page Shiplet writes as its artifact. That keeps
+     every route that assumes an artifact working, with no new source type. A
+     `trace_shiplets` marker row (kernel schema epoch 8) makes its detail page
+     show the viewer, with the newest trace the reader can open, where the
+     artifact frame would be. Comments, invites, and lifecycle work as on any
+     Shiplet, and permanent deletion removes the marker.
 5. **Native resume (experimental).** Write a Claude Code or Codex session from a
    trace for `--resume`, behind a flag, per harness version. Do it only if
    context handoff proves too thin.

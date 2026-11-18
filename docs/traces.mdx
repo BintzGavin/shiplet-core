@@ -29,6 +29,9 @@ npx shiplet-cli trace share --current --shiplet <id>
   `--dry-run` shows what would be sent.
 - An MCP agent calls `createTraceUploadLink` and then runs
   `npx shiplet-cli trace share --current --upload-url <link>`.
+- `--new` (instead of `--shiplet`) creates a trace-only Shiplet for a session
+  with no artifact: an ordinary Shiplet whose page is the trace viewer. Over
+  MCP, call `createTraceShiplet`, then `createTraceUploadLink`.
 - The dashboard drop zone accepts session `.jsonl` files and masks them in the
   browser. It recommends asking your agent first.
 

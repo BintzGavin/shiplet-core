@@ -106,7 +106,35 @@ function CopyButton({ text, label }: { text: string; label: string }) {
 // ---------------------------------------------------------------------------
 // Trace viewer page
 
-export function TraceViewerApp({ projectId, traceId, origin }: { projectId: string; traceId: string; origin: string }) {
+// The page of a trace-only Shiplet (D19): the newest trace this reader can open,
+// in the same viewer.
+export function TraceOnlyShipletViewer({ projectId, origin }: { projectId: string; origin: string }) {
+	const [traceId, setTraceId] = React.useState<string | null | undefined>(undefined);
+	const [error, setError] = React.useState("");
+	React.useEffect(() => {
+		api<{ traces: TraceSummary[] }>(tracePath(projectId))
+			.then((loaded) => setTraceId(loaded.traces[0]?.id ?? null))
+			.catch((caught) => setError((caught as Error).message));
+	}, [projectId]);
+	if (error) return <div className="banner banner-error">{error}</div>;
+	if (traceId === undefined) return <div className="banner banner-info">Loading trace…</div>;
+	if (traceId === null) {
+		return (
+			<section className="success-card shiplet-panel trace-empty">
+				<span className="success-card-label">Trace</span>
+				<h2>No session to show yet</h2>
+				<p>{TRACE_DEFINITION}</p>
+				<p>
+					This Shiplet was made to share one. Ask your agent to "share this session to Shiplet {projectId}", or run{" "}
+					<code>npx shiplet-cli trace share --current --shiplet {projectId}</code>. If the trace is private, only its uploader and the Shiplet owner can see it.
+				</p>
+			</section>
+		);
+	}
+	return <TraceViewerApp projectId={projectId} traceId={traceId} origin={origin} embedded />;
+}
+
+export function TraceViewerApp({ projectId, traceId, origin, embedded = false }: { projectId: string; traceId: string; origin: string; embedded?: boolean }) {
 	const [detail, setDetail] = React.useState<TraceDetail | null>(null);
 	const [events, setEvents] = React.useState<TraceEvent[]>([]);
 	const [nextSegment, setNextSegment] = React.useState(0);
@@ -164,7 +192,7 @@ export function TraceViewerApp({ projectId, traceId, origin }: { projectId: stri
 		<div className="trace-viewer" data-trace-id={traceId}>
 			<section className="success-card shiplet-panel shiplet-focus-strip trace-header">
 				<span className="success-card-label">Trace · {manifest.source?.harness === "codex" ? "Codex" : "Claude Code"} session</span>
-				<h1>{manifest.title}</h1>
+				{embedded ? <h2>{manifest.title}</h2> : <h1>{manifest.title}</h1>}
 				<p className="trace-definition">{TRACE_DEFINITION}</p>
 				<div className="trace-meta">
 					<span>You're seeing</span> <LevelStamp level={access.level} />
@@ -178,9 +206,15 @@ export function TraceViewerApp({ projectId, traceId, origin }: { projectId: stri
 				<div className="trace-actions">
 					<CopyButton text={agentPrompt} label="Copy prompt for your agent" />
 					<CopyButton text={cliCommand} label="Copy CLI command" />
-					<a className="btn btn-secondary btn-sm" href={`/shiplets/${encodeURIComponent(projectId)}`}>
-						Back to the Shiplet
-					</a>
+					{embedded ? (
+						<a className="btn btn-secondary btn-sm" href={`/shiplets/${encodeURIComponent(projectId)}/traces/${encodeURIComponent(traceId)}`}>
+							Open full page
+						</a>
+					) : (
+						<a className="btn btn-secondary btn-sm" href={`/shiplets/${encodeURIComponent(projectId)}`}>
+							Back to the Shiplet
+						</a>
+					)}
 				</div>
 				<p className="trace-hint">
 					Your browser cannot write into Claude Code or Codex. To continue this work, give your agent the prompt (it loads the trace over Shiplet MCP), or run the

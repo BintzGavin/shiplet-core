@@ -18,6 +18,7 @@ import {
 	handlePreview,
 	handlePutAudiences,
 } from "./handlers";
+import { handleCreateTraceShiplet } from "./trace-shiplets";
 import { handleCreateUploadLink } from "./uploads";
 
 export type TraceCodeModeContext =
@@ -35,6 +36,7 @@ type Request = {
 const PROJECT = "/api/shiplets/([^/]+)";
 const ROUTES: Array<{ method: string; pattern: RegExp; mode: TraceMode; name: string }> = [
 	{ method: "GET", pattern: /^\/api\/traces$/, mode: "read", name: "listReadable" },
+	{ method: "POST", pattern: /^\/api\/trace-shiplets$/, mode: "write", name: "createShiplet" },
 	{ method: "GET", pattern: new RegExp(`^${PROJECT}/traces$`), mode: "read", name: "list" },
 	{ method: "GET", pattern: new RegExp(`^${PROJECT}/traces/([^/]+)$`), mode: "read", name: "get" },
 	{ method: "GET", pattern: new RegExp(`^${PROJECT}/traces/([^/]+)/segments/([^/]+)$`), mode: "read", name: "segment" },
@@ -47,7 +49,7 @@ const ROUTES: Array<{ method: string; pattern: RegExp; mode: TraceMode; name: st
 ];
 
 export function isTraceCodeModePath(path: string) {
-	return /^\/api\/traces$/.test(path) || /^\/api\/shiplets\/[^/]+\/(?:traces|trace-uploads)(?:\/|$)/.test(path);
+	return /^\/api\/(?:traces|trace-shiplets)$/.test(path) || /^\/api\/shiplets\/[^/]+\/(?:traces|trace-uploads)(?:\/|$)/.test(path);
 }
 
 function actorFor(context: TraceCodeModeContext, mode: TraceMode, projectOrganizationId: string | null): TraceActor | Response {
@@ -91,6 +93,18 @@ export async function executeTraceCodeModeRequest(env: Env, context: TraceCodeMo
 			return { traces: allowed };
 		}
 		return unwrap(await handleListReadableTraces(env, actor, { limit: query.limit }));
+	}
+
+	if (route.name === "createShiplet") {
+		const actor = actorFor(context, "write", null);
+		if (actor instanceof Response) throw actor;
+		const body = { ...((request.body && typeof request.body === "object" ? request.body : {}) as Record<string, unknown>) };
+		if (context.kind === "oauth_agent") {
+			// Delegated agents create Shiplets only in their selected organization.
+			if (body.organizationId && body.organizationId !== context.principal.organizationId) throw notFound();
+			body.organizationId = context.principal.organizationId;
+		}
+		return unwrap(await handleCreateTraceShiplet(env, actor, body, origin));
 	}
 
 	const project = await loadTraceProject(env, decodeURIComponent(projectId));

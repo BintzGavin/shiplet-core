@@ -2924,6 +2924,9 @@ details textarea { margin-top: 8px; }
   white-space: nowrap;
   border: 0;
 }
+/* Form controls in the dashboard get width: 100%, which would otherwise widen
+   a visually hidden control past the page. */
+.dashboard-shell :is(input, select, textarea).sr-only { width: 1px !important; min-width: 0 !important; padding: 0 !important; border: 0 !important; }
 
 /* --------------------------------------------------------------------------
    Harbor chrome: decoration art
@@ -3097,6 +3100,9 @@ details textarea { margin-top: 8px; }
 .trace-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
 .trace-hint { color: var(--text-muted); font-size: var(--type-small); margin: 10px 0 0; }
 .trace-layout { display: grid; grid-template-columns: minmax(0, 2fr) minmax(0, 1fr); gap: 16px; align-items: start; }
+.trace-viewer-embedded { display: grid; gap: 16px; margin-bottom: 16px; min-width: 0; }
+.trace-viewer-embedded .trace-layout { grid-template-columns: 1fr; }
+.trace-viewer-embedded .trace-header h2 { font-size: clamp(24px, 3vw, 34px); line-height: 1.1; margin: 8px 0; }
 .trace-side { display: grid; gap: 16px; }
 .trace-level { color: var(--harbor-700); background: var(--harbor-100); }
 .trace-level-full { color: var(--buoy-700); background: var(--buoy-100); }
@@ -5992,7 +5998,9 @@ export function BuildShipletReviewPage(options: {
 	canEditLifecycle?: boolean;
 	canPermanentlyDelete?: boolean;
 	tracesPanel?: string;
+	traceOnlyViewer?: string;
 }) {
+  const traceOnly = Boolean(options.traceOnlyViewer);
   const projectJson = scriptJson({
     id: options.project.id,
     organization_id: options.project.organization_id || "",
@@ -6028,10 +6036,10 @@ export function BuildShipletReviewPage(options: {
       <div>
         <span class="success-card-label stamp-xl">${isArchived ? "Archived" : options.created ? "Ready for review" : "Review bridge"}</span>
         <h1>${createdTitle}</h1>
-        <p>${projectName} ${isArchived ? "is archived and no longer serves its artifact until restored." : "is prepared for review. Open the artifact, collect contextual comments, then hand clear notes to engineers or local agents through MCP."}</p>
+        <p>${projectName} ${isArchived ? "is archived and no longer serves its artifact until restored." : traceOnly ? "shares an agent session. Read the trace below, comment on it, or copy it into your own agent." : "is prepared for review. Open the artifact, collect contextual comments, then hand clear notes to engineers or local agents through MCP."}</p>
       </div>
       <div class="shiplet-detail-actions">
-        <a class="btn btn-primary btn-sm" href="${reviewUrl}" target="_blank" rel="noreferrer">${isArchived ? "View archived page" : "Open review page"}</a>
+        ${traceOnly ? "" : `<a class="btn btn-primary btn-sm" href="${reviewUrl}" target="_blank" rel="noreferrer">${isArchived ? "View archived page" : "Open review page"}</a>`}
         <a class="btn btn-secondary btn-sm" href="/">Create another shiplet</a>
       </div>
     </div>
@@ -6040,7 +6048,10 @@ export function BuildShipletReviewPage(options: {
 
   <div class="review-command-grid">
     <section class="artifact-preview-shell">
-      <div class="dashboard-section-header" style="margin-bottom: 12px;">
+      ${
+        traceOnly
+          ? options.traceOnlyViewer
+          : `<div class="dashboard-section-header" style="margin-bottom: 12px;">
         <div>
           <span class="success-card-label">Review window</span>
           <h2>Artifact and review</h2>
@@ -6051,7 +6062,8 @@ export function BuildShipletReviewPage(options: {
           <a class="btn btn-secondary btn-sm" href="${artifactUrl}" target="_blank" rel="noreferrer">Open URL</a>
         </div>
       </div>
-      <iframe id="artifactPreviewFrame" class="artifact-preview-frame" src="${previewUrl}" title="${projectName} preview"></iframe>
+      <iframe id="artifactPreviewFrame" class="artifact-preview-frame" src="${previewUrl}" title="${projectName} preview"></iframe>`
+      }
       <section class="review-comments-panel" aria-labelledby="reviewCommentsTitle">
         <div class="dashboard-section-header">
           <div>

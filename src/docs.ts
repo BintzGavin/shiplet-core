@@ -34,7 +34,7 @@ const DOCS_PUBLIC_CONTENT_SHA256: Record<string, string> = {
   "api-surface":
     "ae7d36eb6be9d7c20c4e9a493540d3b9f3d89ce7d31dbb1de9a25d8ee5f56f95",
   "embed": "9fef7053a6175f1aa55f8c7c5076596d104b2aa26538839c70a63e6a441c96b3",
-  "traces": "05b8962fa688b0b27b68e4f44ad3513309ba936019f4806b3c0efde51eabd53b",
+  "traces": "6001569b5f1495cd118584c2feadb598dd65de04c85cb0f207f6e393cc33f851",
   "security": "5b52e175c0b5cb8630e199c1bfc126895eadaa47e5f0fa3ec19d7878b6e7caa6"
 };
 
@@ -289,6 +289,7 @@ const DOCS_PAGES: DocsPage[] = [
 <p>The easiest way is to ask your agent: say “Share this session to Shiplet &lt;name or id&gt;” in Claude Code or Codex. Your agent knows which session it is in, including subagents, screenshots, and videos. From a terminal, run:</p>
 <pre><code>npx shiplet-cli trace share --current --shiplet &lt;id&gt;</code></pre>
 <p>The CLI masks secrets on your computer before anything is sent, and Shiplet scans again when the trace arrives. Screenshots, videos, and PDFs the session produced are attached automatically (up to 20 MiB each). Add <code>--dry-run</code> to see what would be sent, or <code>--no-files</code> to leave the files out.</p>
+<p>To share a session that has no artifact to review, add <code>--new</code> instead of <code>--shiplet</code>: <code>npx shiplet-cli trace share --current --new --title "Fix the flaky test"</code>. Shiplet creates an ordinary Shiplet for it, whose page is the trace viewer.</p>
 <p>No terminal? Drop a session file (<code>.jsonl</code>) onto the drop zone in the Shiplet's Traces panel. The browser masks secrets before uploading. Claude Code keeps sessions in <code>~/.claude/projects/</code> and Codex keeps them in <code>~/.codex/sessions/</code>.</p>
 <h2>Who sees what</h2>
 <p>A new trace is private: only you and the Shiplet's owner can open it. Share it with a person or email, a team, the whole organization, or anyone with the link, and choose a level for each audience:</p>
