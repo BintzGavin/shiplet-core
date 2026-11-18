@@ -289,6 +289,16 @@ describe("trace API (slice 1)", () => {
     });
   });
 
+  it("refuses cross-site trace changes from a browser session", async () => {
+    await withTraces(async () => {
+      const projectId = await createShiplet(await createOrganization());
+      const crossSite = await post(projectId, await fixtureUpload(), { ...OWNER, "sec-fetch-site": "cross-site" });
+      expect(crossSite.status).toBe(403);
+      const sameOrigin = await post(projectId, await fixtureUpload(), { ...OWNER, "sec-fetch-site": "same-origin" });
+      expect(sameOrigin.status).toBe(201);
+    });
+  });
+
   it("refuses with clear errors", async () => {
     await withTraces(async () => {
       const organizationId = await createOrganization();

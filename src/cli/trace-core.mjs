@@ -192,6 +192,15 @@ function attachmentCollector() {
   };
 }
 
+// A default title: the first prompt's first line, cut at a word near 80 chars.
+function titleFrom(text) {
+  const line = firstLine(text, 1000);
+  if (line.length <= 80) return line;
+  const cut = line.slice(0, 80);
+  const space = cut.lastIndexOf(" ");
+  return `${(space > 40 ? cut.slice(0, space) : cut).replace(/[\s,;:.-]+$/, "")}…`;
+}
+
 function firstLine(text, max) {
   const line = String(text || "").split("\n").find((value) => value.trim()) || "";
   return line.trim().slice(0, max);
@@ -646,8 +655,10 @@ export function inputSummary(tool) {
   for (const key of ["file_path", "path", "notebook_path"]) {
     if (typeof input[key] === "string") return input[key].slice(0, 200);
   }
+  // The tool name is shown next to the summary, so the summary is just the
+  // first text argument (or the name when there is none).
   const first = Object.values(input).find((value) => typeof value === "string");
-  return `${tool?.name ?? "tool"}${first ? `: ${first}` : ""}`.slice(0, 120);
+  return String(first || tool?.name || "tool").slice(0, 120);
 }
 
 function relativePath(path, cwd) {
@@ -1390,7 +1401,7 @@ export async function prepareTraceUpload({ main, subagents = [], title, revision
     attachments = [];
   }
   const firstPrompt = events.find((event) => event.kind === "user_message" && event.agent === "main" && firstLine(event.text, 80))?.text;
-  const resolvedTitle = (title || firstLine(firstPrompt, 80) || "Agent session").trim().slice(0, TRACE_LIMITS.titleChars);
+  const resolvedTitle = (title || titleFrom(firstPrompt) || "Agent session").trim().slice(0, TRACE_LIMITS.titleChars);
   const count = maskedEvents.count + maskedAttachments.count;
   const kinds = mergeKinds(mergeKinds({}, maskedEvents.kinds), maskedAttachments.kinds);
   const upload = await buildUpload({

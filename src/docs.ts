@@ -34,6 +34,7 @@ const DOCS_PUBLIC_CONTENT_SHA256: Record<string, string> = {
   "api-surface":
     "ae7d36eb6be9d7c20c4e9a493540d3b9f3d89ce7d31dbb1de9a25d8ee5f56f95",
   "embed": "9fef7053a6175f1aa55f8c7c5076596d104b2aa26538839c70a63e6a441c96b3",
+  "traces": "05b8962fa688b0b27b68e4f44ad3513309ba936019f4806b3c0efde51eabd53b",
   "security": "5b52e175c0b5cb8630e199c1bfc126895eadaa47e5f0fa3ec19d7878b6e7caa6"
 };
 
@@ -275,6 +276,35 @@ const DOCS_PAGES: DocsPage[] = [
 <h2>Optional feedback automation through MCP</h2>
 <p>An authorized agent can read tickets, create replies, and update status through documented API operations. Shiplet records the authenticated agent credential as the actor.</p>
 <p><strong>Next:</strong> open <a href="/feedback">Feedback</a> to work through review tickets.</p>`,
+  },
+  {
+    slug: "traces",
+    title: "Traces",
+    description: "Share the full log of an agent session and let colleagues read or continue it.",
+    group: "Review",
+    body: `
+<p>A <strong>trace</strong> is the full chat log of an agent session: your prompts, the agent's replies, and every tool call and result. Shiplet keeps traces next to the work they produced, so a reviewer can see how a change was made and a colleague can pick the session up in their own agent.</p>
+<p>Traces are rolling out. If a Shiplet's detail page has no <strong>Traces</strong> panel, they are not enabled on this server yet.</p>
+<h2>Share the session you are in</h2>
+<p>The easiest way is to ask your agent: say “Share this session to Shiplet &lt;name or id&gt;” in Claude Code or Codex. Your agent knows which session it is in, including subagents, screenshots, and videos. From a terminal, run:</p>
+<pre><code>npx shiplet-cli trace share --current --shiplet &lt;id&gt;</code></pre>
+<p>The CLI masks secrets on your computer before anything is sent, and Shiplet scans again when the trace arrives. Screenshots, videos, and PDFs the session produced are attached automatically (up to 20 MiB each). Add <code>--dry-run</code> to see what would be sent, or <code>--no-files</code> to leave the files out.</p>
+<p>No terminal? Drop a session file (<code>.jsonl</code>) onto the drop zone in the Shiplet's Traces panel. The browser masks secrets before uploading. Claude Code keeps sessions in <code>~/.claude/projects/</code> and Codex keeps them in <code>~/.codex/sessions/</code>.</p>
+<h2>Who sees what</h2>
+<p>A new trace is private: only you and the Shiplet's owner can open it. Share it with a person or email, a team, the whole organization, or anyone with the link, and choose a level for each audience:</p>
+<div class="docs-table" tabindex="0"><table><thead><tr><th>Level</th><th>What that audience sees</th></tr></thead><tbody>
+<tr><td>Full</td><td>Everything except secrets.</td></tr>
+<tr><td>Conversation</td><td>Messages and tool steps, without tool output or reasoning.</td></tr>
+<tr><td>Summary</td><td>What was done, files touched, checks, and the outcome. No text.</td></tr>
+</tbody></table></div>
+<p>A more specific audience wins: a person or email over their team, a team over the organization. Organization administrators can read every shared trace in full, but not private ones. You can also mask extra terms, hide paths, hide reasoning, or hide videos for one audience, and use <strong>Preview as this audience</strong> before sharing.</p>
+<pre><code>npx shiplet-cli trace audiences &lt;trace&gt; --shiplet &lt;id&gt; --audience organization=conversation --audience email:dana@example.com=full</code></pre>
+<h2>Read a trace and continue it</h2>
+<p>Open a trace from the Shiplet's Traces panel to read the timeline, images, videos, and files. The page shows which level you are seeing. Your browser cannot write into Claude Code or Codex, so the viewer gives you two ways to continue:</p>
+<ul><li><strong>Copy prompt for your agent:</strong> paste it into your agent, which loads the trace over <a href="/docs/code-mode-mcp">Shiplet MCP</a>.</li><li><strong>Copy CLI command:</strong> <code>npx shiplet-cli trace pull &lt;trace&gt; --shiplet &lt;id&gt; --as context</code> prints an agent-ready handoff.</li></ul>
+<h2>Limits and retention</h2>
+<ul><li>The session itself can be up to 16 MiB per upload after masking. Files go up separately: up to 20 MiB each and 256 MiB per trace.</li><li>An organization can store up to 10 GiB of traces.</li><li>Deleting a trace or its Shiplet deletes its files. Traces of a Shiplet archived for more than 7 days are deleted.</li><li>API keys need the <code>traces:read</code> or <code>traces:write</code> scope. See <a href="/docs/api-keys">API keys</a>.</li></ul>
+<p><strong>Next:</strong> run <code>search</code> in <a href="/docs/code-mode-mcp">Code Mode MCP</a> for the trace operations, or read <a href="/docs/access-control">Access control</a>.</p>`,
   },
   {
     slug: "cli",

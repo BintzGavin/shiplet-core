@@ -117,7 +117,14 @@ export async function traceActorFromRequest(env: Env, request: Request, mode: Tr
 		return { kind: "token", token };
 	}
 	const user = await getCurrentUser(request, env);
-	if (user) return { kind: "user", user };
+	if (user) {
+		// A browser session only changes traces from Shiplet's own pages.
+		const site = request.headers.get("sec-fetch-site");
+		if (mode !== "read" && site && site !== "same-origin" && site !== "none") {
+			return traceError(403, "forbidden", "Trace changes must come from Shiplet itself.");
+		}
+		return { kind: "user", user };
+	}
 	if (authorization) return mode === "write" ? traceError(401, "unauthorized", "Sign in to add a trace.") : notFound();
 	return { kind: "anonymous" };
 }

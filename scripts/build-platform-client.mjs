@@ -27,6 +27,11 @@ const clientEntries = [
 		fileName: "feedback.js",
 	},
 	{
+		assetPath: "/assets/platform/traces.js",
+		entry: path.join(root, "src/platform/traces-client.tsx"),
+		fileName: "traces.js",
+	},
+	{
 		assetPath: "/assets/platform/invite-links.js",
 		entry: path.join(root, "src/platform/invite-links-client.tsx"),
 		fileName: "invite-links.js",

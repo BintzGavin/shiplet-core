@@ -343,8 +343,9 @@ uploaded, and the server never trusts a client-built summary.
   for shell tools (tool name `Bash`, `shell`, `exec_command`, or
   `local_shell`, from `input.command` as a string, the last element of an
   array, or `input.cmd`), at most 200 chars; otherwise `input.file_path`,
-  `input.path`, or `input.notebook_path`; otherwise the tool name, a colon, and
-  the first string value in `input`, at most 120 chars.
+  `input.path`, or `input.notebook_path`; otherwise the first string value in
+  `input` (or the tool name when there is none), at most 120 chars. The tool name
+  is always shown next to the summary.
 - **Summary**: `durationSeconds` (first to last non-null `t`), `models[]`,
   `promptCount` (number of `user_message` events from `main`),
   `toolCounts { name: count }`, `filesTouched[]` (D8a), `checks[]`, `outcome`,
@@ -1130,6 +1131,32 @@ prefix; no other table references them.
    and as the page of a trace-only Shiplet, D19), the share screen (ladder plus
    simple rules, with preview as each audience), and the D14 drop zone.
    Retires browse-before-pull for colleagues.
+
+   **Built.** What shipped:
+   - **Viewer.** `/shiplets/<id>/traces/<trace>` is a server shell
+     (`src/platform/traces-page.ts`) and a React app
+     (`src/platform/traces-app.tsx`, bundled as `/assets/platform/traces.js`).
+     It reads only the trace API, so it shows exactly the reader's level, says
+     which level that is, and pages the timeline by segment. Images, video, and
+     PDFs render inline; produced files are listed with links; subagents nest
+     under the call that started them; omitted parts say so.
+   - **Continue.** "Copy prompt for your agent" (loads the trace over MCP) and
+     "Copy CLI command" (`trace pull --as context`), since a browser cannot
+     write into Claude Code or Codex.
+   - **Share screen.** For managers: audience, level ladder, mask terms, hidden
+     paths, hide reasoning, hide videos, "Preview as this audience", make
+     private, and share again.
+   - **Traces panel.** On every Shiplet detail page when the flag is on: the
+     list, an "Easiest: ask your agent" banner with copy buttons, and the D14
+     drop zone, which masks in the browser with the shared core.
+   - **Definition.** The panel, the viewer, the CLI help, MCP descriptions, and
+     the context handoff all define a trace the first time it appears.
+   - **Docs.** `/docs/traces` (and `docs/traces.mdx`).
+   - **Browser writes** are refused unless `sec-fetch-site` is same-origin.
+   - **Not built: trace-only Shiplets (D19).** Creating a Shiplet still
+     requires an artifact, so a session alone is shared by adding it to any
+     Shiplet. Rendering the viewer in place of the artifact frame, and
+     `trace share --new`, are a follow-up.
 5. **Native resume (experimental).** Write a Claude Code or Codex session from a
    trace for `--resume`, behind a flag, per harness version. Do it only if
    context handoff proves too thin.

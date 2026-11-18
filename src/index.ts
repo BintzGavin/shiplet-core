@@ -161,6 +161,8 @@ import { registerTraceRoutes } from "./traces/routes";
 import { deleteProjectTraceObjects, sweepArchivedShipletTraces } from "./traces/store";
 import { sweepExpiredUploadLinks } from "./traces/uploads";
 import { executeTraceCodeModeRequest, isTraceCodeModePath } from "./traces/codemode";
+import { BuildTraceViewerPage, TracesPanelMount } from "./platform/traces-page";
+import { TRACES_FLAG } from "./feature-flags";
 import {
   legacyStaticPackageEnvelopeBytes,
   migrateLegacyShipletRevision,
@@ -20460,6 +20462,32 @@ app.get("/shiplets/:projectId/review-layer/preview/:previewId", async (c) => {
   }
 });
 
+// The trace viewer (docs/traces-spec.md D15). The API decides what the
+// viewer may see; this page is only the shell.
+app.get("/shiplets/:projectId/traces/:traceId", async (c) => {
+  if (!useFeatureFlag(c.env, TRACES_FLAG)) return c.text("Not found", 404);
+  const user = await getCurrentUser(c.req.raw, c.env);
+  const project = await getProjectById(c.env.DB, c.req.param("projectId"));
+  const publicLink = project && (project.visibility === "public" || project.visibility === "unlisted");
+  if (!user && !publicLink) {
+    const url = new URL(c.req.url);
+    return c.redirect(`/auth/login?return_to=${encodeURIComponent(url.pathname)}`);
+  }
+  return c.html(
+    renderPage(
+      BuildTraceViewerPage({ nonce: kernelDocumentNonce(c), projectId: c.req.param("projectId"), traceId: c.req.param("traceId") }),
+      {
+        nonce: kernelDocumentNonce(c),
+        customDomain: c.env.CUSTOM_DOMAIN,
+        appUrl: appBaseUrl(c.env, c.req.url),
+        user,
+        title: "Trace · Shiplet",
+        indexing: "noindex",
+      },
+    ),
+  );
+});
+
 app.get("/shiplets/:projectId", async (c) => {
   try {
     const user = await getCurrentUser(c.req.raw, c.env);
@@ -20493,6 +20521,9 @@ app.get("/shiplets/:projectId", async (c) => {
           created: url.searchParams.get("created") === "1",
           canEditLifecycle,
           canPermanentlyDelete: isProjectOwner(project, user.id),
+          tracesPanel: useFeatureFlag(c.env, TRACES_FLAG)
+            ? TracesPanelMount({ nonce: kernelDocumentNonce(c), projectId: project.id, canEdit: canEditLifecycle })
+            : "",
         }),
         {
           nonce: kernelDocumentNonce(c),
