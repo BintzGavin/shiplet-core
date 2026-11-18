@@ -156,6 +156,9 @@ import {
   type RevisionKernelAuthorizationBinding,
   type ShipletActor,
 } from "./self-owned/revisions";
+import { ensureTraceSchema } from "./traces/schema";
+import { registerTraceRoutes } from "./traces/routes";
+import { deleteProjectTraceObjects } from "./traces/store";
 import {
   legacyStaticPackageEnvelopeBytes,
   migrateLegacyShipletRevision,
@@ -887,6 +890,7 @@ async function ensureKernelSchemas(db: D1Database) {
   await ensureD1TemporaryDeploymentAuthoritySchema(db);
   await ensureRevisionDeploymentCoordinatorSchema(db);
   await ensureManagedRuntimeKernelSchema(db);
+  await ensureTraceSchema(db);
 }
 
 const KERNEL_SCHEMA_EPOCH_TABLE = "shiplet_kernel_schema_epoch";
@@ -896,7 +900,8 @@ const KERNEL_SCHEMA_EPOCH_MARKER = "kernel";
 // 2: organization and team invite link tables.
 // 3: cli_authorization_requests.session_ttl_seconds for reusable CLI sessions.
 // 4: workos_membership_sync_state and the organization membership user index.
-const CURRENT_KERNEL_SCHEMA_EPOCH = 4;
+// 5: project_traces for agent session traces.
+const CURRENT_KERNEL_SCHEMA_EPOCH = 5;
 
 async function readKernelSchemaEpoch(db: D1Database): Promise<number | null> {
   const table = await db
@@ -4202,6 +4207,9 @@ async function deleteProjectPermanently(env: Env, project: Project) {
     } catch {
       cleanupIncomplete = true;
     }
+  }
+  if (!(await deleteProjectTraceObjects(env, project.id))) {
+    cleanupIncomplete = true;
   }
   return cleanupIncomplete;
 }
@@ -17003,6 +17011,8 @@ app.post("/api/shiplets", async (c) => {
     return c.text(`Failed to publish shiplet: ${message}`, 500);
   }
 });
+
+registerTraceRoutes(app);
 
 app.get("/api/shiplets/:projectId/review-layer", async (c) => {
   try {

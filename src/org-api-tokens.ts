@@ -7,6 +7,8 @@ export type OrganizationApiScope =
   | "shiplets:archive"
   | "feedback:read"
   | "feedback:write"
+  | "traces:read"
+  | "traces:write"
   | "mcp";
 
 export type ProjectAccessMode = "all" | "selected";
@@ -56,6 +58,8 @@ const VALID_SCOPES = new Set<OrganizationApiScope>([
   "shiplets:archive",
   "feedback:read",
   "feedback:write",
+  "traces:read",
+  "traces:write",
   "mcp",
 ]);
 const VALID_PERSISTED_SCOPES = new Set<string>([

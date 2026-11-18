@@ -349,13 +349,17 @@ uploaded, and the server never trusts a client-built summary.
   `promptCount` (number of `user_message` events from `main`),
   `toolCounts { name: count }`, `filesTouched[]` (D8a), `checks[]`, `outcome`,
   `errorCount` (`tool_result` events with `isError`). A **check** is a shell
-  `tool_call` whose input summary matches
-  `\b(?:test|tests|lint|typecheck|tsc|pytest|vitest|jest|mocha|check|build)\b`,
-  recorded as `{ command, ok }`, where `ok` is the negation of its result's
+  `tool_call` whose command runs a test, lint, typecheck, or build tool
+  (`isCheckCommand` in the core: `npm test`, `npx vitest`, `pytest`,
+  `node --test`, `cargo test`, `make check`, and similar), after a leading
+  `cd dir &&`, environment assignments, and `timeout N` are removed. A command
+  that merely mentions such a word, such as `grep test`, is not a check. It is
+  recorded as `{ command, ok }` (the command's first line), where `ok` is the negation of its result's
   `isError` (true when no result exists). `outcome` is `last-check-passed`,
   `last-check-failed`, or `no-checks-run`, from the last check.
 - **D8a. filesTouched** is the de-duplicated list of `file_path`, `path`, and
-  `notebook_path` inputs, made relative to the session's working directory
+  `notebook_path` inputs of tools other than search tools (`Grep`, `Glob`,
+  `LS`, whose `path` is a folder to search), made relative to the session's working directory
   (`cwd`, sent in the upload and not stored). Paths outside it are dropped, and
   so are all paths when no working directory is known.
 - **Manifest**: `schemaVersion`, `title`,
@@ -665,7 +669,9 @@ Exports:
     - `tool_result`: `tool_result` (`callId` from `tool_use_id`, `isError` from
       `is_error === true`, text from the content string or the joined text
       parts).
-    - `image` parts (base64 `source`): attachments on that event.
+    - `image` parts (base64 `source`): attachments on the text event from the
+      same record (an empty-text message is created only when the record has
+      no text), and images inside a `tool_result` attach to that result.
 
     Each part is its own event, so records split across one assistant
     `message.id` need no merging. `cwd` comes from the first record with one.

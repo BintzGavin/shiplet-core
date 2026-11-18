@@ -1,8 +1,12 @@
 import type { Env } from "./env";
 
 export const ACCOUNT_EMAIL_SWITCHING_FLAG = "account-email-switching";
+// Traces: full agent session logs (prompts, replies, tool calls) on Shiplets.
+export const TRACES_FLAG = "traces";
 
-export type ShipletFeatureFlagKey = typeof ACCOUNT_EMAIL_SWITCHING_FLAG;
+export type ShipletFeatureFlagKey =
+	| typeof ACCOUNT_EMAIL_SWITCHING_FLAG
+	| typeof TRACES_FLAG;
 
 export function useFeatureFlag(env: Env, flagKey: ShipletFeatureFlagKey) {
 	const enabledFlags = String(env.SHIPLET_ENABLED_FEATURE_FLAGS || "")

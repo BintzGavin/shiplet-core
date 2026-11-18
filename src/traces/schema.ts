@@ -1,0 +1,50 @@
+// D1 schema for traces. A trace is the full log of an agent session (prompts,
+// replies, tool calls and results) stored against a Shiplet. Event bodies live
+// in R2; this table holds the metadata and the authorization facts.
+
+export async function ensureTraceSchema(db: D1Database) {
+	await db.batch([
+		db.prepare(
+			`CREATE TABLE IF NOT EXISTS project_traces (
+				id TEXT PRIMARY KEY,
+				project_id TEXT NOT NULL,
+				organization_id TEXT,
+				revision_id TEXT,
+				uploader_user_id TEXT,
+				uploader_token_id TEXT,
+				upload_sha256 TEXT NOT NULL,
+				sharing TEXT NOT NULL DEFAULT 'private',
+				title TEXT NOT NULL,
+				harness TEXT NOT NULL,
+				started_on TEXT,
+				ended_on TEXT,
+				event_count INTEGER NOT NULL,
+				segment_count INTEGER NOT NULL,
+				canonical_bytes INTEGER NOT NULL,
+				attachment_count INTEGER NOT NULL,
+				attachment_bytes INTEGER NOT NULL,
+				client_masked_count INTEGER NOT NULL,
+				server_masked_count INTEGER NOT NULL,
+				manifest_sha256 TEXT NOT NULL,
+				created_on TEXT NOT NULL,
+				FOREIGN KEY (project_id) REFERENCES projects(id)
+			)`,
+		),
+		db.prepare(
+			`CREATE UNIQUE INDEX IF NOT EXISTS project_traces_upload
+			 ON project_traces(project_id, upload_sha256)`,
+		),
+		db.prepare(
+			`CREATE INDEX IF NOT EXISTS project_traces_project
+			 ON project_traces(project_id, created_on)`,
+		),
+		db.prepare(
+			`CREATE INDEX IF NOT EXISTS project_traces_org
+			 ON project_traces(organization_id)`,
+		),
+		db.prepare(
+			`CREATE INDEX IF NOT EXISTS project_traces_uploader
+			 ON project_traces(uploader_user_id)`,
+		),
+	]);
+}

@@ -14,6 +14,8 @@ const COMMAND_SESSION_SCOPES = [
   "revision:write",
   "deployment:write",
   "session:revoke",
+  "trace:read",
+  "trace:write",
 ];
 // A reusable session carries deployment:write, so deploy, promote and rollback
 // run on the cached approval. Each still needs the CLI's explicit --approve
@@ -24,6 +26,8 @@ const REUSABLE_SESSION_SCOPES = [
   "deployment:write",
   "session:read",
   "session:revoke",
+  "trace:read",
+  "trace:write",
 ];
 const STATE_PATTERN = /^[A-Za-z0-9_-]{32,256}$/;
 const CHALLENGE_PATTERN = /^[A-Za-z0-9_-]{43}$/;
@@ -343,7 +347,46 @@ function scopeForRequest(request: Request) {
   if (method === "POST" && /^\/api\/(?:drafts\/[^/]+\/promote|shiplets\/[^/]+\/rollback|revisions\/[^/]+\/deployments)$/.test(path)) return "deployment:write";
   if (method === "POST" && path === "/api/cli/session/revoke") return "session:revoke";
   if (method === "GET" && path === "/api/cli/session") return "session:read";
+  return traceScopeForRequest(method, path);
+}
+
+const TRACE_LIST_PATH = /^\/api\/shiplets\/[^/]+\/traces$/;
+const TRACE_ITEM_PATH = /^\/api\/shiplets\/[^/]+\/traces\/[^/]+$/;
+const TRACE_READ_PATH = /^\/api\/shiplets\/[^/]+\/traces(?:\/[^/]+(?:\/(?:segments|attachments)\/[^/]+)?)?$/;
+
+function traceScopeForRequest(method: string, path: string) {
+  if (method === "GET" && TRACE_READ_PATH.test(path)) return "trace:read";
+  if (method === "POST" && TRACE_LIST_PATH.test(path)) return "trace:write";
+  if (method === "DELETE" && TRACE_ITEM_PATH.test(path)) return "trace:write";
   return null;
+}
+
+/**
+ * Whether the request carries a live CLI session token that holds `scope`.
+ * Returns null when no CLI session token is presented at all.
+ */
+export async function cliSessionHasScope(
+  db: D1Database,
+  request: Request,
+  scope: string,
+): Promise<boolean | null> {
+  const authorization = request.headers.get("authorization") || "";
+  const accessToken = authorization.match(/^Bearer\s+(shiplet_cli_session_[A-Za-z0-9]+)$/i)?.[1];
+  if (!accessToken) return null;
+  const row = await db
+    .prepare(
+      `SELECT scopes_json FROM cli_sessions
+       WHERE session_hash = ? AND expires_on > ? AND revoked_on IS NULL LIMIT 1`,
+    )
+    .bind(await sha256Hex(accessToken), new Date().toISOString())
+    .first<{ scopes_json: string }>();
+  if (!row) return false;
+  try {
+    const scopes = JSON.parse(row.scopes_json);
+    return Array.isArray(scopes) && scopes.includes(scope);
+  } catch {
+    return false;
+  }
 }
 
 export async function revokeCliSession(

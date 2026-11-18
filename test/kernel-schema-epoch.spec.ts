@@ -12,8 +12,8 @@ import app, { schemaInitializationTest } from "../src/index";
 // Pin the two together: when this digest changes, bump
 // CURRENT_KERNEL_SCHEMA_EPOCH in src/index.ts and update both values here.
 const PINNED_KERNEL_SCHEMA = {
-  epoch: 4,
-  digest: "9c42566a65cbd31f92fc4a9319771561fe70a56da74c7306bd3e51f28cd8b9b6",
+  epoch: 5,
+  digest: "2c5a2910d8431852ec8194e03366331845199a6b9f7dcce5856cc87ff72021c3",
 };
 
 // Releases up to v0.1.43 recorded epoch 1 before the invite link tables existed.
@@ -22,6 +22,8 @@ const EPOCH_BEFORE_INVITE_LINKS = 1;
 const EPOCH_BEFORE_REUSABLE_CLI_SESSIONS = 2;
 // Releases before WorkOS membership reconciliation recorded epoch 3.
 const EPOCH_BEFORE_MEMBERSHIP_SYNC = 3;
+// Releases before traces recorded epoch 4.
+const EPOCH_BEFORE_TRACES = 4;
 const EPOCH_TABLE = "shiplet_kernel_schema_epoch";
 
 function db() {
@@ -118,6 +120,16 @@ describe("kernel schema epoch", () => {
       .bind("idx_organization_memberships_user")
       .first<{ name: string }>();
     expect(index).not.toBeNull();
+  });
+
+  it("creates the traces table on a database that recorded the epoch from before it", async () => {
+    await request("/health");
+    await recordEpoch(EPOCH_BEFORE_TRACES);
+    await db().prepare("DROP TABLE IF EXISTS project_traces").run();
+
+    expect((await request(`/join/${"D".repeat(32)}`)).status).toBe(404);
+
+    expect(await tableExists("project_traces")).toBe(true);
   });
 
   it("pins the kernel schema to its epoch so schema changes cannot ship without a bump", async () => {
