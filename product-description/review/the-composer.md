@@ -85,7 +85,7 @@ Send, or Ctrl/Cmd+Enter in the comment field, sends the draft. With an empty com
 
 | Modifier | At arrival | During editing |
 | --- | --- | --- |
-| Role | Anyone who can view can open, write, and send. A signed-out visitor (Unlisted and Public only) can type, but Send says "Review identity is unavailable. Use Refresh after access is restored." Mention reviewers is empty for a reviewer who is not a member of the Shiplet's organization. | Losing access mid-draft shows only when sending: "Review access changed. Your draft is retained." |
+| Role | Anyone who can view can open, write, and send. A signed-out visitor (Unlisted and Public only) can type, but Send says "Review identity is unavailable. Use Refresh after access is restored." Mention reviewers and the "@" suggestions are empty for a reviewer who is not a member of the Shiplet's organization, and offer only members who can already view the Shiplet to a reviewer who cannot edit it. | Losing access mid-draft shows only when sending: "Review access changed. Your draft is retained." |
 | Shiplet state | No difference between visibilities once the reviewer can view. | The Shiplet archived mid-draft makes Send fail with "Feedback could not be saved. Retry the same submission."; a new active revision makes it fail with "This review changed. Your draft is retained; refresh before retrying." |
 | Flags and preferences | With Copy requests enabled in Settings, a Copy request field appears under Attachments. The annotation defaults (pen, color #D92D5B, width 5) seed the structured editor. The dock preference does not move the composer. No feature flag applies. | Turning Copy requests on or off shows or hides the field at once; a hidden copy request is not sent. |
 | Keyboard | The comment field has focus. Enter adds a line; Ctrl/Cmd+Enter sends. Tab moves through the composer's visible controls. C typed into the field is just a letter. | Escape: expanded to compact, then compact to cancelled (the draft discarded). While mention suggestions are open, Escape closes them and also climbs the ladder, cancelling a compact composer (see Edge cases). |
@@ -136,7 +136,7 @@ After an interrupt the reviewer is either still in the composer with the draft i
 
 **Accessibility.** The comment field is labeled "Annotation" and the Send button "Send annotation"; the expanded composer is announced as a dialog but does not trap focus. The composer's message is a status region, and an alert when it reports an error. The Cancel button is not reachable in compact; Escape and the annotation bar's Cancel are.
 
-**Side effects others notice.** A saved ticket appears for everyone viewing the Shiplet within 5 seconds, its owner and watchers are notified, and anyone mentioned is notified (and, if they could not view the Shiplet, given access to it; see [Shiplets and tickets](../foundations/shiplets-and-tickets.md#mentions)).
+**Side effects others notice.** A saved ticket appears for everyone viewing the Shiplet within 5 seconds, its owner and watchers are notified, and anyone mentioned is notified (and, if they could not view the Shiplet and the author is an editor of it, given access to it; see [Shiplets and tickets](../foundations/shiplets-and-tickets.md#mentions)).
 
 ## Edge cases
 
@@ -158,4 +158,4 @@ After an interrupt the reviewer is either still in the composer with the draft i
 - Carrying the old page's text and target onto a new page after a route change, and sending them as a ticket on the new page, was read from code and not tried. `docs/review-widget-parity-audit.md` (PAGE-02) records page binding as fixed, which covers which page a ticket is sent for, not which target travels with it.
 - The placement rule (70 px, four candidates) and the 8 px margin were read from code; how it looks near edges was not watched.
 
-Verified against shiplet-core commit `3327af4`
+Verified against shiplet-core commit `a7a714d`

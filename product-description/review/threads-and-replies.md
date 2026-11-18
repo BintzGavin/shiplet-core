@@ -68,7 +68,7 @@ The reply field takes up to 5,000 characters, and Enter adds a line. Other ticke
 
 | Modifier | At arrival | During editing |
 | --- | --- | --- |
-| Role | Every role that can view sees and uses the same thread: reply, Resolve, Reopen, Status. The reply's mention list is empty (and hidden) for a reviewer who is not a member of the Shiplet's organization. Signed-out visitors see threads, but replies and status changes fail with "Could not reply to {label}. Try again." and "Could not update {label}. Try again." | Losing access makes the next reply or status change fail with the same messages, and the review identity is re-checked. |
+| Role | Every role that can view sees and uses the same thread: reply, Resolve, Reopen, Status. The reply's mention list is empty (and hidden) for a reviewer who is not a member of the Shiplet's organization, and lists only members who can already view the Shiplet for a reviewer who cannot edit it. Signed-out visitors see threads, but replies and status changes fail with "Could not reply to {label}. Try again." and "Could not update {label}. Try again." | Losing access makes the next reply or status change fail with the same messages, and the review identity is re-checked. |
 | Shiplet state | No difference by visibility. | Archiving mid-thread makes replies and status changes fail. A new active revision published by an agent does not affect replies or status changes (only new tickets check the revision); after a reload, every existing ticket's provenance reads "Earlier revision". |
 | Flags and preferences | The panel's State filter decides whether a status change removes the ticket from the list. Hide comments hides pins, so contextual threads can only be reached through the panel. No feature flag applies. | No effect. |
 | Keyboard | Opening from a row keeps focus on the row; from a pin, on the pin. | Ctrl/Cmd+Enter sends a reply; Enter adds a line. Escape closes a contextual thread (keeping its draft); in the list, Escape climbs on and closes the panel. The Status picker is a native list: in browsers that apply arrow keys to a closed list, each arrow press changes the status. |
@@ -115,13 +115,14 @@ The reply field takes up to 5,000 characters, and Enter adds a line. Other ticke
 
 **Accessibility.** The contextual card is a labeled region ("Thread {label}") and its Close button is named; the pin that opened it reports whether its thread is expanded. The reply field and Send are named for their ticket. Thread messages are status regions, and alerts for failures.
 
-**Side effects others notice.** A reply is visible to everyone viewing the Shiplet within 5 seconds and in the Feedback view; it notifies watchers and mentioned people, and a mention of a member who could not view the Shiplet gives them access ([Shiplets and tickets](../foundations/shiplets-and-tickets.md#mentions)). A status change appears everywhere the ticket is listed and notifies watchers.
+**Side effects others notice.** A reply is visible to everyone viewing the Shiplet within 5 seconds and in the Feedback view; it notifies watchers and mentioned people, and a mention by an editor of a member who could not view the Shiplet gives them access ([Shiplets and tickets](../foundations/shiplets-and-tickets.md#mentions)). A status change appears everywhere the ticket is listed and notifies watchers.
 
 ## Edge cases
 
 - **Resolving removes the ticket from an Open list at once**, closing its thread; resolving it from elsewhere does not (polling cannot remove it).
 - **A double reply is possible** after a failure whose request actually arrived, because replies are not deduplicated as tickets are.
 - **Replies past 100** are not shown, and nothing says there are more.
+- **A mention that is not allowed refuses the whole reply.** Suppose someone who cannot edit the Shiplet sends a reply that mentions a member who cannot view it. That can only happen if the member lost access after the mention list loaded. The server refuses the reply and saves nothing, and the thread shows "Could not reply to {label}. Try again." The text and the selected mention stay in the form. The message does not say the mention was the cause, and trying again fails the same way until the author removes that mention.
 - **Mentions in replies** are chosen from a list, not typed with "@": the inline suggestions exist only in the composer.
 - **Open feedback lands on the Shiplet page without the ticket**: that page ignores the ticket in its address.
 - **A thread whose ticket left the list** after Refresh stays open until it is closed, because Refresh keeps the active thread.
@@ -132,7 +133,8 @@ The reply field takes up to 5,000 characters, and Enter adds a line. Other ticke
 - Replies have no submission identity, so a retry after a lost response duplicates the reply. `docs/review-widget-parity-audit.md` WRITE-08 (no second in-flight reply) is closed; this is the different case of a retry after failure. May be worth treating as a bug rather than documenting.
 - Arrow keys on the Status picker changing the status at once (WRITE-15 lists the native select gesture as unverified) were not tried.
 - `e2e/trusted-review-host.spec.ts` was noted by the parity audit as expecting an "Update status for …" button the host no longer renders; whether that test currently passes was not checked.
+- A reply refused for a disallowed mention was read from code, not tried in a browser: the server checks the mention before it saves (`applyDurableHumanThreadOperation` in `src/index.ts`), and the review host shows its generic reply error. The message does not name the cause, so the author has no way to know they must remove the mention.
 - The card placement numbers (40 px above, 280 to 440 px wide) were read from code, not watched.
 - Whether a status change made while the ticket is outside the scope (for example through All authorized pages) behaves the same was not tried.
 
-Verified against shiplet-core commit `3327af4`
+Verified against shiplet-core commit `a7a714d`

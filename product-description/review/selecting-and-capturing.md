@@ -140,4 +140,4 @@ After an interrupt the reviewer is back on the review link with nothing captured
 - Element selection being pointer-only has no keyboard alternative; this is a product question for accessibility.
 - How the selection box behaves on touch screens (a tap both hovering and clicking) was not tried.
 
-Verified against shiplet-core commit `3327af4`
+Verified against shiplet-core commit `a7a714d`

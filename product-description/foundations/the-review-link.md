@@ -109,7 +109,7 @@ The browser's address bar does not change: it keeps the address the review link 
 
 ## The dashboard preview
 
-The Shiplet page embeds the same review layer in an iframe, and its "Open review page" button opens it on its own (`/shiplets/{id}/review-host`). It behaves as the review link does, with these differences: it is always on the app's host, so it always uses the app's session; tickets sent from it are recorded against the review link's address, so they appear on the review link and the review link's tickets appear here; and its "Open feedback" links open the Shiplet page in a new tab.
+The Shiplet page embeds the same review layer in an iframe, and its "Open review page" button opens it on its own (`/shiplets/{id}/review-host`). It behaves as the review link does, with these differences: it is always on the app's host, so it always uses the app's session; tickets sent from it are recorded against the review link's address, so they appear on the review link and the review link's tickets appear here; and its "Open feedback" links open the Shiplet page in a new tab. Its artifact frame loads the artifact's linked files (stylesheets, images, and other stored files) as the review link does, using a preview pass for that one Shiplet that the preview sets when it opens (see Open questions).
 
 ## The parts of the review layer
 
@@ -130,7 +130,7 @@ The Shiplet page embeds the same review layer in an iframe, and its "Open review
 
 | Modifier | At arrival | During editing |
 | --- | --- | --- |
-| Role | Every role that can view gets the same review layer. Mention suggestions list only members of the Shiplet's organization, and stay empty for a reviewer who is not a member. Signed-out visitors (Unlisted and Public only) get a read-only layer with the identity notice. | A role lost mid-visit shows at the next request or focus re-check: "Review access changed. Your draft is retained." Drafts stay in the browser under the old identity. |
+| Role | Every role that can view gets the same review layer. Mention suggestions list only members of the Shiplet's organization, and stay empty for a reviewer who is not a member. A reviewer who cannot edit the Shiplet is offered only members who can already view it, so on a Private Shiplet members without access are left out; an editor (the owner, a workspace admin, or someone given edit access) is offered every member. Signed-out visitors (Unlisted and Public only) get a read-only layer with the identity notice. | A role lost mid-visit shows at the next request or focus re-check: "Review access changed. Your draft is retained." Drafts stay in the browser under the old identity. |
 | Shiplet state | Private and Organization require sign-in; Unlisted and Public open at once. An archived Shiplet shows the archived page, not the review layer. | Archiving the Shiplet mid-visit makes every later poll fail ("Refresh failed. Showing saved comments and drafts.") and every send fail ("Feedback could not be saved. Retry the same submission."); the open page keeps its tickets and drafts, and the next reload shows the archived page. A new active revision published by an agent makes the next send fail with "This review changed. Your draft is retained; refresh before retrying." |
 | Flags and preferences | The dock preference places the launcher dock and panel; "Open comments" opens the panel on arrival; the Motion preference reduces the review layer's animation (smooth scrolling to a ticket follows only the operating system's reduced-motion setting); the remembered filters choose the first list; Hide comments, if left on, keeps pins hidden; clean link parameters hide parts. No feature flag applies. | Preferences change at once when set in Settings. |
 | Keyboard | C, Escape, Ctrl/Cmd+Enter, and Tab as above. | As above. IME compositions are never interrupted by Shiplet's keys. |
@@ -168,6 +168,7 @@ The Shiplet page embeds the same review layer in an iframe, and its "Open review
 - Escape climbing the ladder after a menu or the structured drawing editor handled it looks like a bug: it can discard a whole draft when the reviewer meant to close a menu. May be worth treating as a bug rather than documenting.
 - The polling list never drops a ticket, so tickets closed by others linger in an Open scope until Refresh. Confirm by hand.
 - The identity messages tell the reviewer to "Use Refresh after access is restored", but Refresh does not re-check identity when the list itself loads fine; a reviewer whose identity check failed once (for example on a brief network error) stays unable to send until they leave and refocus the window. Read from code; may be worth treating as a bug.
+- The dashboard preview's artifact frame reads linked files with the five-minute preview pass the preview sets when it opens. Whether files a page loads after that pass expires (a route change or a lazy-loaded image more than 5 minutes later) still load was read from code and not tried. The browser test covering linked files runs in Chrome only; the change notes that other browsers may block these reads.
 - The order in which arrival steps finish (identity, connection, list) varies; what a reviewer sees in the first second was not watched.
 
-Verified against shiplet-core commit `3327af4`
+Verified against shiplet-core commit `a7a714d`

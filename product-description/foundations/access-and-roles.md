@@ -14,6 +14,8 @@ With default settings a browser holds one signed-in account at a time. Account e
 
 Each member of an organization is an **administrator** or a **member**. A person who creates an organization, or who gets one on their first publish, is its administrator.
 
+WorkOS owns organization membership, and the web app has no way to remove a member or change their role. When someone is removed, deactivated, or demoted from administrator to member in WorkOS, Shiplet applies it at that person's next sign-in, and a background check every five minutes applies it for people who do not sign in again (about 20 people per run, so on a large instance it can take a while to reach everyone). A removal also takes the person out of the organization's teams; they keep the Shiplets they own and any grant made to them on a single Shiplet. If WorkOS cannot be reached or answers with an error, nothing changes until the next attempt.
+
 | Action | Administrator | Member |
 | --- | --- | --- |
 | View every Shiplet in the organization, whatever its visibility | Yes | Only Organization, Unlisted, and Public ones, and Private ones they hold a grant on |
@@ -25,7 +27,7 @@ Each member of an organization is an **administrator** or a **member**. A person
 | Invite someone to a team | Yes | Yes |
 | Create, copy, and revoke invite links | Yes | No |
 | Create and revoke API keys | Yes | No |
-| Mention people on tickets | Yes | Yes |
+| Mention people on tickets | Yes, and a mention can give a member who cannot view the Shiplet a reviewer grant | Yes, but a mention reaches only people who can already view the Shiplet, unless the member can edit it |
 
 A person who is not a member of an organization at all can still open that organization's Shiplets when a grant or the visibility allows it, but cannot mention anyone on them (the suggestion list stays empty).
 
@@ -44,7 +46,7 @@ On one Shiplet, a person can edit it if they are its **owner** (its creator), an
 | Editor | Viewing and editing |
 | Owner | Viewing and editing |
 
-Grants are made with the invite reviewers form ([the invite reviewers form](../shiplets/the-invite-reviewers-form.md)), which can grant only Reviewer and Viewer; by an accepted invitation; and by a mention, which gives a member who could not view the Shiplet a reviewer grant ([Shiplets and tickets](shiplets-and-tickets.md#mentions)). The web app cannot list or remove grants.
+Grants are made with the invite reviewers form ([the invite reviewers form](../shiplets/the-invite-reviewers-form.md)), which can grant only Reviewer and Viewer, and which grants an organization member's email at once and sends anyone else an invitation to that Shiplet only; by an accepted invitation; and by a mention from someone who can edit the Shiplet, which gives an organization member who could not view it a reviewer grant ([Shiplets and tickets](shiplets-and-tickets.md#mentions)). Mentions by anyone else never create a grant: other organization members' mentions only notify people who can already view, and mentions by people outside the organization have no effect. The web app cannot list or remove grants.
 
 ## Visibility
 
@@ -73,14 +75,16 @@ Unlisted and Public behave identically today: anyone with the review link can op
 
 ## Invitations
 
-An invitation is sent through WorkOS to an email address and asks the person to join an organization (as a member or administrator), a team, or one Shiplet. It takes effect only when accepted by someone signed in with exactly that address, ignoring letter case, after they confirm on a consent page that names what they are joining. Accepting a Shiplet invitation also makes the person a member of the Shiplet's organization. Accepting a team invitation makes them a member of the organization and the team. An invitation link opened by someone signed in with a different address is refused; they must sign out (or, with account switching enabled, switch accounts) and come back as the invited address. See `access/the-access-gate.md` and `access/invite-links.md`.
+An invitation is sent through WorkOS to an email address and asks the person to join an organization (as a member or administrator), a team, or one Shiplet. It takes effect only when accepted by someone signed in with exactly that address, ignoring letter case, after they confirm on a consent page that names what they are joining. Accepting a team invitation makes them a member of the organization and the team. A Shiplet invitation is different: it names no organization in WorkOS, and accepting it opens that one Shiplet only, without making the person a member of the organization or of any team, so they cannot open its other Shiplets, archive Shiplets, or invite anyone. Its consent page says so ("Accepting opens this Shiplet only, not the rest of the workspace."), and its button reads "Accept invitation and open Shiplet".
+
+A Shiplet invitation is accepted only after sign-in. Opening a restricted Shiplet or its invitation link while signed out starts an ordinary sign-in that names neither the Shiplet nor the organization. Afterwards only someone signed in with exactly the invited address is offered the consent page, including when they open the Shiplet directly; anyone else continues under the normal rules and, without access, sees the access request page. An organization or team invitation link opened by someone signed in with a different address is refused; they must sign out (or, with account switching enabled, switch accounts) and come back as the invited address. See `access/the-access-gate.md` and `access/invite-links.md`.
 
 ## How authority is checked
 
 Every request is checked when it arrives, against the person's roles and grants at that moment. Consequences a person can notice:
 
 - **Controls are not hidden by role** except in the few places listed above. Most refusals appear only after submitting, as a banner on platform pages or a message in the review layer.
-- **Changes take effect at once.** Removing someone from an organization blocks their next request on its Shiplets, in an open tab, without a reload. Adding a grant opens the Shiplet on their next request.
+- **Changes take effect at once, once Shiplet knows of them.** Adding a grant opens the Shiplet on the person's next request. A removal from an organization in WorkOS takes effect only when Shiplet applies it (at their next sign-in or the next background check, see [Organization roles](#organization-roles)); from then on it blocks their next request on the organization's Shiplets, in an open tab and in CLI and MCP sessions, without a reload, though those sessions stay signed in.
 - **Nothing is cached in the page.** A page loaded while the person was an editor still shows editor controls after they lose the role, and those controls fail when used. A page loaded before they gained a role does not show controls that only appear for editors until it is reloaded.
 
 What a page does when a request is refused mid-session is in [the page lifecycle](page-lifecycle.md#what-each-interrupt-means).
@@ -90,8 +94,9 @@ What a page does when a request is refused mid-session is in [the page lifecycle
 - The archive rule disagrees with itself: the Shiplet page treats archiving as an editor action, and the server and the Shiplets list let any organization member archive and restore any Shiplet in the organization. Worth a product call.
 - Restoring from the archived page at the review link is owner-only, while restoring from the Shiplet page and the Shiplets list is open to editors and members. Inconsistent; may be worth treating as a bug.
 - When a person holds more than one direct grant on the same Shiplet, only the earliest one is consulted for editing. A person granted Viewer first and Editor later (possible only through the API) cannot edit. Read from code, not tried.
+- A removed member keeps any grant made to them on a single Shiplet, including reviewer grants created by an editor's mention, and the web app cannot revoke them. Confirm that is the intended outcome of removal.
 - Reviewer and viewer are indistinguishable everywhere; the difference, if one is intended, is not implemented.
 - `docs/access-control.mdx` says Public is for "broad discovery"; no discovery surface exists.
 - A signed-out visitor on a Public review link is shown the review controls and only learns they cannot send when the review layer reports the identity problem. Confirm by hand what they see.
 
-Verified against shiplet-core commit `3327af4`
+Verified against shiplet-core commit `a7a714d`

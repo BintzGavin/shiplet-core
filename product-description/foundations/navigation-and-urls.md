@@ -27,15 +27,20 @@ The Shiplet page and the access request page have no platform navigation: the wa
 | `/shiplets/{id}` | The Shiplet page. `?created=1` adds the "Shiplet ready" heading and a "Published for review." card. | Sign-in, then back here |
 | `/shiplets/{id}/review-host` | The dashboard preview on its own (what "Open review page" opens) | Sign-in, then back here (Unlisted and Public Shiplets open without it) |
 | `/shiplets/{id}/preview` | Redirects to `/shiplets/{id}/review-host` | As above |
-| `/shiplets/{id}/access` | The access request page; redirects to the Shiplet page (or back to the review link it came from) if the person can view | Sign-in, then back here |
+| `/shiplets/{id}/access` | The access request page; redirects to the Shiplet page (or back to the review link it came from) if the person can view, and to the invitation consent step if their email has a pending invitation to this Shiplet | Sign-in, then back here |
 | `/feedback` | The Feedback view. Its filters are in the query: `status`, `mentionedMe`, `watched`, `submittedByMe`, `projectId`. | Sign-in, then back here |
 | `/inbox` | The Inbox | Sign-in, then back here |
 | `/workspace`, `/account`, `/access`, `/agents` | The settings pages. `/settings` redirects to `/workspace`. | Sign-in, then back here (`/settings` returns to `/workspace`) |
 | `/join/{token}` | Joining through an invite link (`access/invite-links.md`) | Shows the organization and asks to sign in |
-| `/auth/login`, `/auth/logout` | Sign-in (through WorkOS); sign-out, which lands on `/` | |
-| The review link | The trusted host and the artifact (below and in [the review link](the-review-link.md)) | Private and Organization Shiplets: sign-in, then back to the same page of the review link. Unlisted and Public: opens at once. |
+| `/auth/login`, `/auth/logout` | Sign-in (through WorkOS); sign-out, which lands on `/`. `/auth/login?consent=…` is the invitation consent step. | |
+| `/auth/callback` | Where WorkOS returns after sign-in; it finishes sign-in only in the browser that started it (below) | |
+| The review link | The trusted host and the artifact (below and in [the review link](the-review-link.md)) | Private and Organization Shiplets: sign-in, then back to the same page of the review link (through the invitation consent step first, for an invited email). Unlisted and Public: opens at once. |
 
 **Return after sign-in.** A protected page opened while signed out redirects to `/auth/login` with the page's own path as `return_to`, and sign-in comes back to exactly that path, query included. Only paths on the app itself and addresses on the installation's own domains are accepted as a return; anything else returns to `/`. A person who is already signed in and opens `/auth/login` is sent straight to the return address.
+
+**Sign-in finishes in the browser that started it.** Each sign-in started at `/auth/login` is good for 10 minutes and only in that browser. If WorkOS returns to a different browser, or after the 10 minutes, Shiplet starts sign-in again once, with the same return address; if that also fails, it shows the plain text "This sign-in was started in another browser or has expired. Start sign-in again." A return from WorkOS that carries no sign-in at all (for example a sign-in begun on WorkOS's own page) starts over at `/auth/login` and so returns to `/`. Several tabs can sign in at the same time without disturbing each other.
+
+**Invitations are offered after sign-in.** Sign-in for a restricted Shiplet names neither the Shiplet nor its organization. After sign-in, a person whose exact email has a pending invitation to the Shiplet they were returning to, and who cannot view it yet, is sent to the invitation consent step ("Review {Shiplet name}", with Accept invitation and open Shiplet and Cancel, which goes to `/`) instead of the return address. Accepting continues to the return address. Everyone else returns as usual, and lands on the access request page if they cannot view.
 
 **What is restored on return.** Only what is in the URL. The Feedback view's filters are in its URL; nothing else on a platform page is (the Shiplets list's search, the active organization on the Workspace page, and every form's typed values start over). The review layer restores its drafts, filters, and preferences from browser storage instead ([the page lifecycle](page-lifecycle.md#saved-unsaved-and-where-unsent-work-lives)).
 
@@ -61,6 +66,8 @@ On a path-shaped installation, an address that is also one of the app's own rout
 - `?feedback={ticket id}` is used by four surfaces and honored by none: the Shiplet page ignores it. May be worth treating as a bug rather than documenting.
 - Addresses that collide with the app's route names are accepted on the Prepare page and unreachable as path-shaped review links. Read from code; not tried.
 - The exact list of hosts accepted as a return address after sign-in depends on installation settings and was not enumerated.
+- The "started in another browser" text is a bare plain-text page with no link back to sign-in. Read from code and `test/auth-state-binding.spec.ts`; not seen in a browser.
+- Accepting an invitation whose return address is a review link on its own host finishes on a short "Invitation accepted" page that moves on by itself (with an Open Shiplet link). Read from code; not watched.
 - The theme's storage key and the absence of a flash on load were read from code, not watched.
 
-Verified against shiplet-core commit `3327af4`
+Verified against shiplet-core commit `a7a714d`

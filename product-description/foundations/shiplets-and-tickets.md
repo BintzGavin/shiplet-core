@@ -8,6 +8,8 @@ This is the data model as a person meets it: what an organization, a Shiplet, an
 
 An organization owns Shiplets, teams, invite links, and API keys, and has members with a role (administrator or member). A person can belong to several; the Prepare page and the settings pages work on one at a time (the Workspace select, the Active organization select). A person with no organization gets one on their first publish, named "{the part of their email before @}'s Workspace", with themselves as its administrator. Organizations are also created by hand on the Workspace page; they cannot be renamed or deleted in the web app.
 
+Membership follows WorkOS. When a person is removed or deactivated in WorkOS, or demoted from administrator to member, Shiplet applies it at their next sign-in, and a background sweep applies it for people who do not sign in again (about 20 people every five minutes). A removal drops the person from the organization and its teams; Shiplets they own and grants made to them on a single Shiplet are kept. If WorkOS cannot be reached, nothing is removed.
+
 ## Shiplets
 
 A Shiplet is created on the Prepare page (or by an agent through the API) and holds:
@@ -26,7 +28,7 @@ A Shiplet is **active** or **archived**. Archiving hides it from the active list
 
 ## Artifacts and revisions
 
-The **artifact** is the work under review, never edited by Shiplet. Uploaded files keep their names and folder paths; an `index.html` (or any top-level `.html` file) becomes the entry page, and without one Shiplet generates a file review page listing the files. A URL artifact is fetched from its public origin, read-only, each time it is viewed. How each kind looks inside the artifact frame is described in `preparing/how-artifacts-are-shown.md`.
+The **artifact** is the work under review, never edited by Shiplet. Uploaded files keep their names and folder paths, which must be portable: a name with `< > : " | ? *` or a control character, a name ending in a dot or space, a reserved name such as `con.html`, or two paths that differ only in letter case is refused, with a message naming the path, before anything is saved; an `index.html` (or any top-level `.html` file) becomes the entry page, and without one Shiplet generates a file review page listing the files. A URL artifact is fetched from its public origin, read-only, each time it is viewed. How each kind looks inside the artifact frame is described in `preparing/how-artifacts-are-shown.md`.
 
 A **revision** is one version of the artifact. A Shiplet made in the browser has exactly one. The review link always serves the **active revision**, and every review screen names it ("Revision {id}" in the composer and the panel's context line). Each ticket records the revision it was written against, which the thread reports as provenance: "Current revision" when it matches the active one, "Earlier revision" when it does not, and "Earlier feedback" for tickets that predate revision tracking. Tickets from earlier revisions stay with the Shiplet; the comments panel shows them unless its Revision filter is set to Current revision.
 
@@ -65,7 +67,13 @@ A reply belongs to one ticket and holds its text (1 to 5,000 characters), its au
 
 ## Mentions
 
-A ticket or reply sent from the review layer can mention up to 20 people (the server itself accepts 25, which only agents can reach). Only members of the Shiplet's organization can be mentioned, and the suggestions offered include members who cannot view the Shiplet yet. Mentioning such a member gives them a reviewer grant on the Shiplet on the spot, so they can open the ticket they were mentioned on; the Feedback view marks that mention as invited ("Invited but has not joined this shiplet yet") rather than active. A mentioned person gets a notification unless they are the author.
+A ticket or reply sent from the review layer can mention up to 20 people (the server itself accepts 25, which only agents can reach). Only members of the Shiplet's organization can be mentioned, and what a mention can do depends on who writes it:
+
+- **Someone who can edit the Shiplet** (its owner, an editor, or an organization administrator) can mention any member, and the suggestions include members who cannot view the Shiplet yet. Mentioning such a member gives them a reviewer grant on the Shiplet on the spot, so they can open the ticket they were mentioned on; the Feedback view marks that mention as invited ("Invited but has not joined this shiplet yet") rather than active.
+- **Any other organization member** (and an agent acting for the organization) can mention only members who can already view the Shiplet, and is offered only those. A mention never widens access for them.
+- **Anyone else** (a grant holder who is not a member, or a visitor on an Unlisted or Public Shiplet) cannot mention anyone: no suggestions are offered, and a mention sent anyway has no effect.
+
+A mention that is not allowed creates no mention, grant, or notification, and the refusal is worded the same as for an unknown person, so it never reveals whether someone belongs to the organization. From the review layer, a ticket or reply carrying such a mention is refused as a whole. A mentioned person gets a notification unless they are the author.
 
 ## Watching and notifications
 
@@ -80,6 +88,7 @@ Everything saved is shared: a Shiplet, its tickets, statuses, replies, mentions,
 | Thing | Limit |
 | --- | --- |
 | Shiplet address | 1 to 63 characters: lowercase letters, digits, single hyphens between them; unique |
+| Uploaded files | 200 files, 10 MB each, 24 MB in total; portable paths of at most 255 bytes per name |
 | Ticket comment, reply | 5,000 characters |
 | Copy request | 4,000 characters |
 | Mentions per ticket or reply | 20 from the review layer (25 accepted from agents) |
@@ -94,8 +103,8 @@ Everything saved is shared: a Shiplet, its tickets, statuses, replies, mentions,
 
 - Nothing in this repository deletes an archived Shiplet when its delete-after date passes (the scheduled job only sweeps temporary files and OAuth records), and restore does not check the date. Either the private operations repository does it, or the 30-day promise is not kept. Needs a product answer.
 - Watchers are notified whether or not they can still view the Shiplet; a person whose access was removed but who still watches it keeps getting notifications naming its tickets. Read from code, not tried.
-- Mentioning an organization member grants them access to a Private Shiplet. `docs/review-feedback.mdx` says mentions "notify only collaborators who can already access the Shiplet" and that a mention "does not widen access". The code widens it. This needs a product call.
+- A non-editor's ticket that mentions someone who lost access between the suggestion and Send is refused as a whole by the server ("Invalid review mentions"). Which message the review layer shows for that refusal, and whether the draft keeps the mention, was not checked.
 - The 100-reply display cap in the review layer has no "more replies" control; a thread with more replies silently shows the first 100. Not tried.
 - Whether an agent-written ticket shows the agent's name or "Reviewer" as its author in each surface was not checked.
 
-Verified against shiplet-core commit `3327af4`
+Verified against shiplet-core commit `a7a714d`

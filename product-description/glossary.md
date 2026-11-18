@@ -62,7 +62,7 @@ The vocabulary used across these documents. When a document uses one of these wo
 
 **Reply.** A follow-up comment on a ticket, with its own author and time. Replies cannot be edited or deleted.
 
-**Mention.** A person named on a ticket or reply so that they are notified. Only members of the Shiplet's organization can be mentioned. Mentioning a member who cannot yet view the Shiplet gives them a reviewer grant on it.
+**Mention.** A person named on a ticket or reply so that they are notified. Only members of the Shiplet's organization can be mentioned. Someone who can edit the Shiplet can mention any member, and mentioning a member who cannot yet view the Shiplet gives them a reviewer grant on it; any other member can mention only people who can already view it; anyone else cannot mention at all.
 
 **Provenance.** The line on a thread that says which revision a ticket belongs to: "Current revision", "Earlier revision", or "Earlier feedback" when the ticket predates revision tracking.
 
@@ -74,7 +74,7 @@ The vocabulary used across these documents. When a document uses one of these wo
 
 **Organization administrator.** A member of an organization with the admin (or owner) role. Administrators can view and edit every Shiplet in the organization, create teams, manage invite links and API keys, and invite administrators.
 
-**Member.** A person who belongs to an organization without the administrator role. A member can view every Organization-visibility Shiplet in it and create Shiplets of their own.
+**Member.** A person who belongs to an organization without the administrator role. A member can view every Organization-visibility Shiplet in it and create Shiplets of their own. Membership follows WorkOS: a removal or demotion there takes effect at the person's next sign-in or the next background sweep.
 
 **Owner.** The person who created a Shiplet. The owner can view and edit it, is the only one who can permanently delete it, and watches it by default.
 
@@ -84,13 +84,15 @@ The vocabulary used across these documents. When a document uses one of these wo
 
 **Editing.** Changing a Shiplet's access or lifecycle: inviting, archiving, restoring. Commenting, replying, and changing a ticket's status are not editing; anyone who can view can do them.
 
-**Invitation.** An email, sent through WorkOS, asking someone to join an organization, a team, or one Shiplet. It takes effect only for the signed-in identity with exactly that email address.
+**Invitation.** An email, sent through WorkOS, asking someone to join an organization or a team, or to open one Shiplet. A Shiplet invitation opens that Shiplet only and makes nobody a member of its organization or a team; sharing a Shiplet with someone who is already a member grants it at once without an email. It takes effect only for the signed-in identity with exactly that email address, after the *invitation consent* step.
+
+**Invitation consent.** The page, shown only after sign-in and only to a person whose exact email has a pending invitation to the Shiplet they were opening, that names the Shiplet and its organization and asks them to accept ("Accept invitation and open Shiplet") or Cancel.
 
 **Invite link.** One shareable URL that lets anyone who opens it, signs in, and accepts join an organization or one team in it as a member, subject to a use limit, an expiry, and an optional list of reserved emails.
 
 **Access request.** A signed-in person's request to view a Shiplet they cannot open, recorded once per person and Shiplet and emailed to the Shiplet's owner.
 
-**Access gate.** What a review link or Shiplet page does when the person cannot view it: a sign-in redirect when signed out, and the access request page when signed in.
+**Access gate.** What a review link or Shiplet page does when the person cannot view it: a sign-in redirect when signed out, and when signed in, the *invitation consent* step if their email is invited and the access request page otherwise.
 
 ## The review link
 

@@ -61,7 +61,7 @@ The draft is saved again after each change, and at once whenever the tab is hidd
 
 **It records the submission in the browser before sending it.** If the browser refuses to store it, the send stops as failed ("Feedback could not be saved. Retry the same submission."). This means a review layer without working storage cannot send tickets at all (see Open questions).
 
-**It sends one request.** The server checks that the reviewer is signed in and can still view the Shiplet, that the Shiplet is not archived, that the revision is still the active one, and that the page belongs to the Shiplet; then it saves the ticket, its screenshot, attachments, drawing, copy request, and mentions together, and notifies watchers and mentioned people. The server remembers the submission's identity: the same submission sent again returns the ticket it already saved.
+**It sends one request.** The server checks that the reviewer is signed in and can still view the Shiplet, that the Shiplet is not archived, that the revision is still the active one, that the page belongs to the Shiplet, and that every mention names a member the reviewer may mention (an editor may mention any member of the organization; anyone else only members who can already view the Shiplet); then it saves the ticket, its screenshot, attachments, drawing, copy request, and mentions together, and notifies watchers and mentioned people. The server remembers the submission's identity: the same submission sent again returns the ticket it already saved.
 
 **Saved.** The submission is marked completed in the browser. If the draft was not changed since it was frozen, the composer clears (comment, mentions, target, capture, drawing, attachments, copy request), closes, and says "Feedback sent"; the ticket is added to the top of the list, and on a screen 640 px wide or less the panel closes. If the draft had been changed since (only possible when the send was a Retry submission after edits), the composer stays open with the newer draft and says "Feedback sent. Your newer draft is still here."
 
@@ -69,7 +69,7 @@ The draft is saved again after each change, and at once whenever the tab is hidd
 
 - "Review access changed. Your draft is retained." when the server refused the reviewer or the page (signed out, access removed, a page that does not belong to the Shiplet);
 - "This review changed. Your draft is retained; refresh before retrying." when the Shiplet's active revision changed;
-- "Feedback could not be saved. Retry the same submission." for everything else: a lost connection, a server error, an archived Shiplet, or a malformed request.
+- "Feedback could not be saved. Retry the same submission." for everything else: a lost connection, a server error, an archived Shiplet, a malformed request, or a mention the reviewer may not make.
 
 A Retry submission button appears under the message.
 
@@ -126,7 +126,7 @@ A Retry submission button appears under the message.
 
 **Accessibility.** The composer's message is a status region, and an alert when it reports a failure; the storage notice is a status region. Retry submission is a normal button in the composer's tab order.
 
-**Side effects others notice.** A saved ticket: the ticket itself, its pin, notifications to watchers and mentioned people, and possibly a new reviewer grant for a mentioned member ([Shiplets and tickets](../foundations/shiplets-and-tickets.md#mentions)). Failed and retried sends leave no trace for others.
+**Side effects others notice.** A saved ticket: the ticket itself, its pin, notifications to watchers and mentioned people, and, when the author is an editor of the Shiplet, possibly a new reviewer grant for a mentioned member who could not view it ([Shiplets and tickets](../foundations/shiplets-and-tickets.md#mentions)). Failed and retried sends leave no trace for others.
 
 ## Edge cases
 
@@ -135,6 +135,7 @@ A Retry submission button appears under the message.
 - **A send that stops at the identity check keeps saying "Saving feedback…".** The composer's controls come back and nothing was sent, but its message is never replaced; only the storage notice explains.
 - **A saved ticket reported as failed.** If the browser cannot update its record after the server saved the ticket, the composer says the feedback could not be saved; Retry submission then returns the saved ticket.
 - **The query string splits drafts.** Drafts are stored per page address including its query, while tickets are matched to pages ignoring the query. A draft written at `/pricing?ref=mail` does not appear at `/pricing`.
+- **A mention that is no longer allowed fails the whole ticket.** If someone who cannot edit the Shiplet sends a draft mentioning a member who cannot view it (for example a restored draft whose mentioned person has since lost access), nothing is saved and the composer says "Feedback could not be saved. Retry the same submission." Retry submission sends the same mention and fails the same way, and while it is failed every later Send is blocked (above).
 - **Mentions can be lost on restore.** Restored mentions are re-selected only if the list of people has already loaded; otherwise the draft comes back without them.
 - **Reply drafts are saved only alongside something else.** A reply typed and abandoned without any other change is stored only when the tab is hidden, the page is left, or the composer saves.
 - **Unapplied structured drawings are not drafts.** Shapes drawn in the structured editor are kept only once Apply has been pressed.
@@ -145,7 +146,8 @@ A Retry submission button appears under the message.
 - A failed submission blocking all later sends until a successful Retry, including on other pages after a route change, looks like a bug. Read from code; confirm with a forced failure followed by Cancel and a new draft.
 - The 80 MiB record limit, the 32-record cleanup, and the 64 stored submissions were read from code, not exercised.
 - Lost-response retry is covered by `e2e/feedback-inbox.spec.ts` ("retries a committed inline comment after a lost response without duplicating it"); the large-capture persistence path (`docs/review-widget-parity-audit.md` WRITE-07) remains open there.
+- A disallowed mention failing the ticket with the generic retry message, with no way out but a Retry that cannot succeed, was read from code (the server rejects it with "Invalid review mentions", as for an unknown person) and not tried in a browser. May be worth treating as a bug rather than documenting.
 - The send that stops silently at the identity check, leaving "Saving feedback…" on screen, looks like a bug. Read from code.
 - Whether "Saving feedback…" is visible long enough to read on a fast connection was not watched.
 
-Verified against shiplet-core commit `3327af4`
+Verified against shiplet-core commit `a7a714d`

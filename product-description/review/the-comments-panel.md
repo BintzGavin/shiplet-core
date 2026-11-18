@@ -160,4 +160,4 @@ After an interrupt the panel keeps whatever list it last loaded, and the reviewe
 - Whether a load abandoned by a quick second scope change can still briefly show its result was not tried; the code discards stale results.
 - Time formatting was read from code (browser locale, month, day, hour, minute), not watched.
 
-Verified against shiplet-core commit `3327af4`
+Verified against shiplet-core commit `a7a714d`
