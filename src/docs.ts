@@ -18,7 +18,7 @@ const DOCS_PUBLIC_CONTENT_SHA256: Record<string, string> = {
   "why-shiplet":
     "a34409ae0097659bc90a6d30c9ae63733565e418412175f3871993a452735db4",
   "quickstart":
-    "84fcb700f16c8ca44f887d9c778cd429cb8e17a08272307a7db9ed710f710af1",
+    "7d5bbd7d3b8461d5fd31a126ec015ad0e255225651aa19e37e1a434c1d833180",
   "access-control":
     "e86b48ba4eb5dcd67b1b8c3f23c92bd2790ccac92b3524d15fac768ccf111813",
   "publishing":
@@ -175,7 +175,7 @@ const DOCS_PAGES: DocsPage[] = [
 <h2>Ask your agent</h2>
 <p>The fastest way is to ask the agent that did the work. In Claude Code, Codex, or any agent that can run commands, say:</p>
 <pre><code>Publish ./dist to Shiplet for review, then share this session to it.</code></pre>
-<p>The agent runs <code>npx shiplet-cli prepare</code> and <code>npx shiplet-cli trace share --current</code>, and you approve the sign-in in your browser. On a cloud agent with no browser, it signs in with a code you approve on any device; see <a href="/docs/authentication">Choosing how to sign in</a>. An agent connected over <a href="/docs/code-mode-mcp">Code Mode MCP</a> can do the same through MCP.</p>
+<p>The agent runs <code>npx shiplet-cli prepare</code> and <code>npx shiplet-cli trace share --current</code>, and you approve the sign-in in your browser. On a cloud agent with no browser, it signs in with a code you approve on any device; see <a href="/docs/authentication">Choosing how to sign in</a>. <a href="/docs/code-mode-mcp">Code Mode MCP</a> is also supported: an agent connected over MCP can do the same without the CLI.</p>
 <h2>Or run it yourself</h2>
 <h3>1. Run the CLI</h3>
 <pre><code>npx shiplet-cli --help</code></pre>
