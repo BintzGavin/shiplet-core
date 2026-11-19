@@ -1,85 +1,183 @@
 ---
 title: "Why Shiplet"
-description: "Why each review link gets its own interface and durable root."
+description: "Why the session behind agent work should be as shareable as the work, with access you choose."
 ---
 
-## Every Shiplet gets a root
+## The work gets shared. The session does not.
 
-Shiplet turns anything you can open in a browser into a review link.
+Agents do a lot of the building now. You describe what you want, and an agent
+plans, edits, runs commands, checks its own work, and hands back a build, a
+prototype, or a document. The artifact gets shared. The session that made it
+stays in one person's terminal and disappears when they close it. The review
+that follows scatters across threads and calls, about a version nobody can
+identify a week later.
 
-The artifact is the thing under review: a website, prototype, document, or
-report. Shiplet gives that artifact one link where reviewers can click directly
-on the work and leave comments in context. When they return, the conversation
-is waiting in the same place.
+Shiplet makes both shareable. The artifact gets one review link where people
+comment on the work itself. The trace, the full agent session behind it, sits
+next to the work. You choose who sees each one: a person, a team, the
+organization, anyone with the link, and for a trace, how much of it they see.
+None of it is tied to one agent. Claude Code and Codex are built in, and the
+trace format is open for the agents that come next.
 
-The review widget is the toolbar and panel around the artifact. A team can
-customize it for the work in front of them, and the artifact itself stays
-unchanged. I want that widget to make every Shiplet feel like its own little
-product.
+I think of it as the workspace for a team that builds with agents. The rest of
+this page is why I think it needs to exist, and how it is built.
 
-![An illustrated ShipletRoot station giving one Shiplet its own review interface](/brand/why-shiplet/shiplet-root-hero.webp)
+## The session matters as much as the artifact
 
-*A Shiplet wraps the thing under review in a widget that the team can customize.*
+A diff tells you what changed. A link tells you what the work looks like now.
+Neither tells you how it was made: what was asked, what the agent tried first,
+which command failed, and which checks passed before it said it was done.
 
-On a working build, a PM cares about whether each acceptance criterion survives
-the awkward states. A researcher's prototype carries a different question,
-because every product claim needs a path back to the observations behind it.
-The review layer holds that context because it belongs to the work.
+That is most of what a reviewer wants to know. Did it run the tests? Why this
+approach and not the obvious one? Did it touch the billing code? The answers are
+already written down, in a session nobody else can open.
 
-Each link is its own review room, so every Shiplet gets a root.
+It matters even more when the work changes hands. Without the session, a
+teammate's agent starts from zero. With it, the agent starts where the last one
+stopped. I have come to think the session is the most reusable thing agent work
+produces, and today it lives in a folder on one laptop.
 
-The root remembers which widget the Shiplet uses and keeps its feedback
-together. It also coordinates who is in the live room.
+## Traces, at the level you choose
 
-[Cloudflare Durable Objects](https://developers.cloudflare.com/durable-objects/concepts/what-are-durable-objects/)
-give that root a permanent address and storage of its own. One Durable Object
-belongs to one Shiplet, so every request for that review returns to the same
-place.
+A trace is that session, shared on purpose. It holds your prompts, the agent's
+replies, every tool call and result, and the screenshots, videos, and PDFs the
+session produced.
 
-![Shiplet architecture showing the trusted browser host and Platform Worker reaching one ShipletRoot, plus Code Mode running in a disposable Dynamic Worker](/brand/why-shiplet/shiplet-root-runtime.webp)
+The easiest way to share one is to ask the agent you are working with: “Share
+this session to Shiplet.” In Claude Code or Codex, the agent knows which session
+it is in and runs the CLI for you. Secrets are masked on your computer before
+anything leaves it, and Shiplet scans again when the trace arrives. A new trace
+is private. Only you and the Shiplet's owner can open it until you share it.
 
-*Reviewing and changing a review use the same ShipletRoot. The Dynamic Worker
-runs Code Mode; the approved widget runs in the browser sandbox.*
+Not everyone needs the whole thing, so every audience gets a level:
 
-## The review belongs to the Shiplet
+- **Full:** everything except secrets, for the person who will pick the work up.
+- **Conversation:** the messages and tool steps, without tool output or
+  reasoning.
+- **Summary:** what was done, which files were touched, which checks ran, and
+  how it ended, with no text from the session.
 
-A Shiplet is the review room around one artifact. Its widget belongs to that
-room.
+## Decide exactly who sees what
 
-The default experience stays small. A trusted host renders the artifact inside
-an isolated frame, adds the review toolbar, and keeps the reviewer's session
-outside the artifact. Pins stay attached to the context people were looking at,
-and comments return to the same review link.
+Sharing only helps if people trust what they are sharing, so access covers both
+the work and the session behind it.
+
+An artifact is private, visible to your organization, unlisted, or public. You
+can also grant one person, one exact email address, or a team, and invite links
+bring people into the organization or one of its teams. Viewing and editing are
+separate. Being able to see a Shiplet never lets you change it.
+
+A trace has its own audiences, because the people who should see your work and
+the people who should see your reasoning are not always the same. Share it with
+a person, an email address, a team, the organization, anyone with the link, or
+an API key, and give each one a level. Custom rules go further for one audience:
+mask a client's name, hide a folder, hide the reasoning, or hide the videos.
+**Preview as this audience** shows exactly what they will see before you share.
+
+When someone matches more than one audience, the most specific one wins. The
+organization can read the conversation, the contractors team only the summary,
+and Dana everything. Organization administrators can read every shared trace in
+full, but never a private one.
+
+## It works with whichever agent you use
+
+Every agent keeps its sessions in its own format, in its own folder. Claude Code
+has one, Codex has another, and next year there will be a third.
+
+Shiplet reads Claude Code and Codex sessions directly, subagents included, and
+turns them into one open format, `shiplet.trace/v1`: messages, tool calls,
+results, and attachments, in order. The raw logs never leave your computer. Any
+agent that writes the format can share a session the same way.
+
+Reading works across agents too. Any agent that speaks MCP, or can run the CLI,
+can load a trace that was shared with it and carry on. To be precise, it does
+not reopen the original session inside another tool. It hands your agent a
+compact briefing at your level: what was asked, what was done, which checks
+passed or failed, and how it ended. In the viewer, **Copy prompt for your
+agent** loads it over MCP, and `shiplet trace pull --as context` prints the same
+briefing in a terminal. A session recorded in Codex can brief a Claude Code
+session, and the other way round.
+
+## Review context that does not go stale
+
+Agent-built work changes fast. The prototype updates six times in an afternoon,
+and by evening nobody knows which version a comment was about.
+
+In Shiplet, the review link stays the same while the work underneath it changes.
+Reviewers click on the work itself, and each comment keeps where it was left:
+the page, the element, the viewport, and the revision. A trace is pinned to the
+revision it produced as well. Six updates later, the question and the version it
+was asked about are still together.
 
 ![The default Shiplet review flow on a static artifact, with the compact Annotate control and one contextual comment pin](/brand/why-shiplet/default-review-flow.webp)
 
 *The default review surface stays out of the way until somebody adds an
 annotation or opens a thread.*
 
-The ShipletRoot owns the layer around that artifact. It knows which widget is
-active, which changes are waiting in preview, where the current layer came from,
-and who is in the live room. That gives us room to make a review feel
-purpose-built without changing the files underneath it.
+That makes the loop with agents easier to close. A reviewer leaves a ticket on
+one revision. An agent reads it over MCP, fixes it, and attaches its session.
+The reviewer opens the next revision with the story of the fix beside it.
 
-The widget itself is browser code. Shiplet runs the approved widget in its own
-sandboxed frame, where it can render controls and react to the reviewer. It
-never receives the user's session or direct bindings to D1 and R2. The Durable
-Object stays outside that frame too. When the widget needs to create feedback
-or record a workflow event, it asks the trusted host through a small, typed
-operation.
+“Never lose” has a plain meaning here. The session and the comments stay with
+the work for as long as you keep the Shiplet. If you delete a trace, it is gone.
+If you archive a Shiplet, its traces are deleted after 7 days and the Shiplet
+itself after 30. I would rather be clear about that than promise more.
 
-That boundary lets deep customization become a normal product feature with
-explicit authority.
+## Every Shiplet gets a root
 
-## The interface can speak the language of the work
+Under the product story is a small amount of architecture I still find
+interesting. Each Shiplet gets one root, a ShipletRoot built on
+[Cloudflare Durable Objects](https://developers.cloudflare.com/durable-objects/concepts/what-are-durable-objects/).
+The Platform Worker resolves it with `getByName(shiplet.id)`, so every request
+for that Shiplet reaches the same object, with storage of its own. The root
+keeps the state that needs agreement inside one Shiplet: the active review
+layer, previews waiting for approval, where the layer came from, and its audit
+events, all in its own SQLite.
 
-The review toolbar should care about the job in front of it.
+![An illustrated ShipletRoot station giving one Shiplet its own review interface](/brand/why-shiplet/shiplet-root-hero.webp)
 
-A widget can turn a ticket's acceptance criteria into the controls that prove
-them. When an engineer shares a build for invite recovery, each criterion can
-open the exact state it names. The PM can pass or block that criterion, and the
-designer can inspect the mobile state without reconstructing the ticket from
-memory.
+*Every Shiplet gets one ShipletRoot, with its own address and its own storage.*
+
+That gives each Shiplet one authority. Applying a change is a guarded update
+inside the root, and if something newer landed first, the update fails closed.
+Traffic for one review stays with its root, so one unusually hot Shiplet has the
+ceiling of one root. That is an honest limit, and a useful one for the product
+we have.
+
+The rest of the stack stays boring on purpose. The Platform Worker handles
+identity, access, and routing. R2 holds artifact bytes and trace segments, and
+D1 holds the directory, feedback, and who can read which trace. Each audience's
+version of a trace is rendered once, when sharing changes, and stored.
+
+## Code Mode keeps the power behind a narrow door
+
+Agents reach all of this through Shiplet's MCP, which exposes two tools:
+`search` and `execute`.
+
+`search` finds the operation the agent needs without loading the whole platform
+into context. `execute` runs a small program in a disposable Dynamic Worker.
+That Worker gets no direct D1, R2, or Durable Object bindings. It can reach only
+the operations the trusted host exposes, with the caller's own access.
+Publishing, reading feedback, sharing a trace, and loading one with
+`getTraceContext` all go through the same door, and a trace comes back at the
+caller's level.
+
+![Shiplet architecture showing the trusted browser host and Platform Worker reaching one ShipletRoot, plus Code Mode running in a disposable Dynamic Worker](/brand/why-shiplet/shiplet-root-runtime.webp)
+
+*Reviewing and changing a review use the same ShipletRoot. The Dynamic Worker
+runs Code Mode; the approved widget runs in the browser sandbox.*
+
+Changing the review layer takes one more step. The program prepares a preview, a
+person tries it and approves it, and the root applies it only if its version
+still matches. A stale agent turn cannot overwrite something newer.
+
+## The review layer can speak the language of the work
+
+The toolbar around the artifact is a widget, and a team can replace it with one
+built for the job in front of it. A widget can turn a ticket's acceptance
+criteria into the controls that prove them. When an engineer shares a build for
+invite recovery, each criterion opens the exact state it names, and the PM can
+pass or block it without reconstructing the ticket from memory.
 
 ![An engineer-authored invite recovery build wrapped in a custom release-proof widget that turns acceptance criteria into test controls](/brand/why-shiplet/ticket-acceptance-runner.webp)
 
@@ -87,11 +185,9 @@ memory.
 the expired-link state and replay a consumed invitation. The mobile criterion
 opens the flow at 390 pixels before a reviewer attaches evidence.*
 
-A research readout needs a different shape. The researcher places the current
-product claim beside the observations behind it. The evidence board lets a PM
-mark an observation as support for the claim, and contradictory evidence stays
-visible beside that support. A designer can flag the assumption that still
-needs testing without losing the prototype underneath.
+A research readout needs a different shape. The researcher's evidence board
+keeps each product claim beside the observations behind it, contradictions
+included.
 
 ![A researcher-authored invite recovery study wrapped in an evidence board that connects product claims to observations and open questions](/brand/why-shiplet/research-evidence-board.webp)
 
@@ -99,105 +195,14 @@ needs testing without losing the prototype underneath.
 observations that shaped it. Reviewers can challenge the synthesis and attach
 another observation inside the same Shiplet.*
 
-These widgets were applied through the review-layer contract used by the
-product. Shiplet prepared each change as a preview, compiled the layer inside
-its sandbox constraints, and applied it only after the root confirmed that the
-base version still matched.
-
-## Code Mode keeps the power behind a narrow door
-
-An agent can customize the review layer through Shiplet's MCP. It sees two
-tools: `search` and `execute`.
-
-`search` lets the agent find the relevant contract without dumping the whole
-platform into context. `execute` accepts a small program, and Shiplet runs that
-program in a disposable Dynamic Worker. The Worker gets no direct D1, R2, or
-Durable Object bindings. It can reach only the operations exposed by the
-trusted host.
-
-The program can read the current review layer and prepare a bounded set of file
-changes. The result is a preview attached to the root's current version. A
-person can open that preview, use the proposed widget, and approve it. The root
-applies the change with a version check, so a stale agent turn cannot overwrite
-something newer.
-
-The approved widget then runs where the reviewer uses it: inside the browser
-sandbox. The Dynamic Worker has finished its short job by that point.
-
-Code Mode handles programmable authoring before the browser runs the interface.
-ShipletRoot remains the authority that makes a change real.
-
-## Durable Objects make the product easier to engineer
-
-I care about the engineering shape because it lets product benefits keep
-accumulating inside one clear coordination boundary.
-
-![ShipletRoot in the center of four Durable Object benefits: ordered changes, local SQLite, hibernation, and natural sharding](/brand/why-shiplet/durable-object-benefits.webp)
-
-*The Shiplet is already the product boundary, so the Durable Object can use the
-same boundary for correctness, state, operations, and isolation.*
-
-### One name gives us one authority
-
-The Platform Worker resolves the root with `getByName(shiplet.id)`. Requests for
-the same Shiplet reach the same logical object, which already has the current
-review-layer version beside the code that changes it.
-
-Applying a preview is a guarded update inside that object. If the root has moved
-past the preview's base version, the update fails closed. The guarded update
-replaces a separate lock service for deciding which review layer won.
-
-### SQLite has the right scope
-
-Each root gets its own SQLite-backed storage. The active layer, pending
-previews, provenance, and audit events live with the Shiplet they describe.
-
-That local scope makes the data model easier to reason about. A migration
-belongs to one product object, and an incident has a local timeline. The root
-reads the current layer directly from its own durable state, with no global
-projection in the request path.
-
-### Quiet review rooms can sleep
-
-ShipletRoot also owns presence for its review link. Cloudflare's
-[WebSocket Hibernation API](https://developers.cloudflare.com/durable-objects/best-practices/websockets/)
-can keep reviewers connected at the network while an idle object leaves memory,
-then wake the root when a new message arrives.
-
-The live-room abstraction survives that sleep cycle because durable state was
-already written beside the root. Cloudflare keeps idle connections at the
-network, which cuts the application time spent keeping quiet review rooms awake.
-
-### Shiplets shard themselves
-
-More Shiplets create more roots. Traffic for one review stays with that review,
-and a broken customization stays inside its browser frame and Shiplet boundary.
-Other Shiplets keep moving through their own roots.
-
-One unusually hot Shiplet still has the throughput ceiling of one root. That is
-an honest limit and a useful one for the product we have. If a future Shiplet
-turns into a stadium, we can add fan-out behind its stable root identity.
-
-## Inheritance copies the useful part
-
-Once a team has a review setup that works, the next Shiplet can inherit it.
-
-Inheritance takes a snapshot of the source review layer and records its
-provenance. The child receives its own root and its own version, so changes stay
-local. A later update to the source can arrive as another preview, where
-somebody can inspect it before the child changes.
-
-An organization can maintain a house review layer. A team can adapt that layer
-for its workflow, and a specific Shiplet can take the interface somewhere more
-specialized. Each step remains a usable review experience with a visible
-origin.
-
-The snapshot matters because review interfaces can encode real process. A
-distant template edit has to pass review before it can add a required approval
-or rename a status in the middle of somebody's work.
+The widget is browser code in its own sandboxed frame. It never receives the
+reviewer's session or direct access to storage, and it creates feedback by
+asking the trusted host through a small, typed operation. The artifact
+underneath stays unchanged.
 
 ## Software should be allowed to wander
 
+The open format comes from a bigger instinct, and it applies to Shiplet itself.
 I keep thinking about what it means for software to belong to the people using
 it. An organization should be able to choose where Shiplet lives: on Shiplet
 Cloud or in its own Cloudflare account. Moving between those homes should feel
@@ -208,38 +213,11 @@ the organization, while a path back to upstream improvements remains open. I
 care about that shape before I care about the neat open-source category for it.
 
 Git can move source between developers. Software with live state and local
-mutations carries a different kind of history. There is something else hiding
-in that gap. I do not have the name for it yet.
+mutations carries a different kind of history. There is something else hiding in
+that gap. I do not have the name for it yet.
 
-## The rest of the stack can stay boring
+## Try it
 
-The Platform Worker handles identity, policy, routing, and file delivery. R2
-holds immutable artifact bytes. D1 powers the organization directory and views
-that cross many Shiplets. The root keeps the state that needs agreement inside
-one Shiplet.
-
-Most artifacts remain static, which keeps publishing fast and gives the thing
-being reviewed a tiny runtime. A custom review layer leaves the artifact on that
-path. When an artifact needs its own backend behavior,
-[Workers for Platforms](https://developers.cloudflare.com/cloudflare-for-platforms/workers-for-platforms/how-workers-for-platforms-works/)
-gives Shiplet an advanced path with a separate security burden.
-
-Those boundaries also give the product somewhere clean to grow:
-
-- Approval stages can live beside the review-layer version they control.
-- Subscriptions can listen to the root's ordered events.
-- An automation can wake for one Shiplet and produce another reviewable preview.
-
-If we add an agent that stays with a Shiplet, the root already gives it a bounded
-checkpoint connected to an ordered event stream. A capability boundary controls
-what the agent can do when it wakes for an approved event. The agent works in a
-sandbox and writes its result back as another preview, keeping the existing
-identity system and global coordination boundary.
-
-Each Shiplet can grow into exactly the review room its artifact needs, while the
-platform stays legible.
-
-## Try the review layer
-
-[Prepare your first review artifact](/docs/quickstart), then open the review
-link and leave a comment on the work itself.
+[Publish your first artifact](/docs/quickstart) and leave a comment on the work
+itself. Then ask your agent to share the session that made it, and read
+[how traces work](/docs/traces) to choose who sees what.
