@@ -6,6 +6,7 @@ import {
 import { describe, expect, it } from "vitest";
 import app from "../src/index";
 import claudeMain from "./fixtures/traces/claude-code-main.jsonl?raw";
+import openTrace from "./fixtures/traces/open-format.jsonl?raw";
 import { parseJsonl, prepareTraceUpload } from "../src/cli/trace-core.mjs";
 
 type TestEnv = Omit<Env, "SHIPLET_ENABLED_FEATURE_FLAGS"> & { SHIPLET_ENABLED_FEATURE_FLAGS?: string };
@@ -136,6 +137,22 @@ describe("traces over Code Mode MCP (slice 3)", () => {
       expect((await execute(COLLEAGUE, `{ method: "DELETE", path: "/api/shiplets/${projectId}/traces/${trace.id}" }`)).isError).toBe(true);
       const deleted = await execute(OWNER, `{ method: "DELETE", path: "/api/shiplets/${projectId}/traces/${trace.id}" }`);
       expect(deleted.output).toEqual({ deleted: true, traceId: trace.id });
+    });
+  });
+
+  it("accepts an open-format session from any agent through an upload link", async () => {
+    await withTraces(async () => {
+      const { projectId } = await setup();
+      const link = await execute(OWNER, `{ method: "POST", path: "/api/shiplets/${projectId}/trace-uploads" }`);
+      const path = new URL(link.output.uploadUrl).pathname;
+      const prepared = await prepareTraceUpload({ main: parseJsonl(openTrace), importer: "mcp-test" });
+      const uploaded = await request(path, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(prepared.upload) });
+      expect(uploaded.status).toBe(201);
+      const { trace } = (await uploaded.json()) as { trace: { id: string; harness: string } };
+      expect(trace.harness).toBe("acme-agent");
+      const context = await execute(OWNER, `{ method: "GET", path: "/api/shiplets/${projectId}/traces/${trace.id}/context" }`);
+      expect(context.output.context).toContain("Source: acme-agent 1.4.0");
+      expect(context.output.context).toContain("[Subagent \"Check the discount rules\": 1 tool calls, 0 errors]");
     });
   });
 

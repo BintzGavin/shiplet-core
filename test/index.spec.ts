@@ -1361,6 +1361,7 @@ describe("Shiplet", () => {
         "/docs/api-surface",
         "/docs/cli",
         "/docs/code-mode-mcp",
+        "/docs/trace-format",
         "/docs/extensions",
         "/docs/security",
         "/docs/publishing",

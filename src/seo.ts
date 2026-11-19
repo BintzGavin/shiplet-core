@@ -199,6 +199,7 @@ Add a trusted review layer to builds, files, and live URLs for contextual feedba
 - Why Shiplet: ${absoluteSiteUrl(baseUrl, "/docs/why-shiplet")}
 - Review artifacts: ${absoluteSiteUrl(baseUrl, "/docs/publishing")}
 - Traces: ${absoluteSiteUrl(baseUrl, "/docs/traces")}
+- Open trace format: ${absoluteSiteUrl(baseUrl, "/docs/trace-format")}
 - Review layer: ${absoluteSiteUrl(baseUrl, "/docs/extensions")}
 - Security and isolation: ${absoluteSiteUrl(baseUrl, "/docs/security")}
 - OpenAPI: ${absoluteSiteUrl(baseUrl, "/openapi.json")}

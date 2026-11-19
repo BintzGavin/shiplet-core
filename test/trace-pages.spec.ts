@@ -113,6 +113,26 @@ describe("traces docs", () => {
   });
 });
 
+describe("open trace format docs", () => {
+  it("documents the format, links it from the traces page, and pins the digest", async () => {
+    const response = await request("/docs/trace-format");
+    expect(response.status).toBe(200);
+    const html = await response.text();
+    expect(html).toContain("<title>The open trace format | Shiplet Docs</title>");
+    const article = html.match(/<div class="docs-content">([\s\S]*?)<\/div>\s*<\/article>/)?.[1] || "";
+    for (const text of ["shiplet.trace/v1", "subagent_start", "SHIPLET_TRACE_FILE", "[secret:github-token]", "are reserved", "shiplet.trace/v2"]) {
+      expect(article, text).toContain(text);
+    }
+    expect(html).toContain('href="/docs/trace-format" aria-current="page"');
+    const declared = html.match(/data-shiplet-docs-content-sha256="([a-f0-9]{64})"/)?.[1];
+    const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(article.replace(/\r\n?/g, "\n").trim()));
+    expect(declared).toBe([...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, "0")).join(""));
+    const traces = await (await request("/docs/traces")).text();
+    expect(traces).toContain('<a href="/docs/trace-format">open trace format</a>');
+    expect(await (await request("/llms.txt")).text()).toContain("/docs/trace-format");
+  });
+});
+
 describe("trace-only Shiplets (D19)", () => {
   it("creates a Shiplet whose page is the trace viewer", async () => {
     await withFlags("traces", async () => {

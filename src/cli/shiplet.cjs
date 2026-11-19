@@ -413,6 +413,7 @@ Usage:
   shiplet whoami
   shiplet logout
   shiplet trace share <session.jsonl | session-folder> --shiplet <shiplet-id> [--revision <revision-id>]
+  shiplet trace share <trace.jsonl> --shiplet <shiplet-id>   (any agent, open shiplet.trace/v1 format)
   shiplet trace share --current --shiplet <shiplet-id>
   shiplet trace share --current --new [--title <text>] [--organization <id>]
   shiplet trace audiences <trace-id> --shiplet <shiplet-id> [--audience <type>:<id>=<level> ...] [--audiences <file.json>] [--private]
@@ -438,9 +439,10 @@ Commands:
   logout    Revoke the saved CLI session on Shiplet and delete it locally.
   trace     Share or pull a trace. A trace is the full log of an agent session:
             your prompts, the agent's replies, and every tool call and result,
-            from Claude Code or Codex. Secrets are masked on this computer before
-            upload, and again by Shiplet. New traces are private to you and the
-            Shiplet owner.
+            from Claude Code, Codex, or any agent that writes the open
+            shiplet.trace/v1 format (https://shiplet.cc/docs/trace-format).
+            Secrets are masked on this computer before upload, and again by
+            Shiplet. New traces are private to you and the Shiplet owner.
 
 Configuration:
   SHIPLET_API_URL   Optional API base URL. Can be replaced by --api-url.
@@ -451,6 +453,9 @@ Configuration:
   SHIPLET_CLI_SESSION_CACHE  Set to 0 to approve every command separately.
   SHIPLET_CLI_SESSION_STORE  auto (keychain, else file), keychain, or file.
   SHIPLET_CONFIG_DIR         Absolute directory for the file store.
+  SHIPLET_TRACE_FILE         trace share --current: the session file an agent writes for itself,
+                             usually in the open shiplet.trace/v1 format. Must be a regular
+                             .jsonl file; it is used before Claude Code and Codex discovery.
   Authentication    One browser approval creates a reusable session for this API origin,
                     kept in the OS keychain or a user-only file. Deploy, promote, and
                     rollback use it too, and still require --approve.
@@ -478,12 +483,14 @@ Flags:
   --version <version>   Optimistic mutable-draft version precondition.
   --force               Permit pull/eject to write into a non-empty destination.
   --shiplet <id>        Shiplet a trace belongs to.
-  --current             trace share: share the agent session this command runs in.
+  --current             trace share: share the agent session this command runs in:
+                        SHIPLET_TRACE_FILE when set, else Claude Code or Codex.
   --new                 trace share: create a Shiplet for this session instead of
                         naming one with --shiplet. Its page is the trace viewer.
   --title <text>        trace share: trace title. Defaults to the first prompt.
   --no-attachments      trace share: leave out images and other attachments.
-  --no-files            trace share: leave out screenshots, videos, and PDFs the session produced.
+  --no-files            trace share: leave out screenshots, videos, and PDFs the session produced
+                        or an open-format event names.
   --audience <a>        trace share/audiences: share with <type>:<id>=<level>, such as
                         team:team_123=summary, email:alex@example.com=full,
                         organization=conversation, or link=summary. Repeatable.
@@ -3885,7 +3892,7 @@ const TRACE_JSON_RESPONSE_BYTES = 2 * 1024 * 1024;
 const TRACE_ATTACHMENT_RESPONSE_BYTES = 20 * 1024 * 1024;
 const TRACE_UPLOAD_TIMEOUT_MS = 120_000;
 const TRACE_SESSION_FILE_BYTES = 256 * 1024 * 1024;
-const TRACE_IMPORTER = "shiplet-cli/0.1.3";
+const TRACE_IMPORTER = "shiplet-cli/0.3.0";
 
 async function loadTraceCore() {
 	// Loaded lazily so the rest of the CLI never depends on it. Node 22.12+
@@ -3909,7 +3916,7 @@ async function loadTraceCore() {
 
 function traceUsage(subcommand) {
 	const usages = {
-		share: "trace share <session.jsonl | session-folder> --shiplet <shiplet-id>  (or --current, or --new instead of --shiplet)",
+		share: "trace share <session.jsonl | session-folder | trace.jsonl> --shiplet <shiplet-id>  (or --current, or --new instead of --shiplet)",
 		list: "trace list --shiplet <shiplet-id>",
 		pull: "trace pull <trace-id> --shiplet <shiplet-id> [<dir>] [--as context]",
 		delete: "trace delete <trace-id> --shiplet <shiplet-id>",
@@ -3919,13 +3926,27 @@ function traceUsage(subcommand) {
 	return `Usage: shiplet ${usages[subcommand] || "trace share|list|pull|delete|audiences|preview ..."}`;
 }
 
-async function readSessionFile(filePath) {
-	const stat = await fs.stat(filePath);
-	if (!stat.isFile()) throw new CliError(`Not a session file: ${filePath}.`);
-	if (stat.size > TRACE_SESSION_FILE_BYTES) {
-		throw new CliError(`Session file is larger than 256 MiB: ${filePath}.`);
+// noFollow refuses a symbolic link even if it is swapped in after the check.
+async function readSessionFile(filePath, { noFollow = false } = {}) {
+	const flags = fsConstants.O_RDONLY | (noFollow ? fsConstants.O_NOFOLLOW || 0 : 0);
+	let handle;
+	try {
+		// Check first: opening a pipe would block until something writes to it.
+		if (!(await (noFollow ? fs.lstat : fs.stat)(filePath)).isFile()) throw new Error("not a file");
+		handle = await fs.open(filePath, flags);
+	} catch {
+		throw new CliError(`Not a session file: ${filePath}.`);
 	}
-	return fs.readFile(filePath, "utf8");
+	try {
+		const stat = await handle.stat();
+		if (!stat.isFile()) throw new CliError(`Not a session file: ${filePath}.`);
+		if (stat.size > TRACE_SESSION_FILE_BYTES) {
+			throw new CliError(`Session file is larger than 256 MiB: ${filePath}.`);
+		}
+		return await handle.readFile("utf8");
+	} finally {
+		await handle.close();
+	}
 }
 
 async function subagentFiles(directory) {
@@ -4010,7 +4031,26 @@ async function codexSessionCwd(file) {
 	return null;
 }
 
+// SHIPLET_TRACE_FILE lets any agent name the session file it writes. Only a
+// regular .jsonl file is read (no links, folders, pipes, or devices), and its
+// path is shown locally but never sent: uploads carry events, not file names.
+async function traceFileFromEnv(value, cwd) {
+	const invalid = () => new CliError("SHIPLET_TRACE_FILE must name a regular .jsonl file (not a link, folder, or device).");
+	if (typeof value !== "string" || !value.trim() || value.includes("\0")) throw invalid();
+	const absolute = path.resolve(cwd, value);
+	if (!absolute.endsWith(".jsonl")) throw invalid();
+	let stat;
+	try {
+		stat = await fs.lstat(absolute);
+	} catch {
+		throw invalid();
+	}
+	if (!stat.isFile()) throw invalid();
+	return { main: absolute, subagents: [], how: "SHIPLET_TRACE_FILE", noFollow: true };
+}
+
 async function findCurrentSession(env, cwd) {
+	if (env.SHIPLET_TRACE_FILE) return traceFileFromEnv(env.SHIPLET_TRACE_FILE, cwd);
 	const os = require("node:os");
 	const home = env.HOME || os.homedir();
 	const claudeDir = env.CLAUDE_CONFIG_DIR || path.join(home, ".claude");
@@ -4244,6 +4284,78 @@ async function audienceBody(options, cwd) {
 	return body;
 }
 
+// Files an open-format event names in "files" (D20). They resolve against the
+// header's cwd, and their real path, after links, must stay inside it.
+async function namedFiles(core, prepared, skip) {
+	const references = prepared.files || [];
+	const files = [];
+	const skipped = [];
+	if (!references.length) return { files, skipped };
+	if (skip) {
+		for (const reference of references) skipped.push({ path: reference.path, reason: skip });
+		return { files, skipped };
+	}
+	const upload = prepared.upload;
+	const fail = (reference, message) => new CliError(`line ${reference.line}, files: ${reference.path} ${message}.`);
+	let root;
+	try {
+		root = await fs.realpath(upload.cwd);
+	} catch {
+		throw fail(references[0], `cannot be read: the header cwd ${upload.cwd} does not exist on this computer`);
+	}
+	const byPath = new Map();
+	let totalBytes = upload.attachments.reduce((sum, attachment) => sum + attachment.bytes, 0);
+	for (const reference of references) {
+		let real;
+		try {
+			real = await fs.realpath(path.resolve(upload.cwd, reference.path));
+		} catch {
+			throw fail(reference, "was not found");
+		}
+		if (!real.startsWith(`${root}${path.sep}`)) throw fail(reference, "resolves outside cwd");
+		const name = path.relative(root, real);
+		let file = byPath.get(real);
+		if (!file) {
+			const stat = await fs.stat(real);
+			if (!stat.isFile()) throw fail(reference, "is not a regular file");
+			if (stat.size > core.TRACE_LIMITS.attachmentBytes) {
+				skipped.push({ path: name, reason: "larger than 20 MiB" });
+				continue;
+			}
+			if (upload.attachments.length + byPath.size >= core.TRACE_LIMITS.attachmentsPerTrace || totalBytes + stat.size > core.TRACE_LIMITS.attachmentsTotalBytes) {
+				skipped.push({ path: name, reason: "over the attachment limit" });
+				continue;
+			}
+			const data = await fs.readFile(real);
+			totalBytes += data.byteLength;
+			file = { sha256: crypto.createHash("sha256").update(data).digest("hex"), mediaType: reference.mediaType, bytes: data.byteLength, data, eventIds: [], name };
+			byPath.set(real, file);
+		}
+		if (!file.eventIds.includes(reference.eventId)) file.eventIds.push(reference.eventId);
+	}
+	// Two paths with the same bytes become one attachment.
+	const bySha = new Map();
+	for (const file of byPath.values()) {
+		const existing = bySha.get(file.sha256);
+		if (existing) existing.eventIds.push(...file.eventIds.filter((id) => !existing.eventIds.includes(id)));
+		else bySha.set(file.sha256, file);
+	}
+	files.push(...bySha.values());
+	return { files, skipped };
+}
+
+function attachFiles(upload, files) {
+	for (const file of files) {
+		upload.attachments.push({ sha256: file.sha256, mediaType: file.mediaType, bytes: file.bytes, deferred: true, source: "file", name: file.name.slice(0, 255) });
+		const eventIds = file.eventIds || [file.eventId];
+		upload.events = upload.events.map((event) =>
+			eventIds.includes(event.id) && !(event.attachmentIds || []).includes(file.sha256)
+				? { ...event, attachmentIds: [...(event.attachmentIds || []), file.sha256] }
+				: event,
+		);
+	}
+}
+
 // D9: screenshots, videos, and PDFs the session produced under its folder.
 async function producedFiles(core, upload, runtime) {
 	const sessionCwd = upload.cwd || runtime.cwd;
@@ -4326,7 +4438,7 @@ async function runTraceCommand(options, runtime) {
 		if (options.current ? rest.length !== 0 : rest.length !== 1) throw new CliError(traceUsage("share"));
 		const core = await loadTraceCore();
 		const files = options.current ? await findCurrentSession(runtime.env, runtime.cwd) : await resolveSessionFiles(rest[0], runtime.cwd);
-		const main = { fileName: files.main, ...core.parseJsonl(await readSessionFile(files.main)) };
+		const main = { fileName: files.main, ...core.parseJsonl(await readSessionFile(files.main, { noFollow: files.noFollow === true })) };
 		const subagents = [];
 		for (const file of files.subagents) subagents.push({ fileName: file, ...core.parseJsonl(await readSessionFile(file)) });
 		let prepared;
@@ -4340,16 +4452,21 @@ async function runTraceCommand(options, runtime) {
 				noAttachments: options.noAttachments,
 			});
 		} catch (error) {
-			if (error instanceof core.TraceFormatError) throw new CliError(`${files.main} is not a Claude Code or Codex session file.`);
+			if (error instanceof core.TraceFormatError) {
+				throw new CliError(
+					error.format === "shiplet"
+						? `${files.main} is not a valid shiplet.trace/v1 file: ${error.message}. See https://shiplet.cc/docs/trace-format.`
+						: `${files.main} is not a Claude Code, Codex, or shiplet.trace/v1 session file.`,
+				);
+			}
 			throw error;
 		}
-		const produced = options.noFiles || options.noAttachments ? { files: [], skipped: [] } : await producedFiles(core, prepared.upload, runtime);
-		for (const file of produced.files) {
-			prepared.upload.attachments.push({ sha256: file.sha256, mediaType: file.mediaType, bytes: file.bytes, deferred: true, source: "file", name: file.name.slice(0, 255) });
-			prepared.upload.events = prepared.upload.events.map((event) =>
-				event.id === file.eventId ? { ...event, attachmentIds: [...(event.attachmentIds || []), file.sha256] } : event,
-			);
-		}
+		const skipFiles = options.noAttachments ? "--no-attachments" : options.noFiles ? "--no-files" : "";
+		const named = await namedFiles(core, prepared, skipFiles);
+		attachFiles(prepared.upload, named.files);
+		const detected = skipFiles ? { files: [], skipped: [] } : await producedFiles(core, prepared.upload, runtime);
+		attachFiles(prepared.upload, detected.files);
+		const produced = { files: [...named.files, ...detected.files], skipped: [...named.skipped, ...detected.skipped] };
 		const sharingBody = wantsAudienceChange(options) ? await audienceBody(options, runtime.cwd) : null;
 		const validation = await core.validateUpload(prepared.upload);
 		if (!validation.ok) {
@@ -4361,6 +4478,7 @@ async function runTraceCommand(options, runtime) {
 			files: [files.main, ...files.subagents],
 			found: files.how || "path",
 			format: prepared.format,
+			harness: prepared.upload.source.harness,
 			title: prepared.upload.title,
 			events: prepared.upload.events.length,
 			attachments: prepared.upload.attachments.length,
@@ -4380,7 +4498,11 @@ async function runTraceCommand(options, runtime) {
 		const describe = [
 			`Trace: ${sanitizeOutputText(summary.title)}`,
 			`  Session:     ${sanitizeOutputText(files.main)}${files.how ? ` (${files.how})` : ""}${files.subagents.length ? ` + ${files.subagents.length} subagent file(s)` : ""}`,
-			`  Format:      ${summary.format}`,
+			`  Format:      ${
+				summary.format === "shiplet"
+					? `shiplet.trace/v1 from ${core.harnessLabel(summary.harness)}${prepared.upload.source.harnessVersion ? ` ${sanitizeOutputText(prepared.upload.source.harnessVersion)}` : ""}`
+					: summary.format
+			}`,
 			`  Events:      ${summary.events}, attachments: ${summary.attachments}, size: ${formatTraceBytes(size)}`,
 			`  Masked here: ${maskedKindsText(summary.masked.kinds)}`,
 			...(produced.files.length ? [`  Files:       ${produced.files.map((file) => sanitizeOutputText(file.name)).join(", ")}`] : []),

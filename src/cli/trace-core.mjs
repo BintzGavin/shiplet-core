@@ -1,6 +1,7 @@
-// Shared trace core: normalizes Claude Code and Codex session logs into
-// shiplet.trace/v1 events, masks secrets, truncates, validates, and builds the
-// manifest and agent context. It runs unchanged in Node (the CLI), Workers,
+// Shared trace core: normalizes Claude Code and Codex session logs, and the
+// open shiplet.trace/v1 format any agent can write, into shiplet.trace/v1
+// events, masks secrets, truncates, validates, and builds the manifest and
+// agent context. It runs unchanged in Node (the CLI), Workers,
 // and browsers, so it uses only Web-standard APIs and has no dependencies.
 //
 // A trace is the full log of an agent session: the prompts, the agent's
@@ -84,10 +85,29 @@ export function isCheckCommand(command) {
 }
 
 export class TraceFormatError extends Error {
-  constructor(message) {
+  // format is "shiplet" when an open-format file was recognized but is invalid.
+  constructor(message, format = null) {
     super(message);
     this.name = "TraceFormatError";
+    this.format = format;
   }
+}
+
+// Harness identity (D20). Any agent names itself with a lowercase slug. The
+// built-in importers' slugs are reserved in the open format, so "Claude Code
+// session" always means Shiplet read Claude Code's own log.
+export const HARNESS_PATTERN = /^[a-z0-9][a-z0-9.-]{0,39}$/;
+export const RESERVED_HARNESSES = Object.freeze(["claude-code", "codex"]);
+const HARNESS_LABELS = { "claude-code": "Claude Code", codex: "Codex" };
+
+export function harnessLabel(harness) {
+  if (typeof harness !== "string" || !harness) return "Agent";
+  if (HARNESS_LABELS[harness]) return HARNESS_LABELS[harness];
+  return harness
+    .split("-")
+    .filter(Boolean)
+    .map((word) => word[0].toUpperCase() + word.slice(1))
+    .join(" ") || "Agent";
 }
 
 const encoder = new TextEncoder();
@@ -97,25 +117,44 @@ const byteLength = (text) => encoder.encode(String(text)).byteLength;
 // ---------------------------------------------------------------------------
 // Parsing and format detection
 
+// Line numbers of parsed records, keyed by the records array, so the open
+// format can name the file line of an error without changing this shape.
+const PARSED_LINES = new WeakMap();
+
 export function parseJsonl(text) {
   const records = [];
+  const lines = [];
+  const badLines = [];
   let skippedLines = 0;
-  for (const line of String(text).split("\n")) {
-    if (!line.trim()) continue;
+  String(text).split("\n").forEach((line, index) => {
+    if (!line.trim()) return;
     try {
       const value = JSON.parse(line);
-      if (value && typeof value === "object" && !Array.isArray(value)) records.push(value);
-      else skippedLines++;
+      if (value && typeof value === "object" && !Array.isArray(value)) {
+        records.push(value);
+        lines.push(index + 1);
+        return;
+      }
     } catch {
-      skippedLines++;
+      // counted below
     }
-  }
+    skippedLines++;
+    badLines.push(index + 1);
+  });
+  PARSED_LINES.set(records, { lines, badLines });
   return { records, skippedLines };
 }
 
 const CODEX_TYPES = new Set(["session_meta", "response_item", "turn_context", "event_msg"]);
 
+const OPEN_FORMAT_PREFIX = "shiplet.trace/";
+const isOpenHeader = (record) => isPlainObject(record) && typeof record.format === "string" && record.format.startsWith(OPEN_FORMAT_PREFIX);
+
 export function detectFormat(records) {
+  if (isOpenHeader(records[0])) return "shiplet";
+  if (records.some(isOpenHeader)) {
+    throw new TraceFormatError("the shiplet.trace header must be the first line of the file", "shiplet");
+  }
   if (records.some((record) => record && typeof record.payload === "object" && record.payload && CODEX_TYPES.has(record.type))) {
     return "codex";
   }
@@ -376,6 +415,11 @@ export async function normalize({ format, main, subagents = [] }) {
     });
   } else if (format === "codex") {
     events = codexEvents(main.records, meta);
+  } else if (format === "shiplet") {
+    if (subagents.length) {
+      throw new TraceFormatError(`shiplet.trace/v1 keeps subagents inline; found ${subagents.length} separate subagent file(s)`, "shiplet");
+    }
+    return openTraceEvents(main);
   } else {
     throw new TraceFormatError("unrecognized session format");
   }
@@ -390,9 +434,199 @@ export async function normalize({ format, main, subagents = [] }) {
     startedAt: times[0] || null,
     endedAt: times[times.length - 1] || null,
     models: meta.models,
+    harness: format,
     harnessVersion: meta.harnessVersion,
+    title: null,
+    files: [],
     skippedLines,
   };
+}
+
+// ---------------------------------------------------------------------------
+// The open format (docs/traces-spec.md D20, docs/trace-format.mdx): a header
+// line, then one D8 event per line in the order the agent wants them shown.
+// Validation is strict and throws on the first problem, naming the file line
+// and field, so a writer's bug never turns into a quietly thinner trace.
+
+const HEADER_FIELDS = new Set(["format", "harness", "harnessVersion", "title", "cwd", "startedAt", "models"]);
+const COMMON_EVENT_FIELDS = ["seq", "id", "t", "agent", "kind", "files"];
+const KIND_FIELDS = {
+  user_message: ["text"],
+  assistant_message: ["text"],
+  reasoning: ["text"],
+  system_note: ["text"],
+  tool_call: ["tool"],
+  tool_result: ["result"],
+  subagent_start: ["text"],
+  subagent_end: [],
+  omitted: ["reason"],
+};
+const MAX_FILES_PER_EVENT = 20;
+
+function openTraceEvents(main) {
+  const records = main.records;
+  const info = PARSED_LINES.get(records);
+  const lineOf = (index) => (info ? info.lines[index] : index + 1);
+  const fail = (line, field, message) => {
+    throw new TraceFormatError(`line ${line}${field ? `, ${field}` : ""}: ${message}`, "shiplet");
+  };
+  // A broken final line is a file still being written; anywhere else it is an error.
+  if (info && info.lines.length) {
+    const lastRecordLine = info.lines[info.lines.length - 1];
+    const broken = info.badLines.find((line) => line < lastRecordLine);
+    if (broken) fail(broken, "", "not a JSON object");
+  }
+  const header = records[0];
+  if (!isOpenHeader(header)) fail(lineOf(0), "format", `the first line must be a ${TRACE_SCHEMA_VERSION} header`);
+  const headerLine = lineOf(0);
+  for (const key of Object.keys(header)) if (!HEADER_FIELDS.has(key)) fail(headerLine, key, "unknown field");
+  if (header.format !== TRACE_SCHEMA_VERSION) {
+    fail(headerLine, "format", `"${header.format}" is not supported; this reader understands ${TRACE_SCHEMA_VERSION}. Update shiplet-cli.`);
+  }
+  if (typeof header.harness !== "string" || !HARNESS_PATTERN.test(header.harness)) {
+    fail(headerLine, "harness", `must match ${HARNESS_PATTERN.source} (lowercase letters, digits, dots, and hyphens), such as "acme-agent"`);
+  }
+  if (RESERVED_HARNESSES.includes(header.harness)) {
+    fail(headerLine, "harness", `"${header.harness}" is reserved for Shiplet's built-in importer; share the native session file instead, or name your own agent`);
+  }
+  const optionalString = (key, max) => {
+    const value = header[key];
+    if (value === undefined || value === null) return null;
+    if (typeof value !== "string" || !value.trim() || value.length > max) fail(headerLine, key, `must be a string of 1 to ${max} characters, or null`);
+    return value;
+  };
+  const harnessVersion = optionalString("harnessVersion", 64);
+  const title = optionalString("title", TRACE_LIMITS.titleChars);
+  const cwd = optionalString("cwd", 4096);
+  const startedAt = header.startedAt ?? null;
+  if (startedAt !== null && !(typeof startedAt === "string" && ISO_DATE_TIME.test(startedAt))) {
+    fail(headerLine, "startedAt", "must be an ISO 8601 date-time, such as 2026-11-19T09:00:00Z, or null");
+  }
+  const models = header.models ?? [];
+  if (!Array.isArray(models) || models.length > 20 || models.some((model) => typeof model !== "string" || !model || model.length > 100)) {
+    fail(headerLine, "models", "must be at most 20 strings of 1 to 100 characters");
+  }
+
+  const events = [];
+  const files = [];
+  const calls = new Map();
+  const agents = new Map();
+  const lastTimes = new Map();
+  for (let index = 1; index < records.length; index++) {
+    const record = records[index];
+    const line = lineOf(index);
+    const seq = index - 1;
+    const kind = record.kind;
+    if (typeof kind !== "string") fail(line, "kind", `must be one of ${EVENT_KINDS.join(", ")}`);
+    if (!KIND_FIELDS[kind]) fail(line, "kind", `unknown kind "${kind}"; use one of ${EVENT_KINDS.join(", ")}, or "omitted" with a reason`);
+    const allowed = new Set([...COMMON_EVENT_FIELDS, ...KIND_FIELDS[kind]]);
+    for (const key of Object.keys(record)) if (!allowed.has(key)) fail(line, key, `unknown field for ${kind}`);
+    if (record.seq !== seq) fail(line, "seq", `must be ${seq}; events are numbered from 0 in file order`);
+    if (record.id !== undefined && record.id !== eventId(seq)) fail(line, "id", `must be ${eventId(seq)}, or left out`);
+    const t = record.t ?? null;
+    if (t !== null && !(typeof t === "string" && ISO_DATE_TIME.test(t))) fail(line, "t", "must be an ISO 8601 date-time, such as 2026-11-19T09:00:00Z, or null");
+    const agent = record.agent ?? "main";
+    if (typeof agent !== "string" || !agent || agent.length > 200) fail(line, "agent", "must be a string of 1 to 200 characters");
+    const event = { id: eventId(seq), seq, t, agent, kind };
+
+    // Subagents run inline: subagent_start, their events, then subagent_end.
+    if (kind === "subagent_start") {
+      if (agent === "main") fail(line, "agent", "subagent_start needs a subagent ID, not main");
+      if (agents.has(agent)) fail(line, "agent", `subagent "${agent}" already started on line ${agents.get(agent).line}`);
+      agents.set(agent, { line, endedLine: null });
+    } else if (agent !== "main") {
+      const state = agents.get(agent);
+      if (!state) fail(line, "agent", `subagent "${agent}" has no subagent_start before this line`);
+      if (state.endedLine) fail(line, "agent", `subagent "${agent}" ended on line ${state.endedLine}`);
+      if (kind === "subagent_end") state.endedLine = line;
+    } else if (kind === "subagent_end") {
+      fail(line, "agent", "subagent_end needs the subagent's ID, not main");
+    }
+
+    if (TEXT_KINDS.has(kind)) {
+      if (typeof record.text !== "string") fail(line, "text", "must be a string");
+      event.text = record.text;
+    } else if (kind === "subagent_start") {
+      if (record.text !== undefined && !(typeof record.text === "string" && record.text.length <= 200)) fail(line, "text", "must be a string of at most 200 characters");
+      event.text = firstLine(record.text, 200) || agent;
+    } else if (kind === "omitted") {
+      if (typeof record.reason !== "string" || !record.reason.trim()) fail(line, "reason", "must be a non-empty string");
+      event.reason = record.reason;
+    } else if (kind === "tool_call") {
+      const tool = record.tool;
+      if (!isPlainObject(tool)) fail(line, "tool", "must be an object with name, callId, and input");
+      for (const key of Object.keys(tool)) {
+        if (key === "inputSummary") fail(line, "tool.inputSummary", "is derived by Shiplet; leave it out");
+        if (!["name", "callId", "input"].includes(key)) fail(line, `tool.${key}`, "unknown field");
+      }
+      if (typeof tool.name !== "string" || !tool.name || tool.name.length > 200) fail(line, "tool.name", "must be a string of 1 to 200 characters");
+      if (typeof tool.callId !== "string" || !tool.callId || tool.callId.length > 200) fail(line, "tool.callId", "must be a string of 1 to 200 characters");
+      if (calls.has(tool.callId)) fail(line, "tool.callId", `"${tool.callId}" is already used on line ${calls.get(tool.callId)}`);
+      if (!isPlainObject(tool.input)) fail(line, "tool.input", "must be an object");
+      calls.set(tool.callId, line);
+      event.tool = { name: tool.name, callId: tool.callId, input: tool.input };
+    } else if (kind === "tool_result") {
+      const result = record.result;
+      if (!isPlainObject(result)) fail(line, "result", "must be an object with callId and text");
+      for (const key of Object.keys(result)) if (!["callId", "isError", "text"].includes(key)) fail(line, `result.${key}`, "unknown field");
+      if (typeof result.callId !== "string" || !calls.has(result.callId)) fail(line, "result.callId", `no earlier tool_call has callId "${result.callId}"`);
+      if (result.isError !== undefined && typeof result.isError !== "boolean") fail(line, "result.isError", "must be true or false");
+      if (typeof result.text !== "string") fail(line, "result.text", "must be a string");
+      event.result = { callId: result.callId, isError: result.isError === true, text: result.text };
+    }
+
+    if (record.files !== undefined) {
+      if (!Array.isArray(record.files) || !record.files.length || record.files.length > MAX_FILES_PER_EVENT) {
+        fail(line, "files", `must be an array of 1 to ${MAX_FILES_PER_EVENT} paths`);
+      }
+      if (!cwd) fail(line, "files", 'needs "cwd" in the header; paths are read from inside it');
+      record.files.forEach((file, fileIndex) => {
+        const field = `files[${fileIndex}]`;
+        if (typeof file !== "string" || !file || file.length > 1024) fail(line, field, "must be a path of 1 to 1024 characters");
+        if (!pathInside(file, cwd)) fail(line, field, "must stay inside cwd");
+        const mediaType = PRODUCED_FILE_TYPES[file.split(".").pop().toLowerCase()];
+        if (!file.includes(".") || !mediaType) fail(line, field, `must end in .${Object.keys(PRODUCED_FILE_TYPES).join(", .")}`);
+        files.push({ eventId: event.id, line, path: file, mediaType });
+      });
+    }
+    if (t) lastTimes.set(agent, t);
+    events.push(event);
+  }
+  // A subagent still running when the file is shared is closed at the end.
+  for (const [agent, state] of agents) {
+    if (!state.endedLine) {
+      const seq = events.length;
+      events.push({ id: eventId(seq), seq, t: lastTimes.get(agent) ?? null, agent, kind: "subagent_end" });
+    }
+  }
+  const times = events.map((event) => event.t).filter(Boolean).sort();
+  return {
+    events,
+    attachments: [],
+    cwd,
+    startedAt: startedAt ?? times[0] ?? null,
+    endedAt: times[times.length - 1] ?? null,
+    models: [...models],
+    harness: header.harness,
+    harnessVersion,
+    title: title ? title.trim() : null,
+    files,
+    skippedLines: main.skippedLines || 0,
+  };
+}
+
+// Lexical check only; the CLI also resolves symlinks before reading a file.
+function pathInside(file, cwd) {
+  const parts = (value) => value.split(/[\\/]+/).filter((part) => part && part !== ".");
+  const isAbsolute = (value) => value.startsWith("/") || /^[A-Za-z]:[\\/]/.test(value);
+  if (isAbsolute(file)) {
+    if (!isAbsolute(cwd)) return false;
+    const base = parts(cwd);
+    const target = parts(file);
+    if (target.includes("..") || target.length <= base.length) return false;
+    return base.every((part, index) => target[index] === part);
+  }
+  return !parts(file).includes("..") && parts(file).length > 0;
 }
 
 // Sort by time (untimed events keep their place after the last timed event
@@ -1169,7 +1403,9 @@ export async function validateUpload(upload) {
   const source = upload.source;
   if (!isPlainObject(source)) fail("source", "Must be an object.");
   else {
-    if (source.harness !== "claude-code" && source.harness !== "codex") fail("source.harness", "Must be claude-code or codex.");
+    if (typeof source.harness !== "string" || !HARNESS_PATTERN.test(source.harness)) {
+      fail("source.harness", `Must match ${HARNESS_PATTERN.source}, such as claude-code, codex, or acme-agent.`);
+    }
     if (!nullableString(source.harnessVersion ?? null, 64)) fail("source.harnessVersion", "Must be at most 64 characters or null.");
     if (!nullableString(source.importer ?? null, 64)) fail("source.importer", "Must be at most 64 characters or null.");
     for (const key of Object.keys(source)) if (!["harness", "harnessVersion", "importer"].includes(key)) fail(`source.${key}`, "Unknown field.");
@@ -1401,18 +1637,21 @@ export async function prepareTraceUpload({ main, subagents = [], title, revision
     attachments = [];
   }
   const firstPrompt = events.find((event) => event.kind === "user_message" && event.agent === "main" && firstLine(event.text, 80))?.text;
-  const resolvedTitle = (title || titleFrom(firstPrompt) || "Agent session").trim().slice(0, TRACE_LIMITS.titleChars);
-  const count = maskedEvents.count + maskedAttachments.count;
-  const kinds = mergeKinds(mergeKinds({}, maskedEvents.kinds), maskedAttachments.kinds);
+  // D6: the title is scanned like event text; a header or --title can hold anything.
+  const maskedTitle = maskSecrets((title || normalized.title || titleFrom(firstPrompt) || "Agent session").trim());
+  const resolvedTitle = maskedTitle.text.slice(0, TRACE_LIMITS.titleChars);
+  const count = maskedEvents.count + maskedAttachments.count + maskedTitle.count;
+  const kinds = mergeKinds(mergeKinds(mergeKinds({}, maskedEvents.kinds), maskedAttachments.kinds), maskedTitle.kinds);
   const upload = await buildUpload({
     normalized,
     title: resolvedTitle,
     revisionId,
-    source: { harness: format, harnessVersion: normalized.harnessVersion ? String(normalized.harnessVersion).slice(0, 64) : null, importer: importer ?? null },
+    source: { harness: normalized.harness, harnessVersion: normalized.harnessVersion ? String(normalized.harnessVersion).slice(0, 64) : null, importer: importer ?? null },
     events,
     attachments,
     droppedAttachments,
     clientMasking: { coreVersion: CORE_VERSION, count, kinds },
   });
-  return { upload, format, masked: { count, kinds }, attachments };
+  // Files an open-format event names; the CLI reads and attaches them.
+  return { upload, format, masked: { count, kinds }, attachments, files: normalized.files };
 }

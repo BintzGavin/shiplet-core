@@ -1,5 +1,5 @@
 // @vitest-environment node
-import { mkdtemp, mkdir, copyFile, readFile, rm, utimes, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, copyFile, readFile, rm, symlink, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { createRequire } from "node:module";
@@ -7,6 +7,7 @@ import { afterEach, beforeAll, describe, expect, it } from "vitest";
 import claudeMainText from "./fixtures/traces/claude-code-main.jsonl?raw";
 import claudeSubText from "./fixtures/traces/claude-code-main/subagents/agent-a1.jsonl?raw";
 import codexText from "./fixtures/traces/codex-rollout.jsonl?raw";
+import openText from "./fixtures/traces/open-format.jsonl?raw";
 
 const require = createRequire(import.meta.url);
 const cli = require("../src/cli/shiplet.cjs") as {
@@ -24,6 +25,7 @@ beforeAll(async () => {
   await writeFile(path.join(fixtures, "claude-code-main.jsonl"), claudeMainText);
   await writeFile(path.join(fixtures, "claude-code-main/subagents/agent-a1.jsonl"), claudeSubText);
   await writeFile(path.join(fixtures, "codex-rollout.jsonl"), codexText);
+  await writeFile(path.join(fixtures, "acme-session.jsonl"), openText);
 });
 afterEach(async () => {
   while (cleanup.length) await rm(cleanup.pop()!, { recursive: true, force: true });
@@ -345,6 +347,137 @@ describe("shiplet trace (CLI)", () => {
     expect(server.calls[0].authorization).toBeNull();
     expect(result.stdout).toContain("https://shiplet.test/shiplets/proj_9/traces/trc_link");
     expect((await run(["trace", "share", path.join(fixtures, "codex-rollout.jsonl"), "--upload-url", "http://evil.test/x"])).stderr).toContain("https Shiplet trace upload link");
+  });
+
+  it("dry-runs an open-format session from any agent", async () => {
+    const result = await run(["trace", "share", path.join(fixtures, "acme-session.jsonl"), "--shiplet", "proj_1", "--dry-run", "--json"], {
+      fetch: () => {
+        throw new Error("network used");
+      },
+    });
+    expect(result.stderr).toBe("");
+    expect(result.code).toBe(0);
+    expect(JSON.parse(result.stdout)).toMatchObject({
+      dryRun: true,
+      format: "shiplet",
+      harness: "acme-agent",
+      title: "Fix the checkout total",
+      events: 16,
+      masked: { count: 1, kinds: { "github-token": 1 } },
+    });
+    const text = await run(["trace", "share", path.join(fixtures, "acme-session.jsonl"), "--shiplet", "proj_1", "--dry-run"]);
+    expect(text.stdout).toContain("Format:      shiplet.trace/v1 from Acme Agent 1.4.0");
+  });
+
+  it("explains exactly what is wrong with an invalid open-format file", async () => {
+    const dir = await tempDir();
+    const broken = path.join(dir, "broken.jsonl");
+    const lines = openText.trim().split("\n");
+    lines[3] = lines[3].replace('"input":{"path":"src/checkout.ts"}', '"input":"src/checkout.ts"');
+    await writeFile(broken, lines.join("\n"));
+    const result = await run(["trace", "share", broken, "--shiplet", "p", "--dry-run"]);
+    expect(result.code).toBe(1);
+    expect(result.stderr).toContain(`${broken} is not a valid shiplet.trace/v1 file: line 4, tool.input: must be an object`);
+    const unknown = path.join(dir, "unknown.jsonl");
+    await writeFile(unknown, `${JSON.stringify({ hello: "world" })}\n`);
+    expect((await run(["trace", "share", unknown, "--shiplet", "p", "--dry-run"])).stderr).toContain("is not a Claude Code, Codex, or shiplet.trace/v1 session file");
+  });
+
+  it("--current reads SHIPLET_TRACE_FILE first, accepts only a regular .jsonl file, and never uploads its path", async () => {
+    const dir = await tempDir();
+    const file = path.join(dir, "private-folder-name", "session.jsonl");
+    await mkdir(path.dirname(file), { recursive: true });
+    await writeFile(file, openText);
+    const found = await cli.findCurrentSession({ HOME: dir, SHIPLET_TRACE_FILE: file, CLAUDE_CODE_SESSION_ID: "sess-12345678" }, "/work/shop");
+    expect(found).toMatchObject({ main: file, subagents: [], how: "SHIPLET_TRACE_FILE" });
+    const relative = await cli.findCurrentSession({ HOME: dir, SHIPLET_TRACE_FILE: "private-folder-name/session.jsonl" }, dir);
+    expect(relative.main).toBe(file);
+
+    const link = path.join(dir, "link.jsonl");
+    await symlink(file, link);
+    await expect(cli.findCurrentSession({ HOME: dir, SHIPLET_TRACE_FILE: link }, dir)).rejects.toThrow("SHIPLET_TRACE_FILE must name a regular .jsonl file");
+    await expect(cli.findCurrentSession({ HOME: dir, SHIPLET_TRACE_FILE: path.dirname(file) }, dir)).rejects.toThrow("SHIPLET_TRACE_FILE must name a regular .jsonl file");
+    await expect(cli.findCurrentSession({ HOME: dir, SHIPLET_TRACE_FILE: path.join(dir, "missing.jsonl") }, dir)).rejects.toThrow("SHIPLET_TRACE_FILE must name a regular .jsonl file");
+    await writeFile(path.join(dir, "session.txt"), openText);
+    await expect(cli.findCurrentSession({ HOME: dir, SHIPLET_TRACE_FILE: path.join(dir, "session.txt") }, dir)).rejects.toThrow("SHIPLET_TRACE_FILE must name a regular .jsonl file");
+
+    const token = `shiplet_trace_upload_${"cd".repeat(32)}`;
+    const server = stubServer([
+      (call) =>
+        call.method === "POST" && call.url === `https://shiplet.test/api/trace-uploads/${token}`
+          ? Response.json({ trace: { id: "trc_acme", projectId: "proj_9", harness: "acme-agent" }, serverMasked: { count: 0, kinds: {} }, pendingAttachments: [] }, { status: 201 })
+          : undefined,
+    ]);
+    const result = await run(["trace", "share", "--current", "--upload-url", `https://shiplet.test/api/trace-uploads/${token}`], {
+      fetch: server.fetch,
+      env: { HOME: dir, SHIPLET_TRACE_FILE: file },
+      cwd: dir,
+    });
+    expect(result.stderr).toBe("");
+    expect(result.code).toBe(0);
+    expect(result.stdout).toContain("(SHIPLET_TRACE_FILE)");
+    const body = server.calls[0].body || "";
+    expect(JSON.parse(body).source.harness).toBe("acme-agent");
+    expect(body).not.toContain("private-folder-name");
+    expect(body).not.toContain(dir);
+  });
+
+  it("attaches files an open-format event names, only from inside the session folder", async () => {
+    const work = await tempDir();
+    await mkdir(path.join(work, "shots"), { recursive: true });
+    const png = new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10, 9, 9]);
+    await writeFile(path.join(work, "shots/home.png"), png);
+    const records = openText.trim().split("\n").map((line) => JSON.parse(line));
+    records[0].cwd = work;
+    records[16] = { ...records[16], files: ["shots/home.png"] };
+    const session = path.join(work, "acme.jsonl");
+    await writeFile(session, records.map((record) => JSON.stringify(record)).join("\n"));
+
+    const dry = await run(["trace", "share", session, "--shiplet", "p", "--dry-run", "--json"]);
+    expect(dry.stderr).toBe("");
+    expect(JSON.parse(dry.stdout).producedFiles).toEqual([{ path: path.join("shots", "home.png"), mediaType: "image/png", bytes: png.byteLength }]);
+
+    let uploaded: any;
+    let putBytes: Uint8Array | null = null;
+    const server = stubServer([
+      (call) => {
+        if (call.method === "POST" && call.url.endsWith("/traces")) {
+          uploaded = JSON.parse(call.body!);
+          return Response.json({ trace: { id: "trc_3" }, serverMasked: { count: 0, kinds: {} }, pendingAttachments: uploaded.attachments.map((a: any) => a.sha256) }, { status: 201 });
+        }
+        if (call.method === "PUT" && call.url.includes("/attachments/")) {
+          putBytes = call.body as unknown as Uint8Array;
+          return new Response(null, { status: 204 });
+        }
+        return undefined;
+      },
+    ]);
+    const result = await run(["trace", "share", session, "--shiplet", "proj_1", "--api-url", "https://shiplet.test"], {
+      fetch: server.fetch,
+      env: { SHIPLET_API_KEY: "shiplet_org_testkeyvalue1234567890" },
+    });
+    expect(result.stderr).toBe("");
+    expect(uploaded.attachments).toEqual([expect.objectContaining({ mediaType: "image/png", deferred: true, source: "file", name: path.join("shots", "home.png") })]);
+    expect(uploaded.events[15].attachmentIds).toEqual([uploaded.attachments[0].sha256]);
+    expect(putBytes && Buffer.from(putBytes).equals(Buffer.from(png))).toBe(true);
+
+    const noFiles = await run(["trace", "share", session, "--shiplet", "p", "--dry-run", "--json", "--no-files"]);
+    expect(JSON.parse(noFiles.stdout)).toMatchObject({ producedFiles: [], skippedFiles: [{ path: "shots/home.png", reason: "--no-files" }] });
+
+    // A named file must exist, and a symlink cannot lead outside the folder.
+    const outside = await tempDir();
+    await writeFile(path.join(outside, "secret.png"), png);
+    await symlink(path.join(outside, "secret.png"), path.join(work, "shots/escape.png"));
+    for (const [name, message] of [
+      ["shots/missing.png", "line 17, files: shots/missing.png was not found"],
+      ["shots/escape.png", "line 17, files: shots/escape.png resolves outside cwd"],
+    ]) {
+      records[16] = { ...records[16], files: [name] };
+      await writeFile(session, records.map((record) => JSON.stringify(record)).join("\n"));
+      const refused = await run(["trace", "share", session, "--shiplet", "p", "--dry-run"]);
+      expect(refused.code, name).toBe(1);
+      expect(refused.stderr, name).toContain(message);
+    }
   });
 
   it("reports when traces are not enabled", async () => {

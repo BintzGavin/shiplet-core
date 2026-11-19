@@ -614,6 +614,84 @@ There is no new Shiplet type.
 Rejected: a new `source_type` (every route that branches on source type would
 need a case).
 
+### D20. An open input format, and harness identity by slug (agent)
+
+Any agent can share a session by writing `shiplet.trace/v1` JSONL itself. The
+public page is `/docs/trace-format` (`docs/trace-format.mdx`).
+
+- **Shape.** The first line is a header:
+  `{ format, harness, harnessVersion?, title?, cwd?, startedAt?, models? }`.
+  Only `format` (exactly `"shiplet.trace/v1"`) and `harness` are required;
+  `null` equals absent, and any other field is an error. Each later line is
+  one D8 event: `seq` (required, equal to its position from 0, so a lost line
+  is caught), `kind`, optional `t`, `agent` (default `main`), and `id` (derived
+  from `seq`; checked when given), plus the kind's fields. `tool_result.isError`
+  defaults to false. Events keep file order; nothing is re-sorted by time.
+- **Detection and normalizing.** `detectFormat` returns `"shiplet"` when the
+  first record has a `format` starting with `shiplet.trace/`; such a header on
+  any later line is an error. `normalize` validates and throws a
+  `TraceFormatError` (with `format: "shiplet"`) at the first problem, as
+  `line <n>, <field>: <message>`. `parseJsonl` records line numbers in a
+  `WeakMap` keyed by its `records` array, so its return shape is unchanged.
+  An unparsable final line (a file still being written) is skipped and
+  counted; one anywhere else is an error.
+- **Unknown kinds and fields are errors**, not `omitted` events. Version 1 is a
+  closed set, so a writer's bug or a newer writer surfaces at share time
+  instead of becoming a quietly thinner trace, and a writer that leaves
+  something out on purpose says so with its own `omitted` event and reason.
+  `tool.inputSummary` and `attachmentIds` are rejected too: the server derives
+  summaries (D8), and attachment IDs are content hashes a writer cannot vouch
+  for.
+- **Calls and subagents.** `tool.callId` is unique in the file, and a
+  `tool_result` must name an earlier call. Subagents are inline: an agent ID
+  starts once with `subagent_start` before any of its events, and no events
+  follow its `subagent_end`. A subagent still open at the end of the file gets
+  a `subagent_end` appended there, because sharing a running session
+  (`--current`) is the common case. Separate subagent files are an error.
+- **Attachments are named files, read by the CLI.** An event may carry
+  `files: [path]` (1 to 20). `normalize` checks them lexically (inside the
+  header's `cwd`, which is then required; extension in `PRODUCED_FILE_TYPES`)
+  and returns them as `files`, never as event fields. The CLI resolves each
+  with `realpath`, refuses a path whose real location leaves the real `cwd`
+  (so a symlink cannot reach outside) or does not exist, and attaches the bytes
+  as deferred `source: "file"` attachments through the D9 path. Files over D10
+  limits are skipped and listed; `--no-files` and `--no-attachments` list them
+  as skipped. The browser drop zone cannot read paths and says so. Inline
+  base64 is left out of v1: it would make the format larger to write and
+  validate, and the named-file path already covers screenshots and video.
+- **Harness identity.** `source.harness` on upload is any slug matching
+  `^[a-z0-9][a-z0-9.-]{0,39}$` (`HARNESS_PATTERN`), so the server stores any
+  agent's name. `harnessLabel` shows `Claude Code`, `Codex`, or the slug
+  title-cased by hyphen (`acme-agent` reads "Acme Agent") in the viewer header,
+  its meta row, the traces list, and the CLI.
+- **Reserved names.** The open format refuses `claude-code` and `codex` in its
+  header, so those labels keep meaning "Shiplet's importer read that tool's own
+  log". The server still accepts them from any upload: it cannot tell who built
+  an upload, and a raw API client could always claim them. That is harmless,
+  because the harness is a label only. It grants nothing, changes no
+  validation, masking, or access rule, and the upload is attributed to an
+  authenticated uploader (`uploadedBy`). The reservation guards against
+  accidental mislabeling by writers, not against a determined uploader.
+- **Titles are masked.** D6 already scanned the title, but no code did; a
+  header can now carry any title, so `prepareTraceUpload` and the upload route
+  both mask it and count it.
+- **`SHIPLET_TRACE_FILE`.** `--current` reads it before Claude Code and Codex
+  discovery. It must be a `.jsonl` path whose `lstat` is a regular file, and it
+  is opened with `O_NOFOLLOW`, so links, folders, pipes, and devices are
+  refused. Its path is printed locally and never uploaded (no upload field
+  carries a file name). Sibling subagent folders are not read for it.
+- **Versioning.** The header's `format` names the version. New kinds or fields
+  come in a new version string, never added to v1 in place, and a reader
+  refuses a version it does not know with a message to update the CLI.
+
+Rejected: converting unknown kinds to `omitted` (keeps sharing working across
+versions, but turns writer bugs into silent gaps and blurs what v1 means);
+optional `seq` derived from line order (a lost or duplicated line would go
+unnoticed); a server-side reserved-name check (unenforceable, see above);
+re-sorting open-format events by `t` (writers know their order better than
+clocks do); inline base64 attachments in v1; a separate `source.format` field
+(the importer string already says which client built the upload).
+
 ## Slice 1: owner-only upload, read, pull, and delete over REST and the CLI
 
 Proves the format, the shared core, double masking, and storage end to end,
@@ -652,7 +730,8 @@ Exports:
   object and `type` of `session_meta`, `response_item`, `turn_context`, or
   `event_msg`; otherwise `"claude-code"` when any record has `type` of `user`
   or `assistant` and a `message` object; otherwise throws
-  `TraceFormatError("unrecognized session format")`.
+  `TraceFormatError("unrecognized session format")`. Since D20 it first
+  returns `"shiplet"` for an open-format header on the first line.
 - `normalize({ format, main, subagents = [] })`, where `main` and each
   subagent are `{ fileName, records, skippedLines }`. Returns
   `{ events, attachments, cwd, startedAt, endedAt, models, harnessVersion, skippedLines }`.
@@ -739,7 +818,8 @@ Exports:
     - `schemaVersion` must be `"shiplet.trace/v1"`.
     - `title`: a string of 1 to 200 characters after trimming.
     - `revisionId`: a string or null.
-    - `source.harness`: `"claude-code"` or `"codex"`.
+    - `source.harness`: `"claude-code"` or `"codex"`. Since D20, any slug
+      matching `HARNESS_PATTERN`.
     - `source.harnessVersion` and `source.importer`: strings of at most 64
       characters, or null.
     - `cwd`: a string of at most 4,096 characters, or null.

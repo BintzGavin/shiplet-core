@@ -46,6 +46,19 @@ npx shiplet-cli trace share --current --shiplet <shiplet-id>
 npx shiplet-cli trace share --current --new --title "Fix the flaky test"
 ```
 
+Any other agent can share its sessions by writing the open
+[trace format](https://shiplet.cc/docs/trace-format) (`shiplet.trace/v1`):
+a header line, then one event per line. Share the file directly, or set
+`SHIPLET_TRACE_FILE` so `--current` finds it:
+
+```sh
+npx shiplet-cli trace share session.jsonl --shiplet <shiplet-id> --dry-run
+SHIPLET_TRACE_FILE=/path/to/session.jsonl npx shiplet-cli trace share --current --shiplet <shiplet-id>
+```
+
+`SHIPLET_TRACE_FILE` must be a regular `.jsonl` file, and its path is never
+uploaded. Without it, `--current` finds Claude Code and Codex sessions.
+
 The CLI masks secrets before anything leaves your computer. New traces are
 private until you share them with `--audience`. Colleagues read them in the
 browser or load them into their own agent with

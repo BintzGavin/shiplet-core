@@ -35,7 +35,8 @@ const DOCS_PUBLIC_CONTENT_SHA256: Record<string, string> = {
     "ae7d36eb6be9d7c20c4e9a493540d3b9f3d89ce7d31dbb1de9a25d8ee5f56f95",
   "embed": "9fef7053a6175f1aa55f8c7c5076596d104b2aa26538839c70a63e6a441c96b3",
   "authentication": "7dd76ff9871059e59a702177d9c4afc4aebe661ae003853d7ffbed8194a30f29",
-  "traces": "34b639a8cc6bb697d345aee6b8020ff11caaff9ac305126400414f1d3e9fd393",
+  "traces": "11b2f8850d21c498edf0350f62915bba6746ab404745013c9b7a8c94b4e33b25",
+  "trace-format": "66e20270cfdad925ab5f9e861fcd93931ba6315bcc383207e7c399947d1c7006",
   "security": "5b52e175c0b5cb8630e199c1bfc126895eadaa47e5f0fa3ec19d7878b6e7caa6"
 };
 
@@ -199,6 +200,7 @@ const DOCS_PAGES: DocsPage[] = [
 <p>The easiest way is to ask your agent: say “Share this session to Shiplet &lt;name or id&gt;” in Claude Code or Codex. Your agent knows which session it is in, including subagents, screenshots, and videos. From a terminal, run:</p>
 <pre><code>npx shiplet-cli trace share --current --shiplet &lt;id&gt;</code></pre>
 <p>The CLI masks secrets on your computer before anything is sent, and Shiplet scans again when the trace arrives. Screenshots, videos, and PDFs the session produced are attached automatically (up to 20 MiB each). Add <code>--dry-run</code> to see what would be sent, or <code>--no-files</code> to leave the files out.</p>
+<p>Any other agent can share its sessions too, by writing the <a href="/docs/trace-format">open trace format</a>.</p>
 <p>To share a session that has no artifact to review, add <code>--new</code> instead of <code>--shiplet</code>: <code>npx shiplet-cli trace share --current --new --title "Fix the flaky test"</code>. Shiplet creates an ordinary Shiplet for it, whose page is the trace viewer.</p>
 <p>In a cloud agent with no browser on its computer, sign the CLI in first with <code>npx shiplet-cli login --device</code>, or connect <a href="/docs/code-mode-mcp">Shiplet MCP</a> with OAuth and let the agent call <code>createTraceUploadLink</code>. See <a href="/docs/authentication">Choosing how to sign in</a>.</p>
 <p>No terminal? Drop a session file (<code>.jsonl</code>) onto the drop zone in the Shiplet's Traces panel. The browser masks secrets before uploading. Claude Code keeps sessions in <code>~/.claude/projects/</code> and Codex keeps them in <code>~/.codex/sessions/</code>.</p>
@@ -452,6 +454,100 @@ shiplet trace pull &lt;trace&gt; --shiplet &lt;id&gt; --as context</code></pre>
 <h2>Authentication and authority</h2>
 <p>Browser OAuth identifies an interactive user. A registered agent remains a separate actor in Shiplet's audit history, tied to the user who approved it and the selected organization. Its effective authority combines recognized agent permissions, current Shiplet membership and grants, the selected organization, and the requested operation. Unknown permissions grant nothing.</p>
 <p><strong>Next:</strong> connect through browser OAuth, or ask a compatible agent to follow <code>https://shiplet.cc/auth.md</code>, then run <code>search</code>.</p>`,
+  },
+  {
+    slug: "trace-format",
+    title: "The open trace format",
+    description: "Write shiplet.trace/v1 so any agent can share its sessions to Shiplet.",
+    group: "Automation",
+    body: `
+<p>A <strong>trace</strong> is the full log of an agent session: the prompts, the agent's replies, and every tool call and result. Shiplet reads Claude Code and Codex sessions itself. Any other agent can share its sessions by writing one file in the open trace format, <code>shiplet.trace/v1</code>.</p>
+<p>The format is open so that sharing a session does not depend on which agent you use. Each agent keeps its sessions in its own format and folder. One small, documented format lets every agent's sessions be masked, shared at the levels you choose, read in the browser, and handed to another agent in the same way. It uses the same events Shiplet stores, so nothing is lost in translation.</p>
+<h2>A complete file</h2>
+<p>A trace file is <a href="https://jsonlines.org">JSON Lines</a>: one JSON object per line. The first line is the header, and every later line is one event, in the order the session happened.</p>
+<pre><code>{"format":"shiplet.trace/v1","harness":"acme-agent","harnessVersion":"1.4.0","title":"Fix the checkout total","cwd":"/work/shop","startedAt":"2026-11-19T09:00:00Z","models":["acme-large"]}
+{"seq":0,"t":"2026-11-19T09:00:01Z","kind":"user_message","text":"The checkout total ignores discounts. Fix it and run the tests."}
+{"seq":1,"t":"2026-11-19T09:00:04Z","kind":"tool_call","tool":{"name":"shell","callId":"c1","input":{"command":"npm test"}}}
+{"seq":2,"t":"2026-11-19T09:00:30Z","kind":"tool_result","result":{"callId":"c1","text":"12 passed"}}
+{"seq":3,"t":"2026-11-19T09:00:33Z","kind":"assistant_message","text":"Fixed, and the tests pass."}</code></pre>
+<h2>The header</h2>
+<div class="docs-table" tabindex="0"><table><thead><tr><th>Field</th><th>Required</th><th>Meaning</th></tr></thead><tbody>
+<tr><td><code>format</code></td><td>Yes</td><td>Always <code>"shiplet.trace/v1"</code> for this version.</td></tr>
+<tr><td><code>harness</code></td><td>Yes</td><td>Your agent's name as a slug: lowercase letters, digits, dots, and hyphens, starting with a letter or digit, at most 40 characters (<code>^[a-z0-9][a-z0-9.-]{0,39}$</code>). The viewer shows it title-cased, so <code>acme-agent</code> reads "Acme Agent".</td></tr>
+<tr><td><code>harnessVersion</code></td><td>No</td><td>Your agent's version, at most 64 characters.</td></tr>
+<tr><td><code>title</code></td><td>No</td><td>The trace title, 1 to 200 characters. <code>--title</code> overrides it; without either, the first prompt is used.</td></tr>
+<tr><td><code>cwd</code></td><td>No</td><td>The session's working directory. Shiplet lists files touched relative to it and reads named files from inside it. Only its last folder name is stored.</td></tr>
+<tr><td><code>startedAt</code></td><td>No</td><td>When the session started, as an ISO 8601 date-time. Defaults to the first event's time.</td></tr>
+<tr><td><code>models</code></td><td>No</td><td>Up to 20 model names the session used.</td></tr>
+</tbody></table></div>
+<p>Any other header field is an error. <code>null</code> is the same as leaving an optional field out.</p>
+<p><code>claude-code</code> and <code>codex</code> are reserved for Shiplet's own importers, so a trace labeled "Claude Code" always came from Claude Code's own log. To share those sessions, pass their native session files instead.</p>
+<h2>Events</h2>
+<p>Every event has these fields:</p>
+<div class="docs-table" tabindex="0"><table><thead><tr><th>Field</th><th>Required</th><th>Meaning</th></tr></thead><tbody>
+<tr><td><code>seq</code></td><td>Yes</td><td>The event's number: <code>0</code> for the first event, then one more on each line. A gap is an error, so a lost line is never silent.</td></tr>
+<tr><td><code>kind</code></td><td>Yes</td><td>One of the kinds below.</td></tr>
+<tr><td><code>t</code></td><td>No</td><td>When it happened, as an ISO 8601 date-time, or <code>null</code>.</td></tr>
+<tr><td><code>agent</code></td><td>No</td><td><code>"main"</code> (the default) or a subagent ID.</td></tr>
+<tr><td><code>id</code></td><td>No</td><td>Derived from <code>seq</code> as <code>e</code> plus six digits (<code>e000000</code>). If you send it, it must match.</td></tr>
+<tr><td><code>files</code></td><td>No</td><td>Paths of screenshots, videos, or PDFs to attach. See <a href="#attachments">Attachments</a>.</td></tr>
+</tbody></table></div>
+<p>Shiplet shows events in file order and does not re-sort them by time.</p>
+<h3>Messages, reasoning, and notes</h3>
+<p><code>user_message</code>, <code>assistant_message</code>, <code>reasoning</code>, and <code>system_note</code> each carry <code>text</code>.</p>
+<pre><code>{"seq":0,"kind":"user_message","text":"Add pagination to the orders page."}
+{"seq":1,"kind":"reasoning","text":"Start with the query that loads orders."}
+{"seq":2,"kind":"assistant_message","text":"Pagination is in, with 50 orders per page."}
+{"seq":3,"kind":"system_note","text":"Earlier context was summarized."}</code></pre>
+<h3>Tool calls and results</h3>
+<p>A <code>tool_call</code> carries <code>tool</code> with a <code>name</code>, a <code>callId</code> that is unique in the file, and an <code>input</code> object. A <code>tool_result</code> carries <code>result</code> with the <code>callId</code> of an earlier call, its <code>text</code>, and <code>isError</code> (<code>false</code> when left out).</p>
+<pre><code>{"seq":4,"kind":"tool_call","tool":{"name":"read_file","callId":"c2","input":{"path":"src/orders.ts"}}}
+{"seq":5,"kind":"tool_result","result":{"callId":"c2","isError":false,"text":"export async function listOrders() {"}}</code></pre>
+<p>Name shell tools <code>shell</code>, <code>Bash</code>, <code>exec_command</code>, or <code>local_shell</code>, with the command in <code>input.command</code>, so Shiplet can recognize test, lint, typecheck, and build commands as checks.</p>
+<h3>Subagents</h3>
+<p>Subagents are written inline. Give each one an ID, start it with <code>subagent_start</code> (with an optional <code>text</code> title of up to 200 characters), write its events with that <code>agent</code>, and end it with <code>subagent_end</code>.</p>
+<pre><code>{"seq":6,"agent":"reviewer","kind":"subagent_start","text":"Check the discount rules"}
+{"seq":7,"agent":"reviewer","kind":"tool_call","tool":{"name":"grep","callId":"c3","input":{"pattern":"discount","path":"src"}}}
+{"seq":8,"agent":"reviewer","kind":"tool_result","result":{"callId":"c3","text":"src/discounts.ts:3"}}
+{"seq":9,"agent":"reviewer","kind":"subagent_end"}</code></pre>
+<p>A subagent's events must come after its start and before its end, and an ID can start only once. Subagents can run at the same time as the main agent. When a subagent is still running at the end of the file, Shiplet closes it there.</p>
+<h3>Things you leave out</h3>
+<p>Use <code>omitted</code> with a <code>reason</code> for anything your agent leaves out on purpose, so readers can see that something was there.</p>
+<pre><code>{"seq":10,"kind":"omitted","reason":"Internal planning notes are not exported."}</code></pre>
+<h3>Unknown kinds and fields are errors</h3>
+<p>Version 1 is a closed set. An unknown <code>kind</code>, an unknown field, or a missing required field stops the share with the line and the field, for example <code>line 4, tool.input: must be an object</code>. Nothing is dropped quietly: if you mean to leave something out, write an <code>omitted</code> event. A final line that is not complete JSON, from a file still being written, is skipped and counted. A broken line anywhere else is an error.</p>
+<h2 id="attachments">Attachments</h2>
+<p>An event can name up to 20 files to attach in <code>files</code>. The CLI reads them from your computer when you share:</p>
+<pre><code>{"seq":11,"kind":"assistant_message","text":"Here is the new page.","files":["screenshots/orders.png"]}</code></pre>
+<ul><li>Paths are relative to the header's <code>cwd</code>, or absolute paths inside it, so <code>cwd</code> is required when an event names files.</li><li>A path must stay inside <code>cwd</code>, including after symbolic links are followed. A missing file is an error.</li><li>The file must be a <code>.png</code>, <code>.jpg</code>, <code>.jpeg</code>, <code>.gif</code>, <code>.webp</code>, <code>.mp4</code>, <code>.webm</code>, or <code>.pdf</code>. Each can be up to 20 MiB. Files over a limit are skipped and listed.</li><li>The CLI also attaches media files that tool calls and results mention, as it does for other agents. <code>--no-files</code> leaves out both kinds.</li><li>Images, videos, and PDFs are not scanned for secrets.</li><li>Version 1 has no inline file data. The dashboard drop zone cannot read paths from your computer, so it uploads the events without the named files; share with the CLI to include them.</li></ul>
+<h2>Limits</h2>
+<div class="docs-table" tabindex="0"><table><thead><tr><th>Limit</th><th>Value</th></tr></thead><tbody>
+<tr><td>One text field</td><td>256 KiB. Longer text keeps its first and last 64 KiB.</td></tr>
+<tr><td>One event</td><td>512 KiB after that. A larger tool input is replaced by its size.</td></tr>
+<tr><td>One upload</td><td>16 MiB of events after masking. Files go up separately.</td></tr>
+<tr><td>Events per trace</td><td>64 MiB.</td></tr>
+<tr><td>Files</td><td>20 MiB each, 200 files and 256 MiB per trace.</td></tr>
+<tr><td>Session file the CLI reads</td><td>256 MiB.</td></tr>
+</tbody></table></div>
+<h2>What Shiplet works out</h2>
+<p>You write only the header and events. Shiplet computes the rest on its server from the masked events, and never accepts these from a file:</p>
+<ul><li>a one-line summary of each tool call's input (sending <code>inputSummary</code> is an error);</li><li>the trace summary: duration, models, prompt count, tool counts, files touched, checks with their outcome, and error count;</li><li>the list of subagents, segments of at most 2,000 events or 1 MiB for paging the viewer, and the hashes that identify each stored part.</li></ul>
+<h2>How masking works</h2>
+<p>Secrets are masked on your computer before the trace is sent, and again by Shiplet when it arrives, so an upload that skipped the CLI is still masked.</p>
+<ul><li>Every string field in every event, and the title, is scanned. A match becomes a placeholder such as <code>[secret:github-token]</code>.</li><li><code>seq</code>, <code>id</code>, <code>t</code>, <code>agent</code>, <code>kind</code>, and call IDs are not changed, so the events still line up.</li><li>Masking catches common credential formats, such as API keys, tokens, private keys, and passwords in assignments. It cannot promise to find every secret, so check with <code>--dry-run</code> first.</li><li>The share output says how many secrets each side masked.</li></ul>
+<h2>Share a file</h2>
+<p>Check what would be sent, then share it to a Shiplet:</p>
+<pre><code>npx shiplet-cli trace share session.jsonl --shiplet &lt;id&gt; --dry-run
+npx shiplet-cli trace share session.jsonl --shiplet &lt;id&gt;</code></pre>
+<p>To share a session with no artifact to review, use <code>--new</code> instead of <code>--shiplet</code>: <code>npx shiplet-cli trace share session.jsonl --new --title "Fix the checkout total"</code>. A new trace is private until you share it. Read <a href="/docs/traces">Traces</a> to choose who sees it, and at which level.</p>
+<h3>Let your agent share the session it is in</h3>
+<p>Set <code>SHIPLET_TRACE_FILE</code> to the file your agent writes. Then <code>--current</code> shares that file, so the same command works in every agent:</p>
+<pre><code>SHIPLET_TRACE_FILE=/path/to/session.jsonl npx shiplet-cli trace share --current --shiplet &lt;id&gt;</code></pre>
+<ul><li><code>SHIPLET_TRACE_FILE</code> must name a regular <code>.jsonl</code> file. Links, folders, and devices are refused.</li><li>The CLI prints the path so you can check it, but never uploads it.</li><li>Without it, <code>--current</code> finds Claude Code and Codex sessions only.</li></ul>
+<p>An agent connected to <a href="/docs/code-mode-mcp">Shiplet MCP</a> calls <code>createTraceUploadLink</code>, then runs <code>npx shiplet-cli trace share --current --upload-url &lt;link&gt;</code>, which also reads <code>SHIPLET_TRACE_FILE</code>.</p>
+<h2>Versions</h2>
+<p>The header's <code>format</code> names the version. Version 1 is fixed: new kinds or fields will come in a new version, such as <code>shiplet.trace/v2</code>, not added to version 1. A CLI that does not know a file's version refuses it and asks you to update <code>shiplet-cli</code>.</p>
+<p><strong>Next:</strong> read <a href="/docs/traces">Traces</a> to share and continue sessions, or the <a href="/docs/cli">CLI guide</a> to sign in.</p>`,
   },
   {
     slug: "api-keys",
