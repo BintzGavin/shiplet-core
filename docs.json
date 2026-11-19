@@ -24,6 +24,7 @@
           "docs/introduction",
           "docs/why-shiplet",
           "docs/quickstart",
+          "docs/traces",
           "docs/embed",
           "docs/browser-capture"
         ]
