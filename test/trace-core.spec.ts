@@ -221,7 +221,7 @@ describe("trace core: truncation, segments, and validation", () => {
   it.each([
     ["schemaVersion", { schemaVersion: "v0" }],
     ["title", { title: "   " }],
-    ["source.harness", { source: { harness: "other" } }],
+    ["source.harness", { source: { harness: "Other Agent" } }],
     ["startedAt", { startedAt: "yesterday" }],
     ["models", { models: ["x".repeat(101)] }],
     ["skippedLines", { skippedLines: -1 }],

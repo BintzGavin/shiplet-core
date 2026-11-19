@@ -104,7 +104,7 @@ export interface TraceUpload {
   schemaVersion: "shiplet.trace/v1";
   revisionId?: string | null;
   title: string;
-  source: { harness: "claude-code" | "codex"; harnessVersion?: string | null; importer?: string | null };
+  source: { harness: string; harnessVersion?: string | null; importer?: string | null };
   cwd?: string | null;
   startedAt?: string | null;
   endedAt?: string | null;
@@ -116,12 +116,25 @@ export interface TraceUpload {
   attachments: Array<{ sha256: string; mediaType: string; bytes: number; base64?: string; deferred?: boolean; source?: "inline" | "file"; name?: string }>;
 }
 
-export class TraceFormatError extends Error {}
+export class TraceFormatError extends Error {
+  format: "shiplet" | null;
+}
+
+export type TraceFormat = "claude-code" | "codex" | "shiplet";
+export const HARNESS_PATTERN: RegExp;
+export const RESERVED_HARNESSES: readonly string[];
+export function harnessLabel(harness: string | null | undefined): string;
+export interface TraceFileReference {
+  eventId: string;
+  line: number;
+  path: string;
+  mediaType: string;
+}
 
 export function parseJsonl(text: string): { records: Array<Record<string, unknown>>; skippedLines: number };
-export function detectFormat(records: Array<Record<string, unknown>>): "claude-code" | "codex";
+export function detectFormat(records: Array<Record<string, unknown>>): TraceFormat;
 export function normalize(input: {
-  format: "claude-code" | "codex";
+  format: TraceFormat;
   main: { fileName?: string; records: Array<Record<string, unknown>>; skippedLines: number };
   subagents?: Array<{ fileName?: string; records: Array<Record<string, unknown>>; skippedLines: number }>;
 }): Promise<{
@@ -131,7 +144,10 @@ export function normalize(input: {
   startedAt: string | null;
   endedAt: string | null;
   models: string[];
+  harness: string;
   harnessVersion: string | null;
+  title: string | null;
+  files: TraceFileReference[];
   skippedLines: number;
 }>;
 export function maskSecrets(text: string): { text: string } & MaskCounts;
@@ -186,7 +202,7 @@ export function prepareTraceUpload(input: {
   revisionId?: string | null;
   importer?: string;
   noAttachments?: boolean;
-}): Promise<{ upload: TraceUpload; format: "claude-code" | "codex"; masked: MaskCounts; attachments: TraceAttachment[] }>;
+}): Promise<{ upload: TraceUpload; format: TraceFormat; masked: MaskCounts; attachments: TraceAttachment[]; files: TraceFileReference[] }>;
 
 export const LEVELS: readonly TraceLevel[];
 export const RULE_OPS: readonly string[];

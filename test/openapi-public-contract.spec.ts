@@ -66,6 +66,15 @@ describe("focused public OpenAPI contract", () => {
     });
   });
 
+  it("accepts traces from any agent: the harness is a slug, not a fixed list", () => {
+    const source = schemas.TraceUpload.properties.source;
+    expect(source).toMatchObject({ required: ["harness"], additionalProperties: false });
+    expect(source.properties.harness).toEqual({ type: "string", pattern: "^[a-z0-9][a-z0-9.-]{0,39}$" });
+    expect(new RegExp(source.properties.harness.pattern).test("acme-agent")).toBe(true);
+    expect(schemas.TraceUpload.description).toContain("/docs/trace-format");
+    expect(operation("/api/shiplets/{projectId}/trace-uploads", "post").description).toContain("any agent that writes the open shiplet.trace/v1 format");
+  });
+
   it("marks exactly the trusted-host operations available to Code Mode", () => {
     const supported = new Set([
       "get /api/shiplets",

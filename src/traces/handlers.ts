@@ -12,6 +12,7 @@ import {
 	finalizeTrace,
 	maskAttachments,
 	maskEvents,
+	maskSecrets,
 	profileDigest,
 	profileDroppedCallIds,
 	sha256Hex,
@@ -122,14 +123,18 @@ export async function handleCreateTrace(env: Env, access: TraceAccess, raw: Uint
 	const maskedAttachments = await maskAttachments(decodeUploadAttachments(upload), maskedEvents.events);
 	const pending = deferredUploadAttachments(upload);
 	const events = truncateEvents(maskedAttachments.events);
+	// D6: the title is scanned like event text, whatever client built it.
+	const maskedTitle = maskSecrets(upload.title.trim());
 	const serverKinds: Record<string, number> = { ...maskedEvents.kinds };
-	for (const [kind, value] of Object.entries(maskedAttachments.kinds)) serverKinds[kind] = (serverKinds[kind] || 0) + value;
-	const serverCount = maskedEvents.count + maskedAttachments.count;
+	for (const kinds of [maskedAttachments.kinds, maskedTitle.kinds]) {
+		for (const [kind, value] of Object.entries(kinds)) serverKinds[kind] = (serverKinds[kind] || 0) + value;
+	}
+	const serverCount = maskedEvents.count + maskedAttachments.count + maskedTitle.count;
 	const finalized = await finalizeTrace({
 		events,
 		attachments: [...maskedAttachments.attachments, ...pending.map((item) => ({ ...item, data: new Uint8Array() }))],
 		cwd: upload.cwd ?? null,
-		title: upload.title.trim(),
+		title: maskedTitle.text,
 		source: { harness: upload.source.harness, harnessVersion: upload.source.harnessVersion ?? null, importer: upload.source.importer ?? null },
 		startedAt: upload.startedAt ?? null,
 		endedAt: upload.endedAt ?? null,
