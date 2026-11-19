@@ -20,7 +20,7 @@ const COMMAND_SESSION_SCOPES = [
 // A reusable session carries deployment:write, so deploy, promote and rollback
 // run on the cached approval. Each still needs the CLI's explicit --approve
 // and the kernel's own approval rules; the server caps the lifetime above.
-const REUSABLE_SESSION_SCOPES = [
+export const REUSABLE_SESSION_SCOPES = [
   "revision:read",
   "revision:write",
   "deployment:write",

@@ -62,9 +62,21 @@ Later commands against the same Shiplet origin reuse that session without
 opening the browser until it expires. Run the CLI and browser on the same
 computer so the local callback is reachable. For an expired request, canceled
 approval, or mismatched callback, run the command again and use the new browser
-window. For remote or headless agents, use a narrowly scoped organization API
-key from a secret store for supported commands, or supported MCP. A dry run does
-not authenticate.
+window. A dry run does not authenticate.
+
+### No browser on this computer
+
+In a cloud agent, an SSH session, or a container, sign in with a code instead:
+
+```bash
+shiplet login --device
+```
+
+The CLI prints `https://shiplet.cc/cli/device` and a code such as `BCDF-GHJK`.
+Open the page on any device, sign in, type the code, and approve. The CLI gets
+the same reusable session as browser approval. Set `SHIPLET_LOGIN=device` to use
+device sign-in for every command that needs approval. See
+[Choosing how to sign in](/docs/authentication).
 
 ### Session lifetime
 

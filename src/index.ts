@@ -24,7 +24,7 @@ import { embedAuthBootstrapScript } from "./embed-auth-client";
  *    Provides middleware support and type-safe request handling.
  */
 
-import { Hono } from "hono";
+import { Hono, type Context } from "hono";
 import { registerBrowserEmbed, renderEmbedSetup } from "./embed-setup";
 import { EMBED_WIDGET_CSS, embedWidgetScript } from "./embed-widget";
 import { renderReviewAccessPage, withReviewAccessStyles } from "./review-access-page";
@@ -477,6 +477,17 @@ import {
   exchangeCliAuthorizationCode,
   revokeCliSession,
 } from "./cli-session";
+import {
+  approveDeviceAuthorization,
+  createDeviceAuthorization,
+  denyDeviceAuthorization,
+  ensureCliDeviceSchema,
+  findPendingDeviceAuthorization,
+  formatUserCode,
+  getPendingDeviceAuthorizationById,
+  pollDeviceAuthorization,
+  sweepExpiredDeviceAuthorizations,
+} from "./cli-device";
 import { codeReadsSpec, parseCodeModeRequest } from "./codemode";
 import { SHIPLET_OPENAPI_SPEC } from "./openapi";
 import {
@@ -557,10 +568,11 @@ export { SandboxSession } from "./sandbox";
 export { ShipletRoot } from "./shiplet-root";
 
 // Initialize Hono app with type-safe environment bindings
-const app = new Hono<{
+type ShipletAppEnv = {
   Bindings: Env;
   Variables: { db: D1QB; kernelDocumentNonce: KernelDocumentNonce };
-}>();
+};
+const app = new Hono<ShipletAppEnv>();
 
 const RESERVED_PLATFORM_PATHS = new Set([
   ".well-known",
@@ -792,6 +804,7 @@ app.use("*", async (c, next) => {
   const path = new URL(c.req.url).pathname;
   const authPage = path.startsWith("/auth/") ||
     path === "/cli/authorize" || path === "/cli/authorize/complete" ||
+    path === "/cli/device" || path === "/cli/device/confirm" || path === "/cli/device/complete" ||
     path === "/embed/install";
   if (!authPage || !c.req.header("accept")?.includes("text/html")) return;
   c.header("cache-control", "no-store");
@@ -896,6 +909,7 @@ async function ensureKernelSchemas(db: D1Database) {
   await ensureRevisionDeploymentCoordinatorSchema(db);
   await ensureManagedRuntimeKernelSchema(db);
   await ensureTraceSchema(db);
+  await ensureCliDeviceSchema(db);
 }
 
 const KERNEL_SCHEMA_EPOCH_TABLE = "shiplet_kernel_schema_epoch";
@@ -908,7 +922,7 @@ const KERNEL_SCHEMA_EPOCH_MARKER = "kernel";
 // 5: project_traces for agent session traces.
 // 6: trace audiences, variants, and pending attachments.
 // 7: trace upload links.
-const CURRENT_KERNEL_SCHEMA_EPOCH = 8;
+const CURRENT_KERNEL_SCHEMA_EPOCH = 9;
 
 async function readKernelSchemaEpoch(db: D1Database): Promise<number | null> {
   const table = await db
@@ -12477,6 +12491,183 @@ app.post("/api/cli/session/exchange", async (c) => {
   }
 });
 
+// ---------------------------------------------------------------------------
+// Device login (`shiplet login --device`, src/cli-device.ts): for a CLI that
+// cannot receive a browser callback, such as a cloud agent or SSH session.
+
+function cliDeviceJson(body: unknown, status: number) {
+  const response = json(body, status);
+  response.headers.set("cache-control", "no-store");
+  return response;
+}
+
+function cliDevicePage(c: Context<ShipletAppEnv>, user: ShipletUser, title: string, inner: string, status = 200) {
+  const body = renderPage(`<div class="auth-stage auth-stage-compact">
+      <section class="form-container auth-card auth-decision" aria-labelledby="cli-device-title">
+        <span class="success-card-label">CLI access</span>
+        ${inner}
+        <a class="auth-docs-link" href="/docs/authentication">How signing in works</a>
+      </section>
+    </div>`, {
+    nonce: kernelDocumentNonce(c),
+    user,
+    appUrl: appBaseUrl(c.env, c.req.url),
+    title: `${title} | Shiplet`,
+    canonicalPath: null,
+    indexing: "noindex",
+  });
+  return new Response(body, {
+    status,
+    headers: {
+      "content-type": "text/html; charset=utf-8",
+      "cache-control": "no-store",
+      pragma: "no-cache",
+      "referrer-policy": "no-referrer",
+      "x-content-type-options": "nosniff",
+    },
+  });
+}
+
+function cliDeviceCodeForm(error = "") {
+  return `<h1 id="cli-device-title">Sign in a CLI with a code</h1>
+        <p>Enter the code your terminal or agent shows. It looks like <code>BCDF-GHJK</code>.</p>
+        ${error ? `<div class="banner banner-error" role="alert">${escapeAuthHtml(error)}</div>` : ""}
+        <form method="post" action="/cli/device/confirm">
+          <div class="form-group">
+            <label for="cli-device-code">Code</label>
+            <input id="cli-device-code" name="user_code" autocomplete="off" autocapitalize="characters" spellcheck="false" inputmode="text" maxlength="12" required autofocus>
+          </div>
+          <button class="btn btn-primary" type="submit">Continue</button>
+        </form>
+        <p>Only enter a code from a sign-in you started yourself. Shiplet never asks for a code by email or chat.</p>`;
+}
+
+function trustedCliDeviceForm(c: Context<ShipletAppEnv>) {
+  const origin = new URL(appBaseUrl(c.env, c.req.url)).origin;
+  if (!hasTrustedTopLevelFormProvenance(c.req.raw, [origin, new URL(c.req.url).origin])) return false;
+  return (c.req.header("content-type")?.toLowerCase() || "").startsWith("application/x-www-form-urlencoded");
+}
+
+app.post("/api/cli/device/authorize", async (c) => {
+  try {
+    const contentType = c.req.header("content-type")?.toLowerCase() || "";
+    if (!contentType.startsWith("application/json")) return cliDeviceJson({ error: "invalid_request", message: "Send JSON." }, 415);
+    const body = (await readJson(c)) as Record<string, unknown>;
+    const cf = (c.req.raw as unknown as { cf?: { city?: string; country?: string } }).cf;
+    const created = await createDeviceAuthorization(c.env.DB, {
+      sessionTtl: body?.sessionTtl,
+      ipAddress: c.req.header("cf-connecting-ip") || null,
+      requestedFrom: [cf?.city, cf?.country].filter(Boolean).join(", ") || null,
+    });
+    if (!created.ok) {
+      return created.reason === "too_many_requests"
+        ? cliDeviceJson({ error: "too_many_requests", message: "Too many pending sign-ins from this network. Finish or wait for one to expire." }, 429)
+        : cliDeviceJson({ error: "invalid_request", message: "sessionTtl must be a positive number of seconds." }, 400);
+    }
+    // The page lives on the origin the CLI is talking to, which the CLI checks.
+    const verificationUri = `${new URL(c.req.url).origin}/cli/device`;
+    return cliDeviceJson(
+      {
+        deviceCode: created.deviceCode,
+        userCode: created.userCode,
+        verificationUri,
+        expiresIn: created.expiresIn,
+        interval: created.interval,
+        sessionTtlSeconds: created.sessionTtlSeconds,
+      },
+      201,
+    );
+  } catch {
+    return cliDeviceJson({ error: "server_error", message: "Failed to start device sign-in." }, 500);
+  }
+});
+
+app.post("/api/cli/device/token", async (c) => {
+  try {
+    const contentType = c.req.header("content-type")?.toLowerCase() || "";
+    if (!contentType.startsWith("application/json")) return cliDeviceJson({ error: "invalid_request", message: "Send JSON." }, 415);
+    const body = (await readJson(c)) as Record<string, unknown>;
+    const result = await pollDeviceAuthorization(c.env.DB, { deviceCode: body?.deviceCode });
+    if (!result.ok) return cliDeviceJson({ error: result.error }, 400);
+    return cliDeviceJson({ accessToken: result.accessToken, expiresOn: result.expiresOn }, 201);
+  } catch {
+    return cliDeviceJson({ error: "server_error" }, 500);
+  }
+});
+
+app.get("/cli/device", async (c) => {
+  const user = await getCurrentUser(c.req.raw, c.env);
+  if (!user) return c.redirect(`/auth/login?return_to=${encodeURIComponent("/cli/device")}`);
+  return cliDevicePage(c, user, "Sign in a CLI", cliDeviceCodeForm());
+});
+
+app.post("/cli/device/confirm", async (c) => {
+  try {
+    if (!trustedCliDeviceForm(c)) return c.text("Trusted CLI authorization origin required", 403);
+    const user = await requireCurrentUser(c);
+    const form = await c.req.raw.formData();
+    const pending = await findPendingDeviceAuthorization(c.env.DB, form.get("user_code"));
+    if (!pending) {
+      return cliDevicePage(c, user, "Sign in a CLI", cliDeviceCodeForm("That code is not valid, has expired, or was already used. Check your terminal and try again."), 400);
+    }
+    const requested = new Date(pending.created_on);
+    const minutesAgo = Math.max(0, Math.round((Date.now() - requested.getTime()) / 60_000));
+    return cliDevicePage(
+      c,
+      user,
+      "Approve CLI sign-in",
+      `<h1 id="cli-device-title">Approve CLI sign-in?</h1>
+        <p>A Shiplet CLI is asking to work as you. Approve only if you started this sign-in yourself, in a terminal or agent you control.</p>
+        <div class="auth-account"><span>Signing in as</span><strong>${escapeAuthHtml(user.email)}</strong></div>
+        <ul class="auth-permissions">
+          <li>Code <strong>${escapeAuthHtml(formatUserCode(pending.user_code))}</strong>, requested ${minutesAgo === 0 ? "just now" : `${minutesAgo} minute${minutesAgo === 1 ? "" : "s"} ago`}${pending.requested_from ? ` from near ${escapeAuthHtml(pending.requested_from)}` : ""}.</li>
+          <li>Read and edit Shiplet revisions and traces using your existing access.</li>
+          <li>Deploy, promote, and roll back when a command explicitly asks with <code>--approve</code>.</li>
+          <li>Last up to ${escapeAuthHtml(formatCliSessionDuration(pending.session_ttl_seconds))}. Run <code>shiplet logout</code> to end it sooner.</li>
+        </ul>
+        <form method="post" action="/cli/device/complete">
+          <input type="hidden" name="device_id" value="${escapeAuthHtml(pending.id)}">
+          <button class="btn btn-primary" type="submit" name="approval" value="approve">Approve</button>
+          <button class="btn btn-secondary" type="submit" name="approval" value="deny">Deny</button>
+        </form>`,
+    );
+  } catch (error) {
+    if (isResponse(error)) return error;
+    return c.text("Failed to check the CLI code", 500);
+  }
+});
+
+app.post("/cli/device/complete", async (c) => {
+  try {
+    if (!trustedCliDeviceForm(c)) return c.text("Trusted CLI authorization origin required", 403);
+    const user = await requireCurrentUser(c);
+    const form = await c.req.raw.formData();
+    const pending = await getPendingDeviceAuthorizationById(c.env.DB, form.get("device_id"));
+    if (!pending) return c.text("CLI sign-in expired or already decided", 403);
+    if (String(form.get("approval") || "") !== "approve") {
+      await denyDeviceAuthorization(c.env.DB, { id: pending.id, userId: user.id });
+      return cliDevicePage(
+        c,
+        user,
+        "CLI sign-in denied",
+        `<h1 id="cli-device-title">Sign-in denied</h1><p>The CLI did not get access. If you did not start this sign-in, someone may have tried to trick you into approving it; you can ignore it.</p>`,
+      );
+    }
+    if (!(await approveDeviceAuthorization(c.env.DB, { id: pending.id, userId: user.id }))) {
+      return c.text("CLI sign-in expired or already decided", 403);
+    }
+    return cliDevicePage(
+      c,
+      user,
+      "CLI signed in",
+      `<h1 id="cli-device-title">CLI approved</h1><p>Return to your terminal or agent. It continues on its own within a few seconds. You can close this page.</p>`,
+    );
+  } catch (error) {
+    if (isResponse(error)) return error;
+    return c.text("Failed to complete the CLI sign-in", 500);
+  }
+});
+
 app.get("/api/cli/session", async (c) => {
   try {
     const session = await describeCliSession(c.env.DB, c.req.raw);
@@ -23573,6 +23764,7 @@ scheduledApp.scheduled = async (controller, environment, context) => {
     try {
       await sweepArchivedShipletTraces(environment, controller.scheduledTime);
       await sweepExpiredUploadLinks(environment, controller.scheduledTime);
+      await sweepExpiredDeviceAuthorizations(environment.DB, new Date(controller.scheduledTime));
     } catch {
       // Traces of archived Shiplets are retried on the next run; the sweep is
       // bounded and must not starve the work below.

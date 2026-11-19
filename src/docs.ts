@@ -11,7 +11,7 @@ interface DocsPage {
 
 // prettier-ignore
 const DOCS_PUBLIC_CONTENT_SHA256: Record<string, string> = {
-  "cli": "95c76e56d7dcac4d2982a4bcf152205d884cb4a1262aaf71dde55d6d967b972f",
+  "cli": "e0b5d90ac88b3a02921cea9cd57d85b33aff9b6572aff6ba36929a52735e6977",
   "self-hosting": "03dd91928c89a6911867c9c4f4625aa4455306c420af821408540ffb7eac1f38",
   "browser-capture": "1b6542d6a598b88c6dacda840930f1ff5095d9c0952778bb3a26672603a61643",
   "introduction": "04360e14d9c10a3cce48907eebea6b53d1647ad094353e5e22d57193ced2c2e1",
@@ -28,13 +28,14 @@ const DOCS_PUBLIC_CONTENT_SHA256: Record<string, string> = {
   "review-feedback":
     "3cf5e78d73d4036525249aa494a73bf3d62b157726f27470db3f9e73df07df70",
   "code-mode-mcp":
-    "9009edc39968abdd421149d17ea27e03af493a0b766545741caf3452e09aae13",
+    "062e8fe633a612d480f71dbd0703d68259f457062070c6228d2b96039eb6fc4c",
   "api-keys":
-    "3ac405405559cc9a7873e47db03ad3a80800e3077011c1a8a8d840c9587f7edd",
+    "01abaed518c843ec29da5dec593bb962e8dea671df0e8931793525d945d1f535",
   "api-surface":
     "ae7d36eb6be9d7c20c4e9a493540d3b9f3d89ce7d31dbb1de9a25d8ee5f56f95",
   "embed": "9fef7053a6175f1aa55f8c7c5076596d104b2aa26538839c70a63e6a441c96b3",
-  "traces": "6001569b5f1495cd118584c2feadb598dd65de04c85cb0f207f6e393cc33f851",
+  "authentication": "7dd76ff9871059e59a702177d9c4afc4aebe661ae003853d7ffbed8194a30f29",
+  "traces": "7b0bc51cc12b9cfea82336912581016ad141575714d376cba622286247d5e40f",
   "security": "5b52e175c0b5cb8630e199c1bfc126895eadaa47e5f0fa3ec19d7878b6e7caa6"
 };
 
@@ -290,6 +291,7 @@ const DOCS_PAGES: DocsPage[] = [
 <pre><code>npx shiplet-cli trace share --current --shiplet &lt;id&gt;</code></pre>
 <p>The CLI masks secrets on your computer before anything is sent, and Shiplet scans again when the trace arrives. Screenshots, videos, and PDFs the session produced are attached automatically (up to 20 MiB each). Add <code>--dry-run</code> to see what would be sent, or <code>--no-files</code> to leave the files out.</p>
 <p>To share a session that has no artifact to review, add <code>--new</code> instead of <code>--shiplet</code>: <code>npx shiplet-cli trace share --current --new --title "Fix the flaky test"</code>. Shiplet creates an ordinary Shiplet for it, whose page is the trace viewer.</p>
+<p>In a cloud agent with no browser on its computer, sign the CLI in first with <code>npx shiplet-cli login --device</code>, or connect <a href="/docs/code-mode-mcp">Shiplet MCP</a> with OAuth and let the agent call <code>createTraceUploadLink</code>. See <a href="/docs/authentication">Choosing how to sign in</a>.</p>
 <p>No terminal? Drop a session file (<code>.jsonl</code>) onto the drop zone in the Shiplet's Traces panel. The browser masks secrets before uploading. Claude Code keeps sessions in <code>~/.claude/projects/</code> and Codex keeps them in <code>~/.codex/sessions/</code>.</p>
 <h2>Who sees what</h2>
 <p>A new trace is private: only you and the Shiplet's owner can open it. Share it with a person or email, a team, the whole organization, or anyone with the link, and choose a level for each audience:</p>
@@ -306,6 +308,29 @@ const DOCS_PAGES: DocsPage[] = [
 <h2>Limits and retention</h2>
 <ul><li>The session itself can be up to 16 MiB per upload after masking. Files go up separately: up to 20 MiB each and 256 MiB per trace.</li><li>An organization can store up to 10 GiB of traces.</li><li>Deleting a trace or its Shiplet deletes its files. Traces of a Shiplet archived for more than 7 days are deleted.</li><li>API keys need the <code>traces:read</code> or <code>traces:write</code> scope. See <a href="/docs/api-keys">API keys</a>.</li></ul>
 <p><strong>Next:</strong> run <code>search</code> in <a href="/docs/code-mode-mcp">Code Mode MCP</a> for the trace operations, or read <a href="/docs/access-control">Access control</a>.</p>`,
+  },
+  {
+    slug: "authentication",
+    title: "Choosing how to sign in",
+    description: "Use OAuth for people and their agents, and API keys only for unattended automation.",
+    group: "Automation",
+    body: `
+<p>People, and the agents working with them, sign in through the browser with OAuth. Nobody copies a credential, approvals are tied to your account, and sessions expire on their own. Organization API keys are for unattended automation such as CI and scheduled jobs.</p>
+<div class="docs-table" tabindex="0"><table><thead><tr><th>You are</th><th>Use</th></tr></thead><tbody>
+<tr><td>A person at a terminal</td><td><code>shiplet login</code>, then approve in your browser. See <a href="/docs/cli">CLI setup</a>.</td></tr>
+<tr><td>A local agent (Claude Code, Codex, an IDE)</td><td><a href="/docs/code-mode-mcp">Shiplet MCP</a> with browser OAuth, or the CLI's browser approval.</td></tr>
+<tr><td>A cloud agent, SSH session, or container with no browser on that computer</td><td><code>shiplet login --device</code>: approve with a code on any device. Or connect Shiplet MCP to the agent with OAuth.</td></tr>
+<tr><td>CI or another unattended job</td><td>A narrowly scoped <a href="/docs/api-keys">organization API key</a>, kept in the job's secret store.</td></tr>
+</tbody></table></div>
+<h2>Sign in with a code</h2>
+<p>Browser approval needs the browser and the CLI on the same computer, because the browser hands the approval back to the CLI on that computer. When that is not possible, use device sign-in:</p>
+<pre><code>npx shiplet-cli login --device</code></pre>
+<ol><li>The CLI prints a page, <code>https://shiplet.cc/cli/device</code>, and a code such as <code>BCDF-GHJK</code>.</li><li>Open that page on your phone or laptop, sign in to Shiplet, and type the code.</li><li>Check the account, where the request came from, and how long the session lasts. Select <strong>Approve</strong> only if you started this sign-in.</li><li>The CLI continues on its own within a few seconds.</li></ol>
+<p>The CLI gets the same session that browser approval gives: two hours by default, up to 8 hours with <code>--session-ttl</code>, and revoked by <code>shiplet logout</code>. Codes expire after 10 minutes and work once. Shiplet never asks for a code by email or chat; if someone sends you one to approve, deny it.</p>
+<p>To make every command in an agent's environment use device sign-in when it needs approval, set <code>SHIPLET_LOGIN=device</code>.</p>
+<h2>When to use an API key</h2>
+<ul><li>Use a key when no person is present to approve, for example in CI, cron jobs, or webhooks.</li><li>Give each key only the scopes and Shiplets the job needs, and store it in the job's secret store.</li><li>Do not give a key to an interactive agent you are working with. Sign it in with OAuth instead, so its access follows your account and ends on its own.</li></ul>
+<p><strong>Next:</strong> set up the <a href="/docs/cli">CLI</a>, connect <a href="/docs/code-mode-mcp">Shiplet MCP</a>, or create an <a href="/docs/api-keys">API key</a> for automation.</p>`,
   },
   {
     slug: "cli",
@@ -330,9 +355,12 @@ shiplet --help</code></pre>
 <p>Run <code>shiplet whoami</code> to see the account, origin, and expiry, and <code>shiplet logout</code> to revoke the session on Shiplet immediately and delete it locally. To approve every command separately instead, pass <code>--no-session-cache</code> or set <code>SHIPLET_CLI_SESSION_CACHE=0</code>.</p>
 <p>Your existing access still applies. A saved session can also deploy, promote, and roll back while it lasts, and each of those commands still requires <code>--approve</code>. Keep the lifetime short and log out when you finish.</p>
 <h2>If authorization stops</h2>
-<p>For an expired request, canceled approval, or mismatched callback, run the command again and use the new browser window. Run the CLI and browser on the same computer so the browser can reach the local callback. For a remote or headless agent, use a narrowly scoped organization API key from a secret store for supported commands, or supported <a href="/docs/code-mode-mcp">MCP</a>.</p>
+<p>For an expired request, canceled approval, or mismatched callback, run the command again and use the new browser window. Browser approval needs the CLI and browser on the same computer so the browser can reach the local callback.</p>
+<h2>No browser on this computer</h2>
+<p>In a cloud agent, an SSH session, or a container, run <code>shiplet login --device</code>. The CLI prints a page and a code; open the page on any device, sign in, type the code, and approve. Set <code>SHIPLET_LOGIN=device</code> to use device sign-in for every command that needs approval. Read <a href="/docs/authentication">Choosing how to sign in</a> for details.</p>
 <h2>Other authentication routes</h2>
-<ul><li><strong>Human review:</strong> <a href="/auth/login">sign in in the browser</a>.</li><li><strong>MCP clients:</strong> use <a href="/docs/code-mode-mcp">Code Mode MCP</a> with browser OAuth or supported agent registration.</li><li><strong>CI and unattended jobs:</strong> use narrowly scoped <a href="/docs/api-keys">organization API keys</a> from a secret store.</li></ul>`,
+<ul><li><strong>Human review:</strong> <a href="/auth/login">sign in in the browser</a>.</li><li><strong>MCP clients:</strong> use <a href="/docs/code-mode-mcp">Code Mode MCP</a> with browser OAuth or supported agent registration.</li><li><strong>CI and unattended jobs:</strong> use narrowly scoped <a href="/docs/api-keys">organization API keys</a> from a secret store.</li></ul>
+<p>Not sure which to use? Read <a href="/docs/authentication">Choosing how to sign in</a>.</p>`,
   },
   {
     slug: "code-mode-mcp",
@@ -341,7 +369,7 @@ shiplet --help</code></pre>
       "Connect an agent, then prepare artifacts and work with feedback.",
     group: "Automation",
     body: `
-<p>Code Mode MCP is a supported way to connect an agent to Shiplet. For terminal workflows, use the <a href="/docs/cli">CLI</a> with <code>npx shiplet-cli</code>.</p>
+<p>Code Mode MCP is a supported way to connect an agent to Shiplet. For terminal workflows, use the <a href="/docs/cli">CLI</a> with <code>npx shiplet-cli</code>. <a href="/docs/authentication">Choosing how to sign in</a> compares OAuth, device sign-in, and API keys.</p>
 <p>Shiplet MCP lets an agent discover the supported API and call it through code. Interactive clients authenticate in the browser. A registered external agent can request access to one Shiplet organization when the environment enables agent registration.</p>
 <h2>Endpoint</h2>
 <pre><code>https://shiplet.cc/api/mcp</code></pre>
@@ -409,6 +437,7 @@ shiplet --help</code></pre>
     group: "Automation",
     body: `
 <p>Browser OAuth is the default for people. Organization API keys are for CI and other automated jobs. Store each key in the automation provider's secret store.</p>
+<p>An agent you work with interactively, including one in the cloud, should sign in with OAuth instead: <a href="/docs/code-mode-mcp">Shiplet MCP</a>, or <code>shiplet login --device</code>. See <a href="/docs/authentication">Choosing how to sign in</a>.</p>
 <p>Keep keys out of artifacts, custom widgets, browser scripts, source files, build logs, and screenshots.</p>
 <h2>Choose the required scopes</h2>
 <table class="docs-table" tabindex="0"><thead><tr><th>Scope</th><th>Allows</th></tr></thead><tbody>

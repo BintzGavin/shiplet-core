@@ -409,7 +409,7 @@ Usage:
   shiplet promote <draft-id> --expected-active <revision-id> [--target <target-id> ...] --approve
   shiplet rollback <shiplet-id> --revision <revision-id> --expected-active <revision-id> --approve
   shiplet eject <shiplet-id> <path>
-  shiplet login [--session-ttl <duration>]
+  shiplet login [--session-ttl <duration>] [--device]
   shiplet whoami
   shiplet logout
   shiplet trace share <session.jsonl | session-folder> --shiplet <shiplet-id> [--revision <revision-id>]
@@ -447,6 +447,7 @@ Configuration:
   SHIPLET_API_KEY   Optional least-privilege organization key injected by a secret store.
   SHIPLET_ORGANIZATION_ID    Workspace ID for publish and prepare. Can be replaced by --organization.
   SHIPLET_CLI_SESSION_TTL    Reusable session lifetime, such as 2h or 90m (max 8h).
+  SHIPLET_LOGIN              Set to "device" to approve any command with a code instead of a browser.
   SHIPLET_CLI_SESSION_CACHE  Set to 0 to approve every command separately.
   SHIPLET_CLI_SESSION_STORE  auto (keychain, else file), keychain, or file.
   SHIPLET_CONFIG_DIR         Absolute directory for the file store.
@@ -468,6 +469,8 @@ Flags:
   --idempotency-key <id> Reusable deploy/promote/rollback retry key.
   --session-ttl <duration> Lifetime of a new reusable session, such as 2h or 90m.
   --no-session-cache    Approve this command alone; do not read or save a session.
+  --device              login: sign in with a code on any device, for a terminal or
+                        agent with no browser on this computer (cloud, SSH, container).
   --draft <id>          Exact mutable draft selected for pull.
   --revision <id>       Exact revision selected for rollback.
   --from-revision <id>  Exact source revision selected for a fork.
@@ -546,6 +549,7 @@ function parseArguments(argv) {
 		as: "",
 		maxTokens: "",
 		current: false,
+		device: false,
 		newShiplet: false,
 		noAttachments: false,
 		noFiles: false,
@@ -588,6 +592,11 @@ function parseArguments(argv) {
 		if (arg === "--current") {
 			options.current = true;
 			options.providedFlags.add("--current");
+			continue;
+		}
+		if (arg === "--device") {
+			options.device = true;
+			options.providedFlags.add("--device");
 			continue;
 		}
 		if (arg === "--new") {
@@ -697,6 +706,7 @@ function assertApplicableFlags(options) {
 		"--max-tokens": new Set(["trace"]),
 		"--current": new Set(["trace"]),
 		"--new": new Set(["trace"]),
+		"--device": new Set(["login"]),
 		"--no-attachments": new Set(["trace"]),
 		"--no-files": new Set(["trace"]),
 		"--share": new Set(["trace"]),
@@ -818,6 +828,12 @@ function parseSessionTtl(value) {
 	return seconds;
 }
 
+// SHIPLET_LOGIN=device makes every command that needs approval use device
+// sign-in, for agents and containers with no local browser.
+function deviceLoginFromEnv(env) {
+	return String(env.SHIPLET_LOGIN || "").toLowerCase() === "device";
+}
+
 function sessionTtlFromOptions(options, env) {
 	return parseSessionTtl(options.sessionTtl || env.SHIPLET_CLI_SESSION_TTL);
 }
@@ -828,6 +844,7 @@ function sessionBootstrapOptions(options, env) {
 	return {
 		sessionCache: !options.noSessionCache,
 		sessionTtlSeconds: sessionTtlFromOptions(options, env),
+		device: deviceLoginFromEnv(env),
 	};
 }
 
@@ -3804,6 +3821,7 @@ async function runSessionCommand(options, runtime) {
 				fetch: runtime.fetch,
 				stdout: runtime.stdout,
 				sessionTtlSeconds: sessionTtlFromOptions(options, runtime.env),
+				device: options.device || deviceLoginFromEnv(runtime.env),
 			});
 		} else if (options.command === "whoami") {
 			result = await sessionCache.status({

@@ -142,7 +142,7 @@ async function authorizeInBrowser(options) {
         const timeoutMs = Number.isInteger(options.timeoutMs) && options.timeoutMs > 0
           ? Math.min(options.timeoutMs, 3 * 60_000)
           : 3 * 60_000;
-        timeout = setTimeout(() => reject(new Error("CLI browser authorization timed out.")), timeoutMs);
+        timeout = setTimeout(() => reject(new Error("CLI browser authorization timed out. With no browser on this computer (a cloud agent, SSH, or a container), run shiplet login --device instead.")), timeoutMs);
       }),
     ]);
     const response = await fetchImpl(`${apiUrl}/api/cli/session/exchange`, {
