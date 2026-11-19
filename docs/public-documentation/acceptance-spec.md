@@ -480,9 +480,11 @@ may remain repository-internal but is not a user-facing or Code Mode product.
 
 ## DOC-041 — Why Shiplet carries the product argument
 
-Given a visitor understands the basic review workflow, when they want to know
-why Shiplet has one durable root per review link, then a first-class Why Shiplet
-page follows Introduction in public navigation and explains the review room,
+Given a visitor wants to know why Shiplet exists, when they open Why Shiplet,
+then a first-class page follows Introduction in public navigation and leads with
+the product argument: agent sessions and review context get lost, so Shiplet
+makes both the artifact and the trace shareable, with access set per audience
+and level, across every agent. After that story, it explains the review room,
 custom widget, browser sandbox, short-lived Code Mode Worker, and ShipletRoot
 coordination boundary through two concrete product-team examples.
 
