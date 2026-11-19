@@ -165,6 +165,48 @@ describe("trace sharing (slice 2)", () => {
     });
   });
 
+  it("lists each trace at the reader's own level when several traces have different audiences", async () => {
+    await withTraces(async () => {
+      const { organizationId, projectId } = await setup();
+      const second = await request("/api/shiplets", {
+        method: "POST",
+        headers: json(OWNER),
+        body: JSON.stringify({
+          name: "Second Shiplet",
+          organization_id: organizationId,
+          subdomain: `share-${crypto.randomUUID().slice(0, 8)}`,
+          visibility: "organization",
+          assets: [{ path: "index.html", content: btoa("<h1>Review</h1>") }],
+        }),
+      });
+      const secondId = ((await second.json()) as { project: { id: string } }).project.id;
+      const member = person("lister");
+      const other = person("other");
+      for (const headers of [member, other]) await addMember(organizationId, headers);
+      const teamId = await addTeam(organizationId, [other]);
+
+      const toOrganization = (await upload(projectId, { title: "To the organization" })).trace;
+      await upload(projectId, { title: "Private" });
+      const toTeam = (await upload(projectId, { title: "To a team the reader is not in" })).trace;
+      const toEmail = (await upload(secondId, { title: "To the reader's email" })).trace;
+      await putAudiences(projectId, toOrganization.id, { audiences: [{ targetType: "organization", profile: { level: "conversation" } }] });
+      await putAudiences(projectId, toTeam.id, { audiences: [{ targetType: "team", targetId: teamId, profile: { level: "full" } }] });
+      await putAudiences(secondId, toEmail.id, { audiences: [{ targetType: "email", targetId: member["x-shiplet-user-email"], profile: { level: "summary" } }] });
+
+      type Listed = { traces: Array<{ id: string; access: { level: string } }> };
+      const levels = async (response: Response) => Object.fromEntries(((await response.json()) as Listed).traces.map((item) => [item.id, item.access.level]));
+      expect(await levels(await request(`/api/shiplets/${projectId}/traces`, { headers: member }))).toEqual({ [toOrganization.id]: "conversation" });
+      expect(await levels(await request("/api/traces", { headers: member }))).toEqual({
+        [toOrganization.id]: "conversation",
+        [toEmail.id]: "summary",
+      });
+      expect(await levels(await request(`/api/shiplets/${projectId}/traces`, { headers: other }))).toEqual({
+        [toOrganization.id]: "conversation",
+        [toTeam.id]: "full",
+      });
+    });
+  });
+
   it("lets organization admins read shared traces in full, and hides traces made private again", async () => {
     await withTraces(async () => {
       const { organizationId, projectId } = await setup();
