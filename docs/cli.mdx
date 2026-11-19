@@ -148,6 +148,22 @@ reply, and update tickets. The CLI does not yet expose feedback commands.
 [Code Mode MCP](/docs/code-mode-mcp) and documented REST operations are supported
 for automation that needs those operations.
 
+## Share agent sessions
+
+A [trace](/docs/traces) is the full log of an agent session. The `trace`
+commands share it next to a Shiplet and bring it back into another agent:
+
+```bash
+shiplet trace share --current --shiplet <id> --dry-run
+shiplet trace share --current --new --title "Fix the flaky test"
+shiplet trace audiences <trace> --shiplet <id> --audience organization=conversation
+shiplet trace pull <trace> --shiplet <id> --as context
+```
+
+Secrets are masked on your computer before anything is sent, and a new trace is
+private. `trace list`, `trace preview`, and `trace delete` cover the rest; run
+`shiplet trace --help` for every option.
+
 ## Command map
 
 | Command                                  | Purpose                                                                                       |
@@ -165,6 +181,9 @@ for automation that needs those operations.
 | `shiplet login`                          | Approve a reusable CLI session in the browser.                                                |
 | `shiplet whoami`                         | Show the saved session's account, origin, expiry, and storage.                                |
 | `shiplet logout`                         | Revoke the saved session on Shiplet and delete it locally.                                    |
+| `shiplet trace share`                    | Mask and share an agent session as a trace on a Shiplet, or on a new trace-only Shiplet.      |
+| `shiplet trace audiences <trace-id>`     | Choose who can read a trace and at which level.                                               |
+| `shiplet trace pull <trace-id>`          | Download a trace, or print an agent-ready handoff with `--as context`.                        |
 
 ## Prepare a managed static review
 

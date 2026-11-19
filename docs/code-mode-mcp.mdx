@@ -227,6 +227,26 @@ An agent can also reply to tickets or update their status when its credential
 has the required Shiplet and feedback scopes. Run `search` for the current
 operation before writing review state.
 
+## Share and continue a trace
+
+A [trace](/docs/traces) is the full log of an agent session. To share the
+session it is in, the agent calls `createTraceUploadLink` (or
+`createTraceShiplet` first for a session with no artifact), then runs
+`npx shiplet-cli trace share --current --upload-url <link>` so secrets are
+masked locally. To pick up a colleague's session, it loads the handoff at the
+reader's level:
+
+```js
+async () =>
+  await codemode.request({
+    method: "GET",
+    path: "/api/shiplets/project_123/traces/trc_123/context",
+  });
+```
+
+Run `search` for the trace operations, including `listReadableTraces` and
+`setTraceAudiences`.
+
 ## Authentication and authority
 
 Browser OAuth identifies an interactive user. A registered agent remains a

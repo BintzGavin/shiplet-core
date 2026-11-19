@@ -9,6 +9,12 @@ or public preview URL. Shiplet places that work inside a trusted review
 experience where people can comment and agents can pick up the resulting
 tickets.
 
+The agent session that made the work can travel with it. A
+[trace](/docs/traces) is the full log of that session: the prompts, the agent's
+replies, and every tool call and result. Share it next to the Shiplet so
+reviewers can see how a change was made, and so a colleague's agent can pick the
+work up where yours left off.
+
 [Open the Shiplet app](https://shiplet.cc/) to prepare a review. Shiplet hosts
 uploaded files and can attach its review layer to an existing public URL.
 
@@ -16,6 +22,8 @@ uploaded files and can attach its review layer to an existing public URL.
 
 - **[Publish my first review](/docs/quickstart):** prepare an artifact and open
   its review link.
+- **[Share an agent session](/docs/traces):** ask your agent to share the
+  session it is in, then choose who can read it and at what level.
 - **[Collect feedback](/docs/review-feedback):** leave contextual comments,
   reply to reviewers, and move tickets through review.
 - **[Automate with an agent](/docs/cli):** install the CLI and approve access
@@ -36,6 +44,8 @@ The artifact and the review layer have different jobs:
 - The **Shiplet** owns the stable review link, access policy, and feedback.
 - The **review layer** provides the toolbar and trusted controls around the
   artifact.
+- A **trace** is an agent session attached to the Shiplet. It is private until
+  you share it, and each audience sees it at the level you choose.
 
 Artifact code does not receive reviewer credentials or direct access to
 Shiplet's APIs. The trusted host keeps identity and review actions outside the
@@ -52,9 +62,11 @@ experience, so they do not become part of the work being reviewed. Read
 ## Automation
 
 - **[CLI](/docs/cli):** run `npx shiplet-cli --help`, then approve a browser
-  session to prepare artifacts and manage revisions from your terminal or agent.
+  session to prepare artifacts, manage revisions, and share traces from your
+  terminal or agent.
 - **[Code Mode MCP](/docs/code-mode-mcp):** connect an MCP client for API
-  discovery, publishing, and feedback automation. Browser OAuth and supported
+  discovery, publishing, feedback automation, and loading a shared trace into
+  your agent. Browser OAuth and supported
   agent registration are available.
 - **[REST API](/docs/api-keys):** use a narrowly scoped organization API key
   from a secret store for CI and unattended workflows.

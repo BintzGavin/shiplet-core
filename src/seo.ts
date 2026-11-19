@@ -186,6 +186,8 @@ Add a trusted review layer to builds, files, and live URLs for contextual feedba
 - Manage organizations, teams, user invites, and project access.
 - Collect in-context review feedback directly on artifacts.
 - Keep the artifact separate from Shiplet's trusted review layer.
+- Share agent sessions as traces: the prompts, replies, and every tool call, masked locally, private until shared, and readable at Full, Conversation, or Summary level.
+- Load a shared trace into another agent over Code Mode MCP or the CLI to continue the work.
 - Customize the review layer with a sandboxed widget when the built-in toolbar does not fit the team's process.
 - Prepare artifacts with the installable CLI; use the browser, scoped REST, or MCP for feedback.
 
@@ -196,6 +198,7 @@ Add a trusted review layer to builds, files, and live URLs for contextual feedba
 - Documentation: ${absoluteSiteUrl(baseUrl, "/docs")}
 - Why Shiplet: ${absoluteSiteUrl(baseUrl, "/docs/why-shiplet")}
 - Review artifacts: ${absoluteSiteUrl(baseUrl, "/docs/publishing")}
+- Traces: ${absoluteSiteUrl(baseUrl, "/docs/traces")}
 - Review layer: ${absoluteSiteUrl(baseUrl, "/docs/extensions")}
 - Security and isolation: ${absoluteSiteUrl(baseUrl, "/docs/security")}
 - OpenAPI: ${absoluteSiteUrl(baseUrl, "/openapi.json")}

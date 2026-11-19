@@ -11,14 +11,14 @@ interface DocsPage {
 
 // prettier-ignore
 const DOCS_PUBLIC_CONTENT_SHA256: Record<string, string> = {
-  "cli": "e0b5d90ac88b3a02921cea9cd57d85b33aff9b6572aff6ba36929a52735e6977",
+  "cli": "a35c1685e5f7c2cff4a35cbdd4e61c3617aae2893cf8b0cfc0ddf7b71842a5f8",
   "self-hosting": "03dd91928c89a6911867c9c4f4625aa4455306c420af821408540ffb7eac1f38",
   "browser-capture": "1b6542d6a598b88c6dacda840930f1ff5095d9c0952778bb3a26672603a61643",
-  "introduction": "04360e14d9c10a3cce48907eebea6b53d1647ad094353e5e22d57193ced2c2e1",
+  "introduction": "8c63e0a63f9998a4cad3fe55550171b77c07062473ab4da382f02e7d1772f178",
   "why-shiplet":
     "a34409ae0097659bc90a6d30c9ae63733565e418412175f3871993a452735db4",
   "quickstart":
-    "447ea3b2f09dcb48ea11813b612b697332cd4717c2fcc6c3a26e0815e3393120",
+    "244860452364e0a0cb5f9b06c2ee3786317c5606a58e1351d3c6e8deda9b8a79",
   "access-control":
     "71c4b16009ef9569e8f106138bb498fcfdb0c8a51281f98db1dc0262ee96e287",
   "publishing":
@@ -26,16 +26,16 @@ const DOCS_PUBLIC_CONTENT_SHA256: Record<string, string> = {
   "extensions":
     "c834eef088f4ab55ed628fe95cc4b169445c7ca3f77732e8717e5c048fc70d13",
   "review-feedback":
-    "3cf5e78d73d4036525249aa494a73bf3d62b157726f27470db3f9e73df07df70",
+    "91acf8e5f3e77b4b7d3ff0707eec4e01f6cc2f026f7fff5745cd43b03ec6deda",
   "code-mode-mcp":
-    "062e8fe633a612d480f71dbd0703d68259f457062070c6228d2b96039eb6fc4c",
+    "eaadfcd0d0aff9b9d5ec36cabc9f1289aab57ecd111543ba5d4ee90e35611b00",
   "api-keys":
     "01abaed518c843ec29da5dec593bb962e8dea671df0e8931793525d945d1f535",
   "api-surface":
     "ae7d36eb6be9d7c20c4e9a493540d3b9f3d89ce7d31dbb1de9a25d8ee5f56f95",
   "embed": "9fef7053a6175f1aa55f8c7c5076596d104b2aa26538839c70a63e6a441c96b3",
   "authentication": "7dd76ff9871059e59a702177d9c4afc4aebe661ae003853d7ffbed8194a30f29",
-  "traces": "7b0bc51cc12b9cfea82336912581016ad141575714d376cba622286247d5e40f",
+  "traces": "34b639a8cc6bb697d345aee6b8020ff11caaff9ac305126400414f1d3e9fd393",
   "security": "5b52e175c0b5cb8630e199c1bfc126895eadaa47e5f0fa3ec19d7878b6e7caa6"
 };
 
@@ -49,10 +49,12 @@ const DOCS_PAGES: DocsPage[] = [
     group: "Start",
     body: `
 <p>Shiplet is the review layer for agent-first teams. The artifact remains the work your team reviews, whether it is a build output, standalone file, static export, or public preview URL. Shiplet places that work inside a trusted review experience where people can comment and agents can pick up the resulting tickets.</p>
+<p>The agent session that made the work can travel with it. A <a href="/docs/traces">trace</a> is the full log of that session: the prompts, the agent's replies, and every tool call and result. Share it next to the Shiplet so reviewers can see how a change was made, and so a colleague's agent can pick the work up where yours left off.</p>
 <p><a href="/">Open the Shiplet app</a> to prepare a review.</p>
 <h2>Choose your task</h2>
 <ul>
   <li><strong><a href="/docs/quickstart">Publish my first review</a>:</strong> prepare an artifact and open its review link.</li>
+  <li><strong><a href="/docs/traces">Share an agent session</a>:</strong> ask your agent to share the session it is in, then choose who can read it and at what level.</li>
   <li><strong><a href="/docs/review-feedback">Collect feedback</a>:</strong> leave contextual comments and work through review tickets.</li>
   <li><strong><a href="/docs/cli">Automate with an agent</a>:</strong> install the CLI and approve access in your browser.</li>
   <li><strong><a href="/docs/access-control">Manage access</a>:</strong> choose who can view or edit each Shiplet.</li>
@@ -64,14 +66,15 @@ const DOCS_PAGES: DocsPage[] = [
   <li>The <strong>artifact</strong> is the page, file, build, or URL under review.</li>
   <li>The <strong>Shiplet</strong> owns the stable review link, access policy, and feedback.</li>
   <li>The <strong>review layer</strong> provides the toolbar and trusted controls around the artifact.</li>
+  <li>A <strong>trace</strong> is an agent session attached to the Shiplet. It is private until you share it, and each audience sees it at the level you choose.</li>
 </ul>
 <p>Artifact code does not receive reviewer credentials or direct access to Shiplet APIs. The trusted host keeps identity and review actions outside the artifact frame.</p>
 <h2>Customize the review experience</h2>
 <p>The built-in toolbar works for ordinary reviews. Shiplet can attach a custom widget and workflow when a team needs different controls or statuses. Those customizations belong to the review experience, so they do not become part of the work being reviewed. Read <a href="/docs/extensions">The review layer</a> for the boundary.</p>
 <h2>Automation</h2>
 <ul>
-  <li><strong><a href="/docs/cli">CLI</a>:</strong> run <code>npx shiplet-cli --help</code>, then approve a browser session to prepare artifacts and manage revisions from your terminal or agent.</li>
-  <li><strong><a href="/docs/code-mode-mcp">Code Mode MCP</a>:</strong> connect an MCP client for API discovery, publishing, and feedback automation. Browser OAuth and supported agent registration are available.</li>
+  <li><strong><a href="/docs/cli">CLI</a>:</strong> run <code>npx shiplet-cli --help</code>, then approve a browser session to prepare artifacts, manage revisions, and share traces from your terminal or agent.</li>
+  <li><strong><a href="/docs/code-mode-mcp">Code Mode MCP</a>:</strong> connect an MCP client for API discovery, publishing, feedback automation, and loading a shared trace into your agent. Browser OAuth and supported agent registration are available.</li>
   <li><strong><a href="/docs/api-keys">REST API</a>:</strong> use a narrowly scoped organization API key from a secret store for CI and unattended workflows.</li>
 </ul>
 <p>The <a href="/openapi.json">OpenAPI document</a> is the machine-readable contract for documented public REST operations.</p>
@@ -166,10 +169,14 @@ const DOCS_PAGES: DocsPage[] = [
 <h2>3. Review and collect feedback</h2>
 <p>Open the returned review URL and leave a harmless comment. Find the ticket in <a href="/feedback">Feedback</a>. Reply and update status in the browser; the CLI does not expose feedback commands yet.</p>
 <p>Read <a href="/docs/review-feedback">Review feedback</a> for ticket work and <a href="/docs/access-control">Access control</a> before sharing the link.</p>
+<h2>4. Share the agent session</h2>
+<p>If an agent built the artifact, attach its session as a trace so reviewers can see how the work was made. Ask the agent to “share this session to Shiplet review-build”, or run:</p>
+<pre><code>npx shiplet-cli trace share --current --shiplet &lt;id&gt; --dry-run</code></pre>
+<p>Check what would be sent, then rerun without <code>--dry-run</code>. Secrets are masked on your computer first, and the trace stays private until you share it. Read <a href="/docs/traces">Traces</a> to choose who can read it.</p>
 <h2>Browser alternative</h2>
 <p><a href="/">Open the Shiplet app</a> and sign in when asked. A first-time user receives a default workspace and returns to the Prepare page. Keep <strong>Upload files</strong> selected to choose supported static files, name the artifact, choose its review subdomain, and select who can see it. Choose <strong>URL</strong> for an existing public preview.</p>
 <h2>Working with an agent</h2>
-<p>Give your agent the <a href="/docs/cli">CLI guide</a>, let it check the artifact with <code>npx shiplet-cli prepare --dry-run</code>, then approve publishing in your browser. <a href="/docs/code-mode-mcp">Code Mode MCP</a> is also supported for clients that use MCP, including API discovery and feedback automation. Follow its connection guide to use browser OAuth or supported agent registration.</p>
+<p>Give your agent the <a href="/docs/cli">CLI guide</a>, let it check the artifact with <code>npx shiplet-cli prepare --dry-run</code>, then approve publishing in your browser. When it finishes, ask it to share its session as a <a href="/docs/traces">trace</a>. <a href="/docs/code-mode-mcp">Code Mode MCP</a> is also supported for clients that use MCP, including API discovery and feedback automation. Follow its connection guide to use browser OAuth or supported agent registration.</p>
 <h2>Troubleshooting</h2>
 <table class="docs-table" tabindex="0"><thead><tr><th>Problem</th><th>Safe recovery</th></tr></thead><tbody>
   <tr><td>A file is rejected</td><td>Remove the unsupported or oversized file and prepare again.</td></tr>
@@ -178,6 +185,38 @@ const DOCS_PAGES: DocsPage[] = [
   <tr><td>Access is denied</td><td>Sign in with the invited email or ask an owner for the required viewing grant.</td></tr>
 </tbody></table>
 <p><strong>Next:</strong> <a href="/docs/review-feedback">leave and manage review feedback</a>.</p>`,
+  },
+  {
+    slug: "traces",
+    title: "Traces",
+    description: "Share the full log of an agent session and let colleagues read or continue it.",
+    group: "Start",
+    body: `
+<p>A <strong>trace</strong> is the full chat log of an agent session: your prompts, the agent's replies, and every tool call and result. Shiplet keeps traces next to the work they produced, so a reviewer can see how a change was made and a colleague can pick the session up in their own agent.</p>
+<p>Use a trace when the review needs the story behind the work: what was asked, what the agent tried, which checks ran, and what it changed. Reviewers read it beside the artifact, and teammates continue it in their own agent instead of starting over.</p>
+<p>A self-hosted server shows the <strong>Traces</strong> panel when <code>SHIPLET_ENABLED_FEATURE_FLAGS</code> includes <code>traces</code>.</p>
+<h2>Share the session you are in</h2>
+<p>The easiest way is to ask your agent: say “Share this session to Shiplet &lt;name or id&gt;” in Claude Code or Codex. Your agent knows which session it is in, including subagents, screenshots, and videos. From a terminal, run:</p>
+<pre><code>npx shiplet-cli trace share --current --shiplet &lt;id&gt;</code></pre>
+<p>The CLI masks secrets on your computer before anything is sent, and Shiplet scans again when the trace arrives. Screenshots, videos, and PDFs the session produced are attached automatically (up to 20 MiB each). Add <code>--dry-run</code> to see what would be sent, or <code>--no-files</code> to leave the files out.</p>
+<p>To share a session that has no artifact to review, add <code>--new</code> instead of <code>--shiplet</code>: <code>npx shiplet-cli trace share --current --new --title "Fix the flaky test"</code>. Shiplet creates an ordinary Shiplet for it, whose page is the trace viewer.</p>
+<p>In a cloud agent with no browser on its computer, sign the CLI in first with <code>npx shiplet-cli login --device</code>, or connect <a href="/docs/code-mode-mcp">Shiplet MCP</a> with OAuth and let the agent call <code>createTraceUploadLink</code>. See <a href="/docs/authentication">Choosing how to sign in</a>.</p>
+<p>No terminal? Drop a session file (<code>.jsonl</code>) onto the drop zone in the Shiplet's Traces panel. The browser masks secrets before uploading. Claude Code keeps sessions in <code>~/.claude/projects/</code> and Codex keeps them in <code>~/.codex/sessions/</code>.</p>
+<h2>Who sees what</h2>
+<p>A new trace is private: only you and the Shiplet's owner can open it. Share it with a person or email, a team, the whole organization, or anyone with the link, and choose a level for each audience:</p>
+<div class="docs-table" tabindex="0"><table><thead><tr><th>Level</th><th>What that audience sees</th></tr></thead><tbody>
+<tr><td>Full</td><td>Everything except secrets.</td></tr>
+<tr><td>Conversation</td><td>Messages and tool steps, without tool output or reasoning.</td></tr>
+<tr><td>Summary</td><td>What was done, files touched, checks, and the outcome. No text.</td></tr>
+</tbody></table></div>
+<p>A more specific audience wins: a person or email over their team, a team over the organization. Organization administrators can read every shared trace in full, but not private ones. You can also mask extra terms, hide paths, hide reasoning, or hide videos for one audience, and use <strong>Preview as this audience</strong> before sharing.</p>
+<pre><code>npx shiplet-cli trace audiences &lt;trace&gt; --shiplet &lt;id&gt; --audience organization=conversation --audience email:dana@example.com=full</code></pre>
+<h2>Read a trace and continue it</h2>
+<p>Open a trace from the Shiplet's Traces panel to read the timeline, images, videos, and files. The page shows which level you are seeing. Your browser cannot write into Claude Code or Codex, so the viewer gives you two ways to continue:</p>
+<ul><li><strong>Copy prompt for your agent:</strong> paste it into your agent, which loads the trace over <a href="/docs/code-mode-mcp">Shiplet MCP</a>.</li><li><strong>Copy CLI command:</strong> <code>npx shiplet-cli trace pull &lt;trace&gt; --shiplet &lt;id&gt; --as context</code> prints an agent-ready handoff.</li></ul>
+<h2>Limits and retention</h2>
+<ul><li>The session itself can be up to 16 MiB per upload after masking. Files go up separately: up to 20 MiB each and 256 MiB per trace.</li><li>An organization can store up to 10 GiB of traces.</li><li>Deleting a trace or its Shiplet deletes its files. Traces of a Shiplet archived for more than 7 days are deleted.</li><li>API keys need the <code>traces:read</code> or <code>traces:write</code> scope. See <a href="/docs/api-keys">API keys</a>.</li></ul>
+<p><strong>Next:</strong> run <code>search</code> in <a href="/docs/code-mode-mcp">Code Mode MCP</a> for the trace operations, or read <a href="/docs/access-control">Access control</a>.</p>`,
   },
   {
     slug: "access-control",
@@ -274,40 +313,11 @@ const DOCS_PAGES: DocsPage[] = [
 <ol><li>Open the review link.</li><li>Choose the page or a visible element.</li><li>Leave a comment and submit it through the trusted toolbar.</li><li>Reply, update status, mention a collaborator, or watch the Shiplet from its detail page.</li></ol>
 <p>Use <a href="/feedback">Feedback</a> for the global review queue and <a href="/inbox">Inbox</a> for notifications. If live updates stop, reload the trusted review host; persisted feedback remains available.</p>
 <p>Only someone who can edit the Shiplet can invite through a mention: mentioning a workspace member who cannot open it yet grants them reviewer access. Other workspace members' mentions only notify people who can already open the Shiplet. A mention that has no effect never reveals whether that person exists or belongs to the workspace.</p>
+<h2>See how a change was made</h2>
+<p>When an agent fixes a ticket, it can attach its session to the Shiplet as a <a href="/docs/traces">trace</a>. Reviewers open it from the Shiplet's <strong>Traces</strong> panel to see the prompts, steps, and checks behind the new revision, at the level the uploader shared.</p>
 <h2>Optional feedback automation through MCP</h2>
 <p>An authorized agent can read tickets, create replies, and update status through documented API operations. Shiplet records the authenticated agent credential as the actor.</p>
 <p><strong>Next:</strong> open <a href="/feedback">Feedback</a> to work through review tickets.</p>`,
-  },
-  {
-    slug: "traces",
-    title: "Traces",
-    description: "Share the full log of an agent session and let colleagues read or continue it.",
-    group: "Review",
-    body: `
-<p>A <strong>trace</strong> is the full chat log of an agent session: your prompts, the agent's replies, and every tool call and result. Shiplet keeps traces next to the work they produced, so a reviewer can see how a change was made and a colleague can pick the session up in their own agent.</p>
-<p>Traces are rolling out. If a Shiplet's detail page has no <strong>Traces</strong> panel, they are not enabled on this server yet.</p>
-<h2>Share the session you are in</h2>
-<p>The easiest way is to ask your agent: say “Share this session to Shiplet &lt;name or id&gt;” in Claude Code or Codex. Your agent knows which session it is in, including subagents, screenshots, and videos. From a terminal, run:</p>
-<pre><code>npx shiplet-cli trace share --current --shiplet &lt;id&gt;</code></pre>
-<p>The CLI masks secrets on your computer before anything is sent, and Shiplet scans again when the trace arrives. Screenshots, videos, and PDFs the session produced are attached automatically (up to 20 MiB each). Add <code>--dry-run</code> to see what would be sent, or <code>--no-files</code> to leave the files out.</p>
-<p>To share a session that has no artifact to review, add <code>--new</code> instead of <code>--shiplet</code>: <code>npx shiplet-cli trace share --current --new --title "Fix the flaky test"</code>. Shiplet creates an ordinary Shiplet for it, whose page is the trace viewer.</p>
-<p>In a cloud agent with no browser on its computer, sign the CLI in first with <code>npx shiplet-cli login --device</code>, or connect <a href="/docs/code-mode-mcp">Shiplet MCP</a> with OAuth and let the agent call <code>createTraceUploadLink</code>. See <a href="/docs/authentication">Choosing how to sign in</a>.</p>
-<p>No terminal? Drop a session file (<code>.jsonl</code>) onto the drop zone in the Shiplet's Traces panel. The browser masks secrets before uploading. Claude Code keeps sessions in <code>~/.claude/projects/</code> and Codex keeps them in <code>~/.codex/sessions/</code>.</p>
-<h2>Who sees what</h2>
-<p>A new trace is private: only you and the Shiplet's owner can open it. Share it with a person or email, a team, the whole organization, or anyone with the link, and choose a level for each audience:</p>
-<div class="docs-table" tabindex="0"><table><thead><tr><th>Level</th><th>What that audience sees</th></tr></thead><tbody>
-<tr><td>Full</td><td>Everything except secrets.</td></tr>
-<tr><td>Conversation</td><td>Messages and tool steps, without tool output or reasoning.</td></tr>
-<tr><td>Summary</td><td>What was done, files touched, checks, and the outcome. No text.</td></tr>
-</tbody></table></div>
-<p>A more specific audience wins: a person or email over their team, a team over the organization. Organization administrators can read every shared trace in full, but not private ones. You can also mask extra terms, hide paths, hide reasoning, or hide videos for one audience, and use <strong>Preview as this audience</strong> before sharing.</p>
-<pre><code>npx shiplet-cli trace audiences &lt;trace&gt; --shiplet &lt;id&gt; --audience organization=conversation --audience email:dana@example.com=full</code></pre>
-<h2>Read a trace and continue it</h2>
-<p>Open a trace from the Shiplet's Traces panel to read the timeline, images, videos, and files. The page shows which level you are seeing. Your browser cannot write into Claude Code or Codex, so the viewer gives you two ways to continue:</p>
-<ul><li><strong>Copy prompt for your agent:</strong> paste it into your agent, which loads the trace over <a href="/docs/code-mode-mcp">Shiplet MCP</a>.</li><li><strong>Copy CLI command:</strong> <code>npx shiplet-cli trace pull &lt;trace&gt; --shiplet &lt;id&gt; --as context</code> prints an agent-ready handoff.</li></ul>
-<h2>Limits and retention</h2>
-<ul><li>The session itself can be up to 16 MiB per upload after masking. Files go up separately: up to 20 MiB each and 256 MiB per trace.</li><li>An organization can store up to 10 GiB of traces.</li><li>Deleting a trace or its Shiplet deletes its files. Traces of a Shiplet archived for more than 7 days are deleted.</li><li>API keys need the <code>traces:read</code> or <code>traces:write</code> scope. See <a href="/docs/api-keys">API keys</a>.</li></ul>
-<p><strong>Next:</strong> run <code>search</code> in <a href="/docs/code-mode-mcp">Code Mode MCP</a> for the trace operations, or read <a href="/docs/access-control">Access control</a>.</p>`,
   },
   {
     slug: "authentication",
@@ -360,7 +370,14 @@ shiplet --help</code></pre>
 <p>In a cloud agent, an SSH session, or a container, run <code>shiplet login --device</code>. The CLI prints a page and a code; open the page on any device, sign in, type the code, and approve. Set <code>SHIPLET_LOGIN=device</code> to use device sign-in for every command that needs approval. Read <a href="/docs/authentication">Choosing how to sign in</a> for details.</p>
 <h2>Other authentication routes</h2>
 <ul><li><strong>Human review:</strong> <a href="/auth/login">sign in in the browser</a>.</li><li><strong>MCP clients:</strong> use <a href="/docs/code-mode-mcp">Code Mode MCP</a> with browser OAuth or supported agent registration.</li><li><strong>CI and unattended jobs:</strong> use narrowly scoped <a href="/docs/api-keys">organization API keys</a> from a secret store.</li></ul>
-<p>Not sure which to use? Read <a href="/docs/authentication">Choosing how to sign in</a>.</p>`,
+<p>Not sure which to use? Read <a href="/docs/authentication">Choosing how to sign in</a>.</p>
+<h2>Share agent sessions</h2>
+<p>A <a href="/docs/traces">trace</a> is the full log of an agent session. The <code>trace</code> commands share it next to a Shiplet and bring it back into another agent:</p>
+<pre><code>shiplet trace share --current --shiplet &lt;id&gt; --dry-run
+shiplet trace share --current --new --title "Fix the flaky test"
+shiplet trace audiences &lt;trace&gt; --shiplet &lt;id&gt; --audience organization=conversation
+shiplet trace pull &lt;trace&gt; --shiplet &lt;id&gt; --as context</code></pre>
+<p>Secrets are masked on your computer before anything is sent, and a new trace is private. <code>trace list</code>, <code>trace preview</code>, and <code>trace delete</code> cover the rest; run <code>shiplet trace --help</code> for every option.</p>`,
   },
   {
     slug: "code-mode-mcp",
@@ -425,6 +442,13 @@ shiplet --help</code></pre>
   method: "GET",
   path: "/api/projects/project_123/review-feedback"
 })</code></pre>
+<h2>Share and continue a trace</h2>
+<p>A <a href="/docs/traces">trace</a> is the full log of an agent session. To share the session it is in, the agent calls <code>createTraceUploadLink</code> (or <code>createTraceShiplet</code> first for a session with no artifact), then runs <code>npx shiplet-cli trace share --current --upload-url &lt;link&gt;</code> so secrets are masked locally. To pick up a colleague's session, it loads the handoff at the reader's level:</p>
+<pre><code>async () =&gt; await codemode.request({
+  method: "GET",
+  path: "/api/shiplets/project_123/traces/trc_123/context"
+})</code></pre>
+<p>Run <code>search</code> for the trace operations, including <code>listReadableTraces</code> and <code>setTraceAudiences</code>.</p>
 <h2>Authentication and authority</h2>
 <p>Browser OAuth identifies an interactive user. A registered agent remains a separate actor in Shiplet's audit history, tied to the user who approved it and the selected organization. Its effective authority combines recognized agent permissions, current Shiplet membership and grants, the selected organization, and the requested operation. Unknown permissions grant nothing.</p>
 <p><strong>Next:</strong> connect through browser OAuth, or ask a compatible agent to follow <code>https://shiplet.cc/auth.md</code>, then run <code>search</code>.</p>`,
@@ -552,7 +576,7 @@ function buildDocsPage(page: DocsPage) {
 		<div class="app-page-title">
 			<span class="success-card-label">Public docs</span>
 			<p class="docs-site-title">Shiplet documentation</p>
-			<p>Prepare an artifact, share its review link, and bring contextual feedback back to your team or agent.</p>
+			<p>Prepare an artifact, share its review link and the agent session behind it, and bring contextual feedback back to your team or agent.</p>
 		</div>
 		<div class="dashboard-actions">
 			<a class="btn btn-secondary btn-sm" href="/openapi.json">OpenAPI JSON</a>
