@@ -9,6 +9,7 @@ const {
   normalizeApiUrl,
 } = require("./browser-session.cjs");
 const { createScopedSessionFetch } = require("./scoped-session-fetch.cjs");
+const { authorizeWithDeviceCode } = require("./device-session.cjs");
 
 // Matches the CLI default; the CLI normally passes an explicit lifetime.
 const DEFAULT_SESSION_TTL_SECONDS = 2 * 60 * 60;
@@ -371,6 +372,7 @@ function createSessionCache({
   platform = process.platform,
   store,
   authorize = authorizeInBrowser,
+  deviceAuthorize = authorizeWithDeviceCode,
   commandSession = createBrowserSessionFetch,
   now = () => Date.now(),
 } = {}) {
@@ -418,8 +420,8 @@ function createSessionCache({
     return { record: { ...record, expiresOn: remote.expiresOn }, location };
   }
 
-  async function authorizeAndSave(apiUrl, fetchImpl, stdout, sessionTtlSeconds) {
-    const session = await authorize({ apiUrl, fetch: fetchImpl, stdout, sessionTtlSeconds });
+  async function authorizeAndSave(apiUrl, fetchImpl, stdout, sessionTtlSeconds, device = false) {
+    const session = await (device ? deviceAuthorize : authorize)({ apiUrl, fetch: fetchImpl, stdout, sessionTtlSeconds });
     const remote = await describeRemoteSession(apiUrl, session.accessToken, fetchImpl);
     if (remote.status !== "active") {
       await revokeRemoteSession(apiUrl, session.accessToken, fetchImpl);
@@ -442,6 +444,12 @@ function createSessionCache({
     const fetchImpl = options.fetch;
     // With caching turned off, every command gets its own single-command approval.
     if (options.sessionCache === false || sessionCacheDisabled(env)) {
+      if (options.device) {
+        // Device sign-in always issues a reusable session; this command uses
+        // it once and revokes it, like a single-command approval.
+        const session = await deviceAuthorize({ apiUrl, fetch: fetchImpl, stdout: options.stdout, sessionTtlSeconds: options.sessionTtlSeconds });
+        return createScopedSessionFetch({ apiUrl, accessToken: session.accessToken, fetch: fetchImpl });
+      }
       return commandSession({ apiUrl, fetch: fetchImpl, stdout: options.stdout });
     }
     const active = await loadActive(apiUrl, fetchImpl, options.stdout);
@@ -451,6 +459,7 @@ function createSessionCache({
       fetchImpl,
       options.stdout,
       options.sessionTtlSeconds ?? DEFAULT_SESSION_TTL_SECONDS,
+      Boolean(options.device),
     );
     if (!created.location) {
       // Nowhere safe to keep it: use it for this command only, then revoke it.
@@ -471,7 +480,7 @@ function createSessionCache({
 
   return {
     bootstrap,
-    async login({ apiUrl: rawApiUrl, fetch: fetchImpl, stdout, sessionTtlSeconds }) {
+    async login({ apiUrl: rawApiUrl, fetch: fetchImpl, stdout, sessionTtlSeconds, device = false }) {
       const apiUrl = normalizeApiUrl(rawApiUrl);
       const active = await loadActive(apiUrl, fetchImpl, stdout);
       if (active) return { ...publicStatus(active.record, active.location), reused: true };
@@ -480,6 +489,7 @@ function createSessionCache({
         fetchImpl,
         stdout,
         sessionTtlSeconds ?? DEFAULT_SESSION_TTL_SECONDS,
+        device,
       );
       if (!created.location) {
         await revokeRemoteSession(apiUrl, created.record.accessToken, fetchImpl);

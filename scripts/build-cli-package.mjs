@@ -12,7 +12,7 @@ if (manifest.dependencies.acorn !== lock.packages["node_modules/acorn"].version)
 await mkdir(path.dirname(destination), { recursive: true });
 await mkdir(destination);
 await mkdir(path.join(destination, "lib"));
-for (const file of ["shiplet.cjs", "auth-page.cjs", "browser-session.cjs", "scoped-session-fetch.cjs", "session-cache.cjs", "trace-core.mjs"]) {
+for (const file of ["shiplet.cjs", "auth-page.cjs", "browser-session.cjs", "device-session.cjs", "scoped-session-fetch.cjs", "session-cache.cjs", "trace-core.mjs"]) {
 	await copyFile(path.join(root, "src/cli", file), path.join(destination, "lib", file));
 }
 await chmod(path.join(destination, "lib/shiplet.cjs"), 0o755);

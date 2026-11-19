@@ -1,0 +1,66 @@
+---
+title: "Choosing how to sign in"
+description: "Use OAuth for people and their agents, and API keys only for unattended automation."
+---
+
+People, and the agents working with them, sign in through the browser with
+OAuth. Nobody copies a credential, approvals are tied to your account, and
+sessions expire on their own. Organization API keys are for unattended
+automation such as CI and scheduled jobs.
+
+| You are | Use |
+| --- | --- |
+| A person at a terminal | `shiplet login`, then approve in your browser. See [CLI setup](/docs/cli). |
+| A local agent (Claude Code, Codex, an IDE) | [Shiplet MCP](/docs/code-mode-mcp) with browser OAuth, or the CLI's browser approval. |
+| A cloud agent, SSH session, or container with no browser on that computer | `shiplet login --device`: approve with a code on any device. Or connect Shiplet MCP to the agent with OAuth. |
+| CI or another unattended job | A narrowly scoped [organization API key](/docs/api-keys), kept in the job's secret store. |
+
+## Sign in with a code
+
+Browser approval needs the browser and the CLI on the same computer, because the
+browser hands the approval back to the CLI on that computer. When that is not
+possible, use device sign-in:
+
+```bash
+npx shiplet-cli login --device
+```
+
+1. The CLI prints a page, `https://shiplet.cc/cli/device`, and a code such as
+   `BCDF-GHJK`.
+2. Open that page on your phone or laptop, sign in to Shiplet, and type the code.
+3. Check the account, where the request came from, and how long the session
+   lasts. Select **Approve** only if you started this sign-in.
+4. The CLI continues on its own within a few seconds.
+
+The CLI gets the same session that browser approval gives: two hours by default,
+up to 8 hours with `--session-ttl`, and revoked by `shiplet logout`. Codes
+expire after 10 minutes and work once. There is deliberately no link that fills
+in the code, so a phishing message cannot hand you a one-click approval. Shiplet
+never asks for a code by email or chat; if someone sends you one to approve,
+deny it.
+
+Set `SHIPLET_LOGIN=device` to make every command in an agent's environment use
+device sign-in when it needs approval.
+
+### How it works
+
+Device sign-in follows the OAuth 2.0 device authorization grant (RFC 8628):
+
+- `POST /api/cli/device/authorize` returns a device code, which only the CLI
+  holds, and a user code, which the person types.
+- The CLI polls `POST /api/cli/device/token` at the given interval. It gets
+  `authorization_pending`, `slow_down`, `access_denied`, or `expired_token`
+  until the person decides.
+- Approval records an ordinary CLI authorization in the audit log, marked as a
+  device sign-in, and the session has the same scopes and limits as browser
+  approval.
+- Each network address can hold a few pending requests at once.
+
+## When to use an API key
+
+- Use a key when no person is present to approve, for example in CI, cron jobs,
+  or webhooks.
+- Give each key only the scopes and Shiplets the job needs, and store it in the
+  job's secret store.
+- Do not give a key to an interactive agent you are working with. Sign it in
+  with OAuth instead, so its access follows your account and ends on its own.

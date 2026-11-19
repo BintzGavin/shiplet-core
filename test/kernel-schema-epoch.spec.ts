@@ -12,8 +12,8 @@ import app, { schemaInitializationTest } from "../src/index";
 // Pin the two together: when this digest changes, bump
 // CURRENT_KERNEL_SCHEMA_EPOCH in src/index.ts and update both values here.
 const PINNED_KERNEL_SCHEMA = {
-  epoch: 8,
-  digest: "b16483d7e49ac5f543adc136ec437265d377bb1000107dcf92ee1a26a440e077",
+  epoch: 9,
+  digest: "02b462c2d4fd6caf8fbb88c8d408d5c3424acc6e94bafb119ba31ecb3e8b79ca",
 };
 
 // Releases up to v0.1.43 recorded epoch 1 before the invite link tables existed.
@@ -30,6 +30,8 @@ const EPOCH_BEFORE_TRACE_SHARING = 5;
 const EPOCH_BEFORE_TRACE_UPLOAD_LINKS = 6;
 // Builds before trace-only Shiplets recorded epoch 7.
 const EPOCH_BEFORE_TRACE_SHIPLETS = 7;
+// Builds before CLI device sign-in recorded epoch 8.
+const EPOCH_BEFORE_CLI_DEVICE_LOGIN = 8;
 const EPOCH_TABLE = "shiplet_kernel_schema_epoch";
 
 function db() {
@@ -182,6 +184,16 @@ describe("kernel schema epoch", () => {
     expect((await request(`/join/${"D".repeat(32)}`)).status).toBe(404);
 
     expect(await tableExists("trace_shiplets")).toBe(true);
+  });
+
+  it("adds the CLI device sign-in table to a database that recorded epoch 8", async () => {
+    await request("/health");
+    await recordEpoch(EPOCH_BEFORE_CLI_DEVICE_LOGIN);
+    await db().prepare("DROP TABLE IF EXISTS cli_device_authorizations").run();
+
+    expect((await request(`/join/${"D".repeat(32)}`)).status).toBe(404);
+
+    expect(await tableExists("cli_device_authorizations")).toBe(true);
   });
 
   it("pins the kernel schema to its epoch so schema changes cannot ship without a bump", async () => {
