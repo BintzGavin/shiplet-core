@@ -6,21 +6,25 @@ product
 
 ## Users
 
-Shiplet serves agent-first software teams reviewing build output, static exports,
-standalone files, and public preview URLs. Human reviewers work directly on the
-artifact while agents and CI systems collect the resulting tickets and continue
-the implementation workflow. Agent sessions travel with the work as traces, so
-reviewers can see how a change was made and teammates can continue it in their
-own agent.
+Shiplet serves teams who build with agents: engineers, designers, product
+managers, and researchers who share agent-built work and the sessions behind it.
+They use Claude Code, Codex, and other agents side by side. Reviewers work
+directly on the artifact (build output, static exports, standalone files, and
+public preview URLs) and read the agent session that produced it at the level
+they were given. Teammates and their agents load that session and continue the
+work, and CI systems collect the resulting tickets.
 
 ## Product Purpose
 
-Shiplet places artifacts inside a trusted review experience with explicit
-identity, access policy, contextual feedback, agent traces, and agent handoff.
-Success means a team can publish a review, understand who can access it, leave
-precise feedback, share the agent session behind the work at the right level,
-and move that feedback back into automated work without exposing credentials or
-mixing the artifact with the trusted host.
+Shiplet makes what agents made, and how they made it, shareable. Artifacts get
+a trusted review link with contextual feedback that keeps the revision it was
+left on. Traces, the full agent sessions, are masked locally, private by
+default, and shared per audience at Full, Conversation, or Summary level. Both
+work across agents through an open trace format, MCP, and the CLI. Success means
+a team never loses an agent session or its review context: anyone can publish
+the work and the session, understand exactly who can see each, leave precise
+feedback on a known version, and hand the work to the next person or agent,
+without exposing credentials or mixing the artifact with the trusted host.
 
 ## Brand Personality
 

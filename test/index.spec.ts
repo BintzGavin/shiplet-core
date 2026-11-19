@@ -4741,10 +4741,10 @@ describe("Shiplet", () => {
       const html = await response.text();
 
       expect(html).toContain(
-        "<title>Shiplet | Review Builds, Files, and Live URLs</title>",
+        "<title>Shiplet | Share Agent Sessions and the Work They Made</title>",
       );
       expect(html).toContain(
-        '<meta name="description" content="Add a trusted review layer to builds, files, and live URLs for contextual feedback and agent handoff.">',
+        '<meta name="description" content="Share what your agents made and how they made it: artifacts and full agent sessions, with access you control per person, team, and level. Works with Claude Code, Codex, and any agent.">',
       );
       expect(html).toContain(
         '<link rel="canonical" href="https://shiplet.cc/">',

@@ -3,8 +3,20 @@ title: "Access control"
 description: "How organizations, grants, visibility, and editing authority fit together."
 ---
 
-Shiplet uses organization-first access, with viewing and editing evaluated
-separately by the trusted kernel.
+Shiplet has two kinds of access, set separately: who can open a Shiplet and its
+artifact, and who can read each agent session shared to it. Someone can review
+the work without reading the session, or read a summary of the session without
+seeing the work.
+
+| Thing | Who | What they get |
+| --- | --- | --- |
+| A Shiplet and its artifact | Its visibility, plus grants to a person, an exact email address, or a team | View or edit, evaluated separately |
+| A trace | A person, an email address, a team, the organization, anyone with the link, or an API key | Full, Conversation, or Summary, with optional per-audience rules |
+
+Trace access is described in [Traces](/docs/traces). A new trace is private to
+its uploader and the Shiplet owner, whatever the Shiplet's visibility. The rest
+of this page covers Shiplets, which use organization-first access, with viewing
+and editing evaluated separately by the trusted kernel.
 
 ## Human access
 
