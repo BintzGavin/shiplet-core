@@ -14,19 +14,19 @@ const DOCS_PUBLIC_CONTENT_SHA256: Record<string, string> = {
   "cli": "a35c1685e5f7c2cff4a35cbdd4e61c3617aae2893cf8b0cfc0ddf7b71842a5f8",
   "self-hosting": "03dd91928c89a6911867c9c4f4625aa4455306c420af821408540ffb7eac1f38",
   "browser-capture": "1b6542d6a598b88c6dacda840930f1ff5095d9c0952778bb3a26672603a61643",
-  "introduction": "8c63e0a63f9998a4cad3fe55550171b77c07062473ab4da382f02e7d1772f178",
+  "introduction": "16e118be8f2c6e91a9c278b808be45069c737bcda535347436c0708234736eec",
   "why-shiplet":
-    "a34409ae0097659bc90a6d30c9ae63733565e418412175f3871993a452735db4",
+    "f08f3c284501937ca1ecdd445078bb5f1287f00a7e4fdde53a56bd23aee771d1",
   "quickstart":
-    "244860452364e0a0cb5f9b06c2ee3786317c5606a58e1351d3c6e8deda9b8a79",
+    "7d5bbd7d3b8461d5fd31a126ec015ad0e255225651aa19e37e1a434c1d833180",
   "access-control":
-    "71c4b16009ef9569e8f106138bb498fcfdb0c8a51281f98db1dc0262ee96e287",
+    "e86b48ba4eb5dcd67b1b8c3f23c92bd2790ccac92b3524d15fac768ccf111813",
   "publishing":
     "b9f56eaf441f5e4fa4c060936613eb378e2415dffa91b63c29fdf93e75267582",
   "extensions":
     "c834eef088f4ab55ed628fe95cc4b169445c7ca3f77732e8717e5c048fc70d13",
   "review-feedback":
-    "91acf8e5f3e77b4b7d3ff0707eec4e01f6cc2f026f7fff5745cd43b03ec6deda",
+    "22a2a27d108b47912288b08b5d8b40f961626671a646e5e740b49c4a8a143390",
   "code-mode-mcp":
     "eaadfcd0d0aff9b9d5ec36cabc9f1289aab57ecd111543ba5d4ee90e35611b00",
   "api-keys":
@@ -35,7 +35,8 @@ const DOCS_PUBLIC_CONTENT_SHA256: Record<string, string> = {
     "ae7d36eb6be9d7c20c4e9a493540d3b9f3d89ce7d31dbb1de9a25d8ee5f56f95",
   "embed": "9fef7053a6175f1aa55f8c7c5076596d104b2aa26538839c70a63e6a441c96b3",
   "authentication": "7dd76ff9871059e59a702177d9c4afc4aebe661ae003853d7ffbed8194a30f29",
-  "traces": "34b639a8cc6bb697d345aee6b8020ff11caaff9ac305126400414f1d3e9fd393",
+  "traces": "11b2f8850d21c498edf0350f62915bba6746ab404745013c9b7a8c94b4e33b25",
+  "trace-format": "66e20270cfdad925ab5f9e861fcd93931ba6315bcc383207e7c399947d1c7006",
   "security": "5b52e175c0b5cb8630e199c1bfc126895eadaa47e5f0fa3ec19d7878b6e7caa6"
 };
 
@@ -45,146 +46,152 @@ const DOCS_PAGES: DocsPage[] = [
     slug: "introduction",
     title: "Introduction",
     description:
-      "Prepare an artifact, share a review link, and collect contextual feedback.",
+      "Share what your agents made, and how they made it, with exactly the access you choose.",
     group: "Start",
     body: `
-<p>Shiplet is the review layer for agent-first teams. The artifact remains the work your team reviews, whether it is a build output, standalone file, static export, or public preview URL. Shiplet places that work inside a trusted review experience where people can comment and agents can pick up the resulting tickets.</p>
-<p>The agent session that made the work can travel with it. A <a href="/docs/traces">trace</a> is the full log of that session: the prompts, the agent's replies, and every tool call and result. Share it next to the Shiplet so reviewers can see how a change was made, and so a colleague's agent can pick the work up where yours left off.</p>
-<p><a href="/">Open the Shiplet app</a> to prepare a review.</p>
+<p>Shiplet is where teams share what their agents made, and how they made it.</p>
+<p>Agents do much of the building now. The work itself turns into a link, a build, or a file. The session that produced it, with the prompts, the agent's reasoning, and every command and check, stays in one person's terminal and is gone when they close it. Feedback lands in scattered threads, on a version of the work that changed six times since.</p>
+<p>Shiplet keeps both together and makes both shareable:</p>
+<ul>
+  <li>The <strong>artifact</strong> is the work: a build, prototype, document, file, or URL. It gets one review link where people comment on the work itself, and every comment keeps the version it was left on.</li>
+  <li>The <strong>trace</strong> is the full agent session: prompts, replies, every tool call and result, screenshots, and videos. Secrets are masked on your computer before it leaves, and it stays private until you share it.</li>
+</ul>
+<p><a href="/">Open the Shiplet app</a>, or ask your agent to share what it just built.</p>
+<h2>Decide exactly who sees what</h2>
+<p>Access is set per Shiplet and per trace, and the two are separate. Someone can review the work without reading the session, or read a summary of the session without seeing its tool output.</p>
+<table class="docs-table" tabindex="0"><thead><tr><th>You share</th><th>With</th><th>At</th></tr></thead><tbody>
+  <tr><td>An artifact</td><td>Yourself, your organization, anyone with the link, or the public; or one person, email address, or team</td><td>View or edit, granted separately</td></tr>
+  <tr><td>A trace</td><td>A person, an email address, a team, your organization, anyone with the link, or an API key</td><td>Full, Conversation, or Summary, with optional rules to mask terms, hide paths, hide reasoning, or hide videos</td></tr>
+</tbody></table>
+<p>The most specific audience wins, and <strong>Preview as this audience</strong> shows a trace exactly as someone else will see it. Read <a href="/docs/access-control">Access control</a> and <a href="/docs/traces">Traces</a>.</p>
+<h2>Works with every agent</h2>
+<p>Claude Code and Codex sessions can be shared from inside the agent: ask it to “share this session to Shiplet”. Any other agent can share a session by writing the <a href="/docs/trace-format">open trace format</a>. Any agent that speaks MCP or can run the CLI can load a shared trace and pick the work up where the last one left off, whichever agent wrote it.</p>
+<h2>Keep the context</h2>
+<p>The session sits next to the work it produced, so a reviewer can see how a change was made and a teammate can continue it days later. Comments stay attached to the revision they were left on, so “which version was that about?” has an answer. Everything stays for as long as you keep the Shiplet; <a href="/docs/traces">Traces</a> lists the retention rules.</p>
 <h2>Choose your task</h2>
 <ul>
-  <li><strong><a href="/docs/quickstart">Publish my first review</a>:</strong> prepare an artifact and open its review link.</li>
-  <li><strong><a href="/docs/traces">Share an agent session</a>:</strong> ask your agent to share the session it is in, then choose who can read it and at what level.</li>
-  <li><strong><a href="/docs/review-feedback">Collect feedback</a>:</strong> leave contextual comments and work through review tickets.</li>
-  <li><strong><a href="/docs/cli">Automate with an agent</a>:</strong> install the CLI and approve access in your browser.</li>
+  <li><strong><a href="/docs/quickstart">Share your first artifact and session</a>:</strong> publish a build and attach the agent session that made it.</li>
+  <li><strong><a href="/docs/traces">Share an agent session</a>:</strong> share the session you are in, then choose who can read it and at what level.</li>
+  <li><strong><a href="/docs/review-feedback">Collect feedback</a>:</strong> leave comments on the work and work through review tickets.</li>
   <li><strong><a href="/docs/access-control">Manage access</a>:</strong> choose who can view or edit each Shiplet.</li>
-  <li><strong><a href="/docs/embed">Connect a website</a>:</strong> attach the Shiplet review layer to an existing site.</li>
+  <li><strong><a href="/docs/authentication">Connect your agent</a>:</strong> sign in the CLI or MCP with OAuth, including from cloud agents with no browser.</li>
+  <li><strong><a href="/docs/embed">Connect a website</a>:</strong> collect feedback on a live site.</li>
 </ul>
-<p>Read <a href="/docs/why-shiplet">Why Shiplet</a> for the product idea behind a customizable review room rooted in durable state.</p>
-<h2>How Shiplet fits around your work</h2>
+<p>Read <a href="/docs/why-shiplet">Why Shiplet</a> for the idea behind the product.</p>
+<h2>How it fits together</h2>
 <ul>
-  <li>The <strong>artifact</strong> is the page, file, build, or URL under review.</li>
-  <li>The <strong>Shiplet</strong> owns the stable review link, access policy, and feedback.</li>
-  <li>The <strong>review layer</strong> provides the toolbar and trusted controls around the artifact.</li>
-  <li>A <strong>trace</strong> is an agent session attached to the Shiplet. It is private until you share it, and each audience sees it at the level you choose.</li>
+  <li>A <strong>Shiplet</strong> owns the review link, its access, its revisions, its comments, and its traces.</li>
+  <li>The <strong>review layer</strong> is the toolbar and trusted controls around the artifact. A team can replace it with a <a href="/docs/extensions">custom widget</a> without changing the work under review.</li>
+  <li>A <strong>trace-only Shiplet</strong> holds a session with no artifact, for work that has nothing to click on.</li>
 </ul>
-<p>Artifact code does not receive reviewer credentials or direct access to Shiplet APIs. The trusted host keeps identity and review actions outside the artifact frame.</p>
-<h2>Customize the review experience</h2>
-<p>The built-in toolbar works for ordinary reviews. Shiplet can attach a custom widget and workflow when a team needs different controls or statuses. Those customizations belong to the review experience, so they do not become part of the work being reviewed. Read <a href="/docs/extensions">The review layer</a> for the boundary.</p>
+<p>Artifact and widget code never receive reviewer credentials or direct access to Shiplet APIs. The trusted host keeps identity and every review action outside the artifact frame.</p>
 <h2>Automation</h2>
 <ul>
-  <li><strong><a href="/docs/cli">CLI</a>:</strong> run <code>npx shiplet-cli --help</code>, then approve a browser session to prepare artifacts, manage revisions, and share traces from your terminal or agent.</li>
-  <li><strong><a href="/docs/code-mode-mcp">Code Mode MCP</a>:</strong> connect an MCP client for API discovery, publishing, feedback automation, and loading a shared trace into your agent. Browser OAuth and supported agent registration are available.</li>
-  <li><strong><a href="/docs/api-keys">REST API</a>:</strong> use a narrowly scoped organization API key from a secret store for CI and unattended workflows.</li>
+  <li><strong><a href="/docs/cli">CLI</a>:</strong> <code>npx shiplet-cli</code> publishes artifacts, manages revisions, and shares and pulls traces from your terminal or agent.</li>
+  <li><strong><a href="/docs/code-mode-mcp">Code Mode MCP</a>:</strong> connect any MCP client to publish, work with feedback, and load shared traces. Sign in with browser OAuth.</li>
+  <li><strong><a href="/docs/api-keys">REST API</a>:</strong> use a narrowly scoped organization API key for CI and other unattended jobs.</li>
 </ul>
 <p>The <a href="/openapi.json">OpenAPI document</a> is the machine-readable contract for documented public REST operations.</p>
-<p><strong>Next:</strong> <a href="/docs/quickstart">prepare your first review artifact</a>.</p>`,
+<p><strong>Next:</strong> <a href="/docs/quickstart">share your first artifact and session</a>.</p>`,
   },
   {
     slug: "why-shiplet",
     title: "Why Shiplet",
     description:
-      "Why each review link gets its own interface and durable root.",
+      "Why the session behind agent work should be as shareable as the work, with access you choose.",
     group: "Start",
     body: `
-<h2>Every Shiplet gets a root</h2>
-<p>Shiplet turns anything you can open in a browser into a review link.</p>
-<p>The artifact is the thing under review: a website, prototype, document, or report. Shiplet gives that artifact one link where reviewers can click directly on the work and leave comments in context. When they return, the conversation is waiting in the same place.</p>
-<p>The review widget is the toolbar and panel around the artifact. A team can customize it for the work in front of them, and the artifact itself stays unchanged. I want that widget to make every Shiplet feel like its own little product.</p>
-<figure class="docs-figure"><img src="/brand/why-shiplet/shiplet-root-hero.webp" alt="An illustrated ShipletRoot station giving one Shiplet its own review interface" width="1672" height="941" loading="eager"><figcaption>A Shiplet wraps the thing under review in a widget that the team can customize.</figcaption></figure>
-<p>On a working build, a PM cares about whether each acceptance criterion survives the awkward states. A researcher's prototype carries a different question, because every product claim needs a path back to the observations behind it. The review layer holds that context because it belongs to the work.</p>
-<p>Each link is its own review room, so every Shiplet gets a root.</p>
-<p>The root remembers which widget the Shiplet uses and keeps its feedback together. It also coordinates who is in the live room.</p>
-<p><a href="https://developers.cloudflare.com/durable-objects/concepts/what-are-durable-objects/">Cloudflare Durable Objects</a> give that root a permanent address and storage of its own. One Durable Object belongs to one Shiplet, so every request for that review returns to the same place.</p>
-<figure class="docs-figure"><img src="/brand/why-shiplet/shiplet-root-runtime.webp" alt="Shiplet architecture showing the trusted browser host and Platform Worker reaching one ShipletRoot, plus Code Mode running in a disposable Dynamic Worker" width="1280" height="720" loading="lazy"><figcaption>Reviewing and changing a review use the same ShipletRoot. The Dynamic Worker runs Code Mode; the approved widget runs in the browser sandbox.</figcaption></figure>
-<h2>The review belongs to the Shiplet</h2>
-<p>A Shiplet is the review room around one artifact. Its widget belongs to that room.</p>
-<p>The default experience stays small. A trusted host renders the artifact inside an isolated frame, adds the review toolbar, and keeps the reviewer's session outside the artifact. Pins stay attached to the context people were looking at, and comments return to the same review link.</p>
+<h2>The work gets shared. The session does not.</h2>
+<p>Agents do a lot of the building now. You describe what you want, and an agent plans, edits, runs commands, checks its own work, and hands back a build, a prototype, or a document. The artifact gets shared. The session that made it stays in one person's terminal and disappears when they close it. The review that follows scatters across threads and calls, about a version nobody can identify a week later.</p>
+<p>Shiplet makes both shareable. The artifact gets one review link where people comment on the work itself. The trace, the full agent session behind it, sits next to the work. You choose who sees each one: a person, a team, the organization, anyone with the link, and for a trace, how much of it they see. None of it is tied to one agent. Claude Code and Codex are built in, and the trace format is open for the agents that come next.</p>
+<p>I think of it as the workspace for a team that builds with agents. The rest of this page is why I think it needs to exist, and how it is built.</p>
+<h2>The session matters as much as the artifact</h2>
+<p>A diff tells you what changed. A link tells you what the work looks like now. Neither tells you how it was made: what was asked, what the agent tried first, which command failed, and which checks passed before it said it was done.</p>
+<p>That is most of what a reviewer wants to know. Did it run the tests? Why this approach and not the obvious one? Did it touch the billing code? The answers are already written down, in a session nobody else can open.</p>
+<p>It matters even more when the work changes hands. Without the session, a teammate's agent starts from zero. With it, the agent starts where the last one stopped. I have come to think the session is the most reusable thing agent work produces, and today it lives in a folder on one laptop.</p>
+<h2>Traces, at the level you choose</h2>
+<p>A trace is that session, shared on purpose. It holds your prompts, the agent's replies, every tool call and result, and the screenshots, videos, and PDFs the session produced.</p>
+<p>The easiest way to share one is to ask the agent you are working with: “Share this session to Shiplet.” In Claude Code or Codex, the agent knows which session it is in and runs the CLI for you. Secrets are masked on your computer before anything leaves it, and Shiplet scans again when the trace arrives. A new trace is private. Only you and the Shiplet's owner can open it until you share it.</p>
+<p>Not everyone needs the whole thing, so every audience gets a level:</p>
+<ul><li><strong>Full:</strong> everything except secrets, for the person who will pick the work up.</li><li><strong>Conversation:</strong> the messages and tool steps, without tool output or reasoning.</li><li><strong>Summary:</strong> what was done, which files were touched, which checks ran, and how it ended, with no text from the session.</li></ul>
+<h2>Decide exactly who sees what</h2>
+<p>Sharing only helps if people trust what they are sharing, so access covers both the work and the session behind it.</p>
+<p>An artifact is private, visible to your organization, unlisted, or public. You can also grant one person, one exact email address, or a team, and invite links bring people into the organization or one of its teams. Viewing and editing are separate. Being able to see a Shiplet never lets you change it.</p>
+<p>A trace has its own audiences, because the people who should see your work and the people who should see your reasoning are not always the same. Share it with a person, an email address, a team, the organization, anyone with the link, or an API key, and give each one a level. Custom rules go further for one audience: mask a client's name, hide a folder, hide the reasoning, or hide the videos. <strong>Preview as this audience</strong> shows exactly what they will see before you share.</p>
+<p>When someone matches more than one audience, the most specific one wins. The organization can read the conversation, the contractors team only the summary, and Dana everything. Organization administrators can read every shared trace in full, but never a private one.</p>
+<h2>It works with whichever agent you use</h2>
+<p>Every agent keeps its sessions in its own format, in its own folder. Claude Code has one, Codex has another, and next year there will be a third.</p>
+<p>Shiplet reads Claude Code and Codex sessions directly, subagents included, and turns them into one open format, <code>shiplet.trace/v1</code>: messages, tool calls, results, and attachments, in order. The raw logs never leave your computer. Any agent that writes the format can share a session the same way.</p>
+<p>Reading works across agents too. Any agent that speaks MCP, or can run the CLI, can load a trace that was shared with it and carry on. To be precise, it does not reopen the original session inside another tool. It hands your agent a compact briefing at your level: what was asked, what was done, which checks passed or failed, and how it ended. In the viewer, <strong>Copy prompt for your agent</strong> loads it over MCP, and <code>shiplet trace pull --as context</code> prints the same briefing in a terminal. A session recorded in Codex can brief a Claude Code session, and the other way round.</p>
+<h2>Review context that does not go stale</h2>
+<p>Agent-built work changes fast. The prototype updates six times in an afternoon, and by evening nobody knows which version a comment was about.</p>
+<p>In Shiplet, the review link stays the same while the work underneath it changes. Reviewers click on the work itself, and each comment keeps where it was left: the page, the element, the viewport, and the revision. A trace is pinned to the revision it produced as well. Six updates later, the question and the version it was asked about are still together.</p>
 <figure class="docs-figure"><img src="/brand/why-shiplet/default-review-flow.webp" alt="The default Shiplet review flow on a static artifact, with the compact Annotate control and one contextual comment pin" width="1280" height="720" loading="lazy"><figcaption>The default review surface stays out of the way until somebody adds an annotation or opens a thread.</figcaption></figure>
-<p>The ShipletRoot owns the layer around that artifact. It knows which widget is active, which changes are waiting in preview, where the current layer came from, and who is in the live room. That gives us room to make a review feel purpose-built without changing the files underneath it.</p>
-<p>The widget itself is browser code. Shiplet runs the approved widget in its own sandboxed frame, where it can render controls and react to the reviewer. It never receives the user's session or direct bindings to D1 and R2. The Durable Object stays outside that frame too. When the widget needs to create feedback or record a workflow event, it asks the trusted host through a small, typed operation.</p>
-<p>That boundary lets deep customization become a normal product feature with explicit authority.</p>
-<h2>The interface can speak the language of the work</h2>
-<p>The review toolbar should care about the job in front of it.</p>
-<p>A widget can turn a ticket's acceptance criteria into the controls that prove them. When an engineer shares a build for invite recovery, each criterion can open the exact state it names. The PM can pass or block that criterion, and the designer can inspect the mobile state without reconstructing the ticket from memory.</p>
-<figure class="docs-figure"><img src="/brand/why-shiplet/ticket-acceptance-runner.webp" alt="An engineer-authored invite recovery build wrapped in a custom release-proof widget that turns acceptance criteria into test controls" width="1280" height="720" loading="lazy"><figcaption>An engineer-authored build carries its own release proof. Reviewers can open the expired-link state and replay a consumed invitation. The mobile criterion opens the flow at 390 pixels before a reviewer attaches evidence.</figcaption></figure>
-<p>A research readout needs a different shape. The researcher places the current product claim beside the observations behind it. The evidence board lets a PM mark an observation as support for the claim, and contradictory evidence stays visible beside that support. A designer can flag the assumption that still needs testing without losing the prototype underneath.</p>
-<figure class="docs-figure"><img src="/brand/why-shiplet/research-evidence-board.webp" alt="A researcher-authored invite recovery study wrapped in an evidence board that connects product claims to observations and open questions" width="1280" height="720" loading="lazy"><figcaption>The researcher-authored evidence board keeps each claim attached to the observations that shaped it. Reviewers can challenge the synthesis and attach another observation inside the same Shiplet.</figcaption></figure>
-<p>These widgets were applied through the review-layer contract used by the product. Shiplet prepared each change as a preview, compiled the layer inside its sandbox constraints, and applied it only after the root confirmed that the base version still matched.</p>
+<p>That makes the loop with agents easier to close. A reviewer leaves a ticket on one revision. An agent reads it over MCP, fixes it, and attaches its session. The reviewer opens the next revision with the story of the fix beside it.</p>
+<p>“Never lose” has a plain meaning here. The session and the comments stay with the work for as long as you keep the Shiplet. If you delete a trace, it is gone. If you archive a Shiplet, its traces are deleted after 7 days and the Shiplet itself after 30. I would rather be clear about that than promise more.</p>
+<h2>Every Shiplet gets a root</h2>
+<p>Under the product story is a small amount of architecture I still find interesting. Each Shiplet gets one root, a ShipletRoot built on <a href="https://developers.cloudflare.com/durable-objects/concepts/what-are-durable-objects/">Cloudflare Durable Objects</a>. The Platform Worker resolves it with <code>getByName(shiplet.id)</code>, so every request for that Shiplet reaches the same object, with storage of its own. The root keeps the state that needs agreement inside one Shiplet: the active review layer, previews waiting for approval, where the layer came from, and its audit events, all in its own SQLite.</p>
+<figure class="docs-figure"><img src="/brand/why-shiplet/shiplet-root-hero.webp" alt="An illustrated ShipletRoot station giving one Shiplet its own review interface" width="1672" height="941" loading="lazy"><figcaption>Every Shiplet gets one ShipletRoot, with its own address and its own storage.</figcaption></figure>
+<p>That gives each Shiplet one authority. Applying a change is a guarded update inside the root, and if something newer landed first, the update fails closed. Traffic for one review stays with its root, so one unusually hot Shiplet has the ceiling of one root. That is an honest limit, and a useful one for the product we have.</p>
+<p>The rest of the stack stays boring on purpose. The Platform Worker handles identity, access, and routing. R2 holds artifact bytes and trace segments, and D1 holds the directory, feedback, and who can read which trace. Each audience's version of a trace is rendered once, when sharing changes, and stored.</p>
 <h2>Code Mode keeps the power behind a narrow door</h2>
-<p>An agent can customize the review layer through Shiplet's MCP. It sees two tools: <code>search</code> and <code>execute</code>.</p>
-<p><code>search</code> lets the agent find the relevant contract without dumping the whole platform into context. <code>execute</code> accepts a small program, and Shiplet runs that program in a disposable Dynamic Worker. The Worker gets no direct D1, R2, or Durable Object bindings. It can reach only the operations exposed by the trusted host.</p>
-<p>The program can read the current review layer and prepare a bounded set of file changes. The result is a preview attached to the root's current version. A person can open that preview, use the proposed widget, and approve it. The root applies the change with a version check, so a stale agent turn cannot overwrite something newer.</p>
-<p>The approved widget then runs where the reviewer uses it: inside the browser sandbox. The Dynamic Worker has finished its short job by that point.</p>
-<p>Code Mode handles programmable authoring before the browser runs the interface. ShipletRoot remains the authority that makes a change real.</p>
-<h2>Durable Objects make the product easier to engineer</h2>
-<p>I care about the engineering shape because it lets product benefits keep accumulating inside one clear coordination boundary.</p>
-<figure class="docs-figure"><img src="/brand/why-shiplet/durable-object-benefits.webp" alt="ShipletRoot in the center of four Durable Object benefits: ordered changes, local SQLite, hibernation, and natural sharding" width="1280" height="720" loading="lazy"><figcaption>The Shiplet is already the product boundary, so the Durable Object can use the same boundary for correctness, state, operations, and isolation.</figcaption></figure>
-<h3>One name gives us one authority</h3>
-<p>The Platform Worker resolves the root with <code>getByName(shiplet.id)</code>. Requests for the same Shiplet reach the same logical object, which already has the current review-layer version beside the code that changes it.</p>
-<p>Applying a preview is a guarded update inside that object. If the root has moved past the preview's base version, the update fails closed. The guarded update replaces a separate lock service for deciding which review layer won.</p>
-<h3>SQLite has the right scope</h3>
-<p>Each root gets its own SQLite-backed storage. The active layer, pending previews, provenance, and audit events live with the Shiplet they describe.</p>
-<p>That local scope makes the data model easier to reason about. A migration belongs to one product object, and an incident has a local timeline. The root reads the current layer directly from its own durable state, with no global projection in the request path.</p>
-<h3>Quiet review rooms can sleep</h3>
-<p>ShipletRoot also owns presence for its review link. Cloudflare's <a href="https://developers.cloudflare.com/durable-objects/best-practices/websockets/">WebSocket Hibernation API</a> can keep reviewers connected at the network while an idle object leaves memory, then wake the root when a new message arrives.</p>
-<p>The live-room abstraction survives that sleep cycle because durable state was already written beside the root. Cloudflare keeps idle connections at the network, which cuts the application time spent keeping quiet review rooms awake.</p>
-<h3>Shiplets shard themselves</h3>
-<p>More Shiplets create more roots. Traffic for one review stays with that review, and a broken customization stays inside its browser frame and Shiplet boundary. Other Shiplets keep moving through their own roots.</p>
-<p>One unusually hot Shiplet still has the throughput ceiling of one root. That is an honest limit and a useful one for the product we have. If a future Shiplet turns into a stadium, we can add fan-out behind its stable root identity.</p>
-<h2>Inheritance copies the useful part</h2>
-<p>Once a team has a review setup that works, the next Shiplet can inherit it.</p>
-<p>Inheritance takes a snapshot of the source review layer and records its provenance. The child receives its own root and its own version, so changes stay local. A later update to the source can arrive as another preview, where somebody can inspect it before the child changes.</p>
-<p>An organization can maintain a house review layer. A team can adapt that layer for its workflow, and a specific Shiplet can take the interface somewhere more specialized. Each step remains a usable review experience with a visible origin.</p>
-<p>The snapshot matters because review interfaces can encode real process. A distant template edit has to pass review before it can add a required approval or rename a status in the middle of somebody's work.</p>
+<p>Agents reach all of this through Shiplet's MCP, which exposes two tools: <code>search</code> and <code>execute</code>.</p>
+<p><code>search</code> finds the operation the agent needs without loading the whole platform into context. <code>execute</code> runs a small program in a disposable Dynamic Worker. That Worker gets no direct D1, R2, or Durable Object bindings. It can reach only the operations the trusted host exposes, with the caller's own access. Publishing, reading feedback, sharing a trace, and loading one with <code>getTraceContext</code> all go through the same door, and a trace comes back at the caller's level.</p>
+<figure class="docs-figure"><img src="/brand/why-shiplet/shiplet-root-runtime.webp" alt="Shiplet architecture showing the trusted browser host and Platform Worker reaching one ShipletRoot, plus Code Mode running in a disposable Dynamic Worker" width="1280" height="720" loading="lazy"><figcaption>Reviewing and changing a review use the same ShipletRoot. The Dynamic Worker runs Code Mode; the approved widget runs in the browser sandbox.</figcaption></figure>
+<p>Changing the review layer takes one more step. The program prepares a preview, a person tries it and approves it, and the root applies it only if its version still matches. A stale agent turn cannot overwrite something newer.</p>
+<h2>The review layer can speak the language of the work</h2>
+<p>The toolbar around the artifact is a widget, and a team can replace it with one built for the job in front of it. A widget can turn a ticket's acceptance criteria into the controls that prove them. When an engineer shares a build for invite recovery, each criterion opens the exact state it names, and the PM can pass or block it without reconstructing the ticket from memory.</p>
+<figure class="docs-figure"><img src="/brand/why-shiplet/ticket-acceptance-runner.webp" alt="An engineer-authored invite recovery build wrapped in a custom release-proof widget that turns acceptance criteria into test controls" width="1280" height="720" loading="lazy"><figcaption>An engineer-authored build carries its own release proof. Reviewers can open the expired-link state and replay a consumed invitation. The mobile criterion opens the flow at 390 pixels before a reviewer attaches evidence.</figcaption></figure>
+<p>A research readout needs a different shape. The researcher's evidence board keeps each product claim beside the observations behind it, contradictions included.</p>
+<figure class="docs-figure"><img src="/brand/why-shiplet/research-evidence-board.webp" alt="A researcher-authored invite recovery study wrapped in an evidence board that connects product claims to observations and open questions" width="1280" height="720" loading="lazy"><figcaption>The researcher-authored evidence board keeps each claim attached to the observations that shaped it. Reviewers can challenge the synthesis and attach another observation inside the same Shiplet.</figcaption></figure>
+<p>The widget is browser code in its own sandboxed frame. It never receives the reviewer's session or direct access to storage, and it creates feedback by asking the trusted host through a small, typed operation. The artifact underneath stays unchanged.</p>
 <h2>Software should be allowed to wander</h2>
-<p>I keep thinking about what it means for software to belong to the people using it. An organization should be able to choose where Shiplet lives: on Shiplet Cloud or in its own Cloudflare account. Moving between those homes should feel ordinary.</p>
+<p>The open format comes from a bigger instinct, and it applies to Shiplet itself. I keep thinking about what it means for software to belong to the people using it. An organization should be able to choose where Shiplet lives: on Shiplet Cloud or in its own Cloudflare account. Moving between those homes should feel ordinary.</p>
 <p>Once it is there, local coding agents should be able to reshape it until it fits the organization, while a path back to upstream improvements remains open. I care about that shape before I care about the neat open-source category for it.</p>
 <p>Git can move source between developers. Software with live state and local mutations carries a different kind of history. There is something else hiding in that gap. I do not have the name for it yet.</p>
-<h2>The rest of the stack can stay boring</h2>
-<p>The Platform Worker handles identity, policy, routing, and file delivery. R2 holds immutable artifact bytes. D1 powers the organization directory and views that cross many Shiplets. The root keeps the state that needs agreement inside one Shiplet.</p>
-<p>Most artifacts remain static, which keeps publishing fast and gives the thing being reviewed a tiny runtime. A custom review layer leaves the artifact on that path. When an artifact needs its own backend behavior, <a href="https://developers.cloudflare.com/cloudflare-for-platforms/workers-for-platforms/how-workers-for-platforms-works/">Workers for Platforms</a> gives Shiplet an advanced path with a separate security burden.</p>
-<p>Those boundaries also give the product somewhere clean to grow:</p>
-<ul><li>Approval stages can live beside the review-layer version they control.</li><li>Subscriptions can listen to the root's ordered events.</li><li>An automation can wake for one Shiplet and produce another reviewable preview.</li></ul>
-<p>If we add an agent that stays with a Shiplet, the root already gives it a bounded checkpoint connected to an ordered event stream. A capability boundary controls what the agent can do when it wakes for an approved event. The agent works in a sandbox and writes its result back as another preview, keeping the existing identity system and global coordination boundary.</p>
-<p>Each Shiplet can grow into exactly the review room its artifact needs, while the platform stays legible.</p>
-<h2>Try the review layer</h2>
-<p><a href="/docs/quickstart">Prepare your first review artifact</a>, then open the review link and leave a comment on the work itself.</p>`,
+<h2>Try it</h2>
+<p><a href="/docs/quickstart">Publish your first artifact</a> and leave a comment on the work itself. Then ask your agent to share the session that made it, and read <a href="/docs/traces">how traces work</a> to choose who sees what.</p>`,
   },
   {
     slug: "quickstart",
     title: "Quickstart",
     description:
-      "Upload an artifact and open its review link in a few minutes.",
+      "Share a build and the agent session that made it in a few minutes.",
     group: "Start",
     body: `
-<p>Prepare your first review from your terminal or agent. Use Node.js 22.12.0 or newer; no source checkout, global install, or npm account is required.</p>
-<h2>1. Run the CLI</h2>
+<p>Share a build and the agent session that made it, then choose who sees each. Use Node.js 22.12.0 or newer; no source checkout, global install, or npm account is required.</p>
+<h2>Ask your agent</h2>
+<p>The fastest way is to ask the agent that did the work. In Claude Code, Codex, or any agent that can run commands, say:</p>
+<pre><code>Publish ./dist to Shiplet for review, then share this session to it.</code></pre>
+<p>The agent runs <code>npx shiplet-cli prepare</code> and <code>npx shiplet-cli trace share --current</code>, and you approve the sign-in in your browser. On a cloud agent with no browser, it signs in with a code you approve on any device; see <a href="/docs/authentication">Choosing how to sign in</a>. <a href="/docs/code-mode-mcp">Code Mode MCP</a> is also supported: an agent connected over MCP can do the same without the CLI.</p>
+<h2>Or run it yourself</h2>
+<h3>1. Run the CLI</h3>
 <pre><code>npx shiplet-cli --help</code></pre>
 <p>Use <code>npx shiplet-cli</code> for Shiplet; <code>npx shiplet</code> is an unrelated project. See <a href="/docs/cli">CLI setup</a> for global installation and the full command reference.</p>
-<h2>2. Prepare your build</h2>
+<h3>2. Publish the artifact</h3>
 <pre><code>npx shiplet-cli prepare ./dist --name "Review build" --subdomain review-build --visibility organization --dry-run --json</code></pre>
-<p>Replace <code>./dist</code> with your file or static build folder. Check the dry-run output, then rerun without <code>--dry-run</code>. Approve the browser session on the same computer. The CLI preserves folder paths and returns the review URL. Organization visibility is the safe default. View access does not grant edit access.</p>
+<p>Replace <code>./dist</code> with your file or static build folder. Check the dry-run output, then rerun without <code>--dry-run</code> and approve the browser session on the same computer. The CLI returns the review link. Organization visibility is the safe default, and view access never grants edit access.</p>
 <p>Use <code>npx shiplet-cli login</code>, <code>npx shiplet-cli whoami</code>, and <code>npx shiplet-cli logout</code> to manage the session. Later commands reuse it for two hours by default.</p>
-<h2>3. Review and collect feedback</h2>
-<p>Open the returned review URL and leave a harmless comment. Find the ticket in <a href="/feedback">Feedback</a>. Reply and update status in the browser; the CLI does not expose feedback commands yet.</p>
-<p>Read <a href="/docs/review-feedback">Review feedback</a> for ticket work and <a href="/docs/access-control">Access control</a> before sharing the link.</p>
-<h2>4. Share the agent session</h2>
-<p>If an agent built the artifact, attach its session as a trace so reviewers can see how the work was made. Ask the agent to “share this session to Shiplet review-build”, or run:</p>
+<h3>3. Share the session</h3>
 <pre><code>npx shiplet-cli trace share --current --shiplet &lt;id&gt; --dry-run</code></pre>
-<p>Check what would be sent, then rerun without <code>--dry-run</code>. Secrets are masked on your computer first, and the trace stays private until you share it. Read <a href="/docs/traces">Traces</a> to choose who can read it.</p>
+<p>Check what would be sent, then rerun without <code>--dry-run</code>. Secrets are masked on your computer first, and the trace stays private until you share it. For a session with no artifact, use <code>--new</code> instead of <code>--shiplet</code>.</p>
+<h3>4. Choose who sees what</h3>
+<p>The artifact follows its visibility. Give the trace its own audiences and levels, for example the whole organization at Conversation and one reviewer at Full:</p>
+<pre><code>npx shiplet-cli trace audiences &lt;trace&gt; --shiplet &lt;id&gt; --audience organization=conversation --audience email:dana@example.com=full</code></pre>
+<p>Or open the trace and use its <strong>Sharing</strong> panel, with <strong>Preview as this audience</strong> to check before you share. Read <a href="/docs/traces">Traces</a> and <a href="/docs/access-control">Access control</a>.</p>
+<h3>5. Review and collect feedback</h3>
+<p>Open the review link and leave a harmless comment on the work. It keeps the revision it was left on. Find the ticket in <a href="/feedback">Feedback</a>, reply, and update its status in the browser. Read <a href="/docs/review-feedback">Review feedback</a> for ticket work.</p>
 <h2>Browser alternative</h2>
-<p><a href="/">Open the Shiplet app</a> and sign in when asked. A first-time user receives a default workspace and returns to the Prepare page. Keep <strong>Upload files</strong> selected to choose supported static files, name the artifact, choose its review subdomain, and select who can see it. Choose <strong>URL</strong> for an existing public preview.</p>
-<h2>Working with an agent</h2>
-<p>Give your agent the <a href="/docs/cli">CLI guide</a>, let it check the artifact with <code>npx shiplet-cli prepare --dry-run</code>, then approve publishing in your browser. When it finishes, ask it to share its session as a <a href="/docs/traces">trace</a>. <a href="/docs/code-mode-mcp">Code Mode MCP</a> is also supported for clients that use MCP, including API discovery and feedback automation. Follow its connection guide to use browser OAuth or supported agent registration.</p>
+<p><a href="/">Open the Shiplet app</a> and sign in when asked. A first-time user receives a default workspace and returns to the Prepare page. Keep <strong>Upload files</strong> selected to choose supported static files, name the artifact, choose its review subdomain, and select who can see it. Choose <strong>URL</strong> for an existing public preview. To add a session without a terminal, drop its <code>.jsonl</code> file onto the Shiplet's Traces panel.</p>
 <h2>Troubleshooting</h2>
 <table class="docs-table" tabindex="0"><thead><tr><th>Problem</th><th>Safe recovery</th></tr></thead><tbody>
   <tr><td>A file is rejected</td><td>Remove the unsupported or oversized file and prepare again.</td></tr>
   <tr><td>The subdomain is unavailable</td><td>Choose another lowercase, hyphenated review name.</td></tr>
   <tr><td>Publishing fails</td><td>Keep the local artifact and retry after the reported problem clears.</td></tr>
+  <tr><td>Sign-in never completes</td><td>On a computer without a browser, use <code>npx shiplet-cli login --device</code>.</td></tr>
   <tr><td>Access is denied</td><td>Sign in with the invited email or ask an owner for the required viewing grant.</td></tr>
 </tbody></table>
-<p><strong>Next:</strong> <a href="/docs/review-feedback">leave and manage review feedback</a>.</p>`,
+<p><strong>Next:</strong> read <a href="/docs/traces">Traces</a> to decide who can read the session.</p>`,
   },
   {
     slug: "traces",
@@ -199,6 +206,7 @@ const DOCS_PAGES: DocsPage[] = [
 <p>The easiest way is to ask your agent: say “Share this session to Shiplet &lt;name or id&gt;” in Claude Code or Codex. Your agent knows which session it is in, including subagents, screenshots, and videos. From a terminal, run:</p>
 <pre><code>npx shiplet-cli trace share --current --shiplet &lt;id&gt;</code></pre>
 <p>The CLI masks secrets on your computer before anything is sent, and Shiplet scans again when the trace arrives. Screenshots, videos, and PDFs the session produced are attached automatically (up to 20 MiB each). Add <code>--dry-run</code> to see what would be sent, or <code>--no-files</code> to leave the files out.</p>
+<p>Any other agent can share its sessions too, by writing the <a href="/docs/trace-format">open trace format</a>.</p>
 <p>To share a session that has no artifact to review, add <code>--new</code> instead of <code>--shiplet</code>: <code>npx shiplet-cli trace share --current --new --title "Fix the flaky test"</code>. Shiplet creates an ordinary Shiplet for it, whose page is the trace viewer.</p>
 <p>In a cloud agent with no browser on its computer, sign the CLI in first with <code>npx shiplet-cli login --device</code>, or connect <a href="/docs/code-mode-mcp">Shiplet MCP</a> with OAuth and let the agent call <code>createTraceUploadLink</code>. See <a href="/docs/authentication">Choosing how to sign in</a>.</p>
 <p>No terminal? Drop a session file (<code>.jsonl</code>) onto the drop zone in the Shiplet's Traces panel. The browser masks secrets before uploading. Claude Code keeps sessions in <code>~/.claude/projects/</code> and Codex keeps them in <code>~/.codex/sessions/</code>.</p>
@@ -222,9 +230,15 @@ const DOCS_PAGES: DocsPage[] = [
     slug: "access-control",
     title: "Access control",
     description:
-      "Choose who can view a Shiplet and who can change its review settings.",
+      "Choose who can open each Shiplet and who can read each agent session.",
     group: "Review",
     body: `
+<p>Shiplet has two kinds of access, set separately: who can open a Shiplet and its artifact, and who can read each agent session shared to it. Someone can review the work without reading the session, or read a summary of the session without seeing the work.</p>
+<table class="docs-table" tabindex="0"><thead><tr><th>Thing</th><th>Who</th><th>What they get</th></tr></thead><tbody>
+  <tr><td>A Shiplet and its artifact</td><td>The visibility below, plus grants to a person, an exact email address, or a team</td><td>View or edit, evaluated separately</td></tr>
+  <tr><td>A trace</td><td>A person, an email address, a team, the organization, anyone with the link, or an API key</td><td>Full, Conversation, or Summary, with optional per-audience rules</td></tr>
+</tbody></table>
+<p>Trace access is described in <a href="/docs/traces">Traces</a>. A new trace is private to its uploader and the Shiplet owner, whatever the Shiplet's visibility. The rest of this page covers Shiplets.</p>
 <p>Shiplet evaluates viewing and editing separately through the trusted host. <strong>View access never grants edit access.</strong></p>
 <h2>Visibility</h2>
 <table class="docs-table" tabindex="0"><thead><tr><th>Visibility</th><th>Who can open it</th></tr></thead><tbody>
@@ -306,7 +320,7 @@ const DOCS_PAGES: DocsPage[] = [
     description: "Leave contextual comments and work through review tickets.",
     group: "Review",
     body: `
-<p>Shiplet stores contextual feedback as tickets attached to one review link. A ticket includes its comment, page location, status, reviewer identity, and optional screenshot context.</p>
+<p>Shiplet stores contextual feedback as tickets attached to one review link. A ticket includes its comment, page location, status, reviewer identity, optional screenshot context, and the revision it was left on. When the work changes six times in a week, every comment still says which version it was about; the comments panel shows the current revision or all revisions.</p>
 <h2>After publishing with the CLI</h2>
 <p><a href="/docs/cli">Prepare the artifact with the CLI</a>, then open its review URL. Read, reply, and update status in the browser. The CLI does not yet expose feedback list, reply, or status commands. No custom MCP server is required for this workflow. For automated feedback processing, use documented REST operations with a least-privilege key from a secret store, or supported MCP.</p>
 <h2>Review in the browser</h2>
@@ -454,6 +468,100 @@ shiplet trace pull &lt;trace&gt; --shiplet &lt;id&gt; --as context</code></pre>
 <p><strong>Next:</strong> connect through browser OAuth, or ask a compatible agent to follow <code>https://shiplet.cc/auth.md</code>, then run <code>search</code>.</p>`,
   },
   {
+    slug: "trace-format",
+    title: "The open trace format",
+    description: "Write shiplet.trace/v1 so any agent can share its sessions to Shiplet.",
+    group: "Automation",
+    body: `
+<p>A <strong>trace</strong> is the full log of an agent session: the prompts, the agent's replies, and every tool call and result. Shiplet reads Claude Code and Codex sessions itself. Any other agent can share its sessions by writing one file in the open trace format, <code>shiplet.trace/v1</code>.</p>
+<p>The format is open so that sharing a session does not depend on which agent you use. Each agent keeps its sessions in its own format and folder. One small, documented format lets every agent's sessions be masked, shared at the levels you choose, read in the browser, and handed to another agent in the same way. It uses the same events Shiplet stores, so nothing is lost in translation.</p>
+<h2>A complete file</h2>
+<p>A trace file is <a href="https://jsonlines.org">JSON Lines</a>: one JSON object per line. The first line is the header, and every later line is one event, in the order the session happened.</p>
+<pre><code>{"format":"shiplet.trace/v1","harness":"acme-agent","harnessVersion":"1.4.0","title":"Fix the checkout total","cwd":"/work/shop","startedAt":"2026-11-19T09:00:00Z","models":["acme-large"]}
+{"seq":0,"t":"2026-11-19T09:00:01Z","kind":"user_message","text":"The checkout total ignores discounts. Fix it and run the tests."}
+{"seq":1,"t":"2026-11-19T09:00:04Z","kind":"tool_call","tool":{"name":"shell","callId":"c1","input":{"command":"npm test"}}}
+{"seq":2,"t":"2026-11-19T09:00:30Z","kind":"tool_result","result":{"callId":"c1","text":"12 passed"}}
+{"seq":3,"t":"2026-11-19T09:00:33Z","kind":"assistant_message","text":"Fixed, and the tests pass."}</code></pre>
+<h2>The header</h2>
+<div class="docs-table" tabindex="0"><table><thead><tr><th>Field</th><th>Required</th><th>Meaning</th></tr></thead><tbody>
+<tr><td><code>format</code></td><td>Yes</td><td>Always <code>"shiplet.trace/v1"</code> for this version.</td></tr>
+<tr><td><code>harness</code></td><td>Yes</td><td>Your agent's name as a slug: lowercase letters, digits, dots, and hyphens, starting with a letter or digit, at most 40 characters (<code>^[a-z0-9][a-z0-9.-]{0,39}$</code>). The viewer shows it title-cased, so <code>acme-agent</code> reads "Acme Agent".</td></tr>
+<tr><td><code>harnessVersion</code></td><td>No</td><td>Your agent's version, at most 64 characters.</td></tr>
+<tr><td><code>title</code></td><td>No</td><td>The trace title, 1 to 200 characters. <code>--title</code> overrides it; without either, the first prompt is used.</td></tr>
+<tr><td><code>cwd</code></td><td>No</td><td>The session's working directory. Shiplet lists files touched relative to it and reads named files from inside it. Only its last folder name is stored.</td></tr>
+<tr><td><code>startedAt</code></td><td>No</td><td>When the session started, as an ISO 8601 date-time. Defaults to the first event's time.</td></tr>
+<tr><td><code>models</code></td><td>No</td><td>Up to 20 model names the session used.</td></tr>
+</tbody></table></div>
+<p>Any other header field is an error. <code>null</code> is the same as leaving an optional field out.</p>
+<p><code>claude-code</code> and <code>codex</code> are reserved for Shiplet's own importers, so a trace labeled "Claude Code" always came from Claude Code's own log. To share those sessions, pass their native session files instead.</p>
+<h2>Events</h2>
+<p>Every event has these fields:</p>
+<div class="docs-table" tabindex="0"><table><thead><tr><th>Field</th><th>Required</th><th>Meaning</th></tr></thead><tbody>
+<tr><td><code>seq</code></td><td>Yes</td><td>The event's number: <code>0</code> for the first event, then one more on each line. A gap is an error, so a lost line is never silent.</td></tr>
+<tr><td><code>kind</code></td><td>Yes</td><td>One of the kinds below.</td></tr>
+<tr><td><code>t</code></td><td>No</td><td>When it happened, as an ISO 8601 date-time, or <code>null</code>.</td></tr>
+<tr><td><code>agent</code></td><td>No</td><td><code>"main"</code> (the default) or a subagent ID.</td></tr>
+<tr><td><code>id</code></td><td>No</td><td>Derived from <code>seq</code> as <code>e</code> plus six digits (<code>e000000</code>). If you send it, it must match.</td></tr>
+<tr><td><code>files</code></td><td>No</td><td>Paths of screenshots, videos, or PDFs to attach. See <a href="#attachments">Attachments</a>.</td></tr>
+</tbody></table></div>
+<p>Shiplet shows events in file order and does not re-sort them by time.</p>
+<h3>Messages, reasoning, and notes</h3>
+<p><code>user_message</code>, <code>assistant_message</code>, <code>reasoning</code>, and <code>system_note</code> each carry <code>text</code>.</p>
+<pre><code>{"seq":0,"kind":"user_message","text":"Add pagination to the orders page."}
+{"seq":1,"kind":"reasoning","text":"Start with the query that loads orders."}
+{"seq":2,"kind":"assistant_message","text":"Pagination is in, with 50 orders per page."}
+{"seq":3,"kind":"system_note","text":"Earlier context was summarized."}</code></pre>
+<h3>Tool calls and results</h3>
+<p>A <code>tool_call</code> carries <code>tool</code> with a <code>name</code>, a <code>callId</code> that is unique in the file, and an <code>input</code> object. A <code>tool_result</code> carries <code>result</code> with the <code>callId</code> of an earlier call, its <code>text</code>, and <code>isError</code> (<code>false</code> when left out).</p>
+<pre><code>{"seq":4,"kind":"tool_call","tool":{"name":"read_file","callId":"c2","input":{"path":"src/orders.ts"}}}
+{"seq":5,"kind":"tool_result","result":{"callId":"c2","isError":false,"text":"export async function listOrders() {"}}</code></pre>
+<p>Name shell tools <code>shell</code>, <code>Bash</code>, <code>exec_command</code>, or <code>local_shell</code>, with the command in <code>input.command</code>, so Shiplet can recognize test, lint, typecheck, and build commands as checks.</p>
+<h3>Subagents</h3>
+<p>Subagents are written inline. Give each one an ID, start it with <code>subagent_start</code> (with an optional <code>text</code> title of up to 200 characters), write its events with that <code>agent</code>, and end it with <code>subagent_end</code>.</p>
+<pre><code>{"seq":6,"agent":"reviewer","kind":"subagent_start","text":"Check the discount rules"}
+{"seq":7,"agent":"reviewer","kind":"tool_call","tool":{"name":"grep","callId":"c3","input":{"pattern":"discount","path":"src"}}}
+{"seq":8,"agent":"reviewer","kind":"tool_result","result":{"callId":"c3","text":"src/discounts.ts:3"}}
+{"seq":9,"agent":"reviewer","kind":"subagent_end"}</code></pre>
+<p>A subagent's events must come after its start and before its end, and an ID can start only once. Subagents can run at the same time as the main agent. When a subagent is still running at the end of the file, Shiplet closes it there.</p>
+<h3>Things you leave out</h3>
+<p>Use <code>omitted</code> with a <code>reason</code> for anything your agent leaves out on purpose, so readers can see that something was there.</p>
+<pre><code>{"seq":10,"kind":"omitted","reason":"Internal planning notes are not exported."}</code></pre>
+<h3>Unknown kinds and fields are errors</h3>
+<p>Version 1 is a closed set. An unknown <code>kind</code>, an unknown field, or a missing required field stops the share with the line and the field, for example <code>line 4, tool.input: must be an object</code>. Nothing is dropped quietly: if you mean to leave something out, write an <code>omitted</code> event. A final line that is not complete JSON, from a file still being written, is skipped and counted. A broken line anywhere else is an error.</p>
+<h2 id="attachments">Attachments</h2>
+<p>An event can name up to 20 files to attach in <code>files</code>. The CLI reads them from your computer when you share:</p>
+<pre><code>{"seq":11,"kind":"assistant_message","text":"Here is the new page.","files":["screenshots/orders.png"]}</code></pre>
+<ul><li>Paths are relative to the header's <code>cwd</code>, or absolute paths inside it, so <code>cwd</code> is required when an event names files.</li><li>A path must stay inside <code>cwd</code>, including after symbolic links are followed. A missing file is an error.</li><li>The file must be a <code>.png</code>, <code>.jpg</code>, <code>.jpeg</code>, <code>.gif</code>, <code>.webp</code>, <code>.mp4</code>, <code>.webm</code>, or <code>.pdf</code>. Each can be up to 20 MiB. Files over a limit are skipped and listed.</li><li>The CLI also attaches media files that tool calls and results mention, as it does for other agents. <code>--no-files</code> leaves out both kinds.</li><li>Images, videos, and PDFs are not scanned for secrets.</li><li>Version 1 has no inline file data. The dashboard drop zone cannot read paths from your computer, so it uploads the events without the named files; share with the CLI to include them.</li></ul>
+<h2>Limits</h2>
+<div class="docs-table" tabindex="0"><table><thead><tr><th>Limit</th><th>Value</th></tr></thead><tbody>
+<tr><td>One text field</td><td>256 KiB. Longer text keeps its first and last 64 KiB.</td></tr>
+<tr><td>One event</td><td>512 KiB after that. A larger tool input is replaced by its size.</td></tr>
+<tr><td>One upload</td><td>16 MiB of events after masking. Files go up separately.</td></tr>
+<tr><td>Events per trace</td><td>64 MiB.</td></tr>
+<tr><td>Files</td><td>20 MiB each, 200 files and 256 MiB per trace.</td></tr>
+<tr><td>Session file the CLI reads</td><td>256 MiB.</td></tr>
+</tbody></table></div>
+<h2>What Shiplet works out</h2>
+<p>You write only the header and events. Shiplet computes the rest on its server from the masked events, and never accepts these from a file:</p>
+<ul><li>a one-line summary of each tool call's input (sending <code>inputSummary</code> is an error);</li><li>the trace summary: duration, models, prompt count, tool counts, files touched, checks with their outcome, and error count;</li><li>the list of subagents, segments of at most 2,000 events or 1 MiB for paging the viewer, and the hashes that identify each stored part.</li></ul>
+<h2>How masking works</h2>
+<p>Secrets are masked on your computer before the trace is sent, and again by Shiplet when it arrives, so an upload that skipped the CLI is still masked.</p>
+<ul><li>Every string field in every event, and the title, is scanned. A match becomes a placeholder such as <code>[secret:github-token]</code>.</li><li><code>seq</code>, <code>id</code>, <code>t</code>, <code>agent</code>, <code>kind</code>, and call IDs are not changed, so the events still line up.</li><li>Masking catches common credential formats, such as API keys, tokens, private keys, and passwords in assignments. It cannot promise to find every secret, so check with <code>--dry-run</code> first.</li><li>The share output says how many secrets each side masked.</li></ul>
+<h2>Share a file</h2>
+<p>Check what would be sent, then share it to a Shiplet:</p>
+<pre><code>npx shiplet-cli trace share session.jsonl --shiplet &lt;id&gt; --dry-run
+npx shiplet-cli trace share session.jsonl --shiplet &lt;id&gt;</code></pre>
+<p>To share a session with no artifact to review, use <code>--new</code> instead of <code>--shiplet</code>: <code>npx shiplet-cli trace share session.jsonl --new --title "Fix the checkout total"</code>. A new trace is private until you share it. Read <a href="/docs/traces">Traces</a> to choose who sees it, and at which level.</p>
+<h3>Let your agent share the session it is in</h3>
+<p>Set <code>SHIPLET_TRACE_FILE</code> to the file your agent writes. Then <code>--current</code> shares that file, so the same command works in every agent:</p>
+<pre><code>SHIPLET_TRACE_FILE=/path/to/session.jsonl npx shiplet-cli trace share --current --shiplet &lt;id&gt;</code></pre>
+<ul><li><code>SHIPLET_TRACE_FILE</code> must name a regular <code>.jsonl</code> file. Links, folders, and devices are refused.</li><li>The CLI prints the path so you can check it, but never uploads it.</li><li>Without it, <code>--current</code> finds Claude Code and Codex sessions only.</li></ul>
+<p>An agent connected to <a href="/docs/code-mode-mcp">Shiplet MCP</a> calls <code>createTraceUploadLink</code>, then runs <code>npx shiplet-cli trace share --current --upload-url &lt;link&gt;</code>, which also reads <code>SHIPLET_TRACE_FILE</code>.</p>
+<h2>Versions</h2>
+<p>The header's <code>format</code> names the version. Version 1 is fixed: new kinds or fields will come in a new version, such as <code>shiplet.trace/v2</code>, not added to version 1. A CLI that does not know a file's version refuses it and asks you to update <code>shiplet-cli</code>.</p>
+<p><strong>Next:</strong> read <a href="/docs/traces">Traces</a> to share and continue sessions, or the <a href="/docs/cli">CLI guide</a> to sign in.</p>`,
+  },
+  {
     slug: "api-keys",
     title: "API keys",
     description:
@@ -576,7 +684,7 @@ function buildDocsPage(page: DocsPage) {
 		<div class="app-page-title">
 			<span class="success-card-label">Public docs</span>
 			<p class="docs-site-title">Shiplet documentation</p>
-			<p>Prepare an artifact, share its review link and the agent session behind it, and bring contextual feedback back to your team or agent.</p>
+			<p>Share what your agents made, and how they made it: artifacts and agent sessions, with exactly the access you choose.</p>
 		</div>
 		<div class="dashboard-actions">
 			<a class="btn btn-secondary btn-sm" href="/openapi.json">OpenAPI JSON</a>

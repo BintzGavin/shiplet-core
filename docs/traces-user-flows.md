@@ -1,18 +1,24 @@
 # Traces: user flows
 
-How people and agents use traces, end to end. The design and its decisions
-are in [traces-spec.md](./traces-spec.md); slice numbers below refer to it. When a flow
-ships, move its steps into a public page (`docs/traces.mdx`, added to
-`docs.json` under Review) rather than linking here.
+How people and agents use traces and artifacts together, end to end. Shiplet
+is where teams share what their agents made and how they made it, with access
+set per audience, across every agent. The design and its decisions are in
+[traces-spec.md](./traces-spec.md). The public guide is `docs/traces.mdx`
+(under Start in `docs.json`), and the format any agent can write is
+`docs/trace-format.mdx`.
 
-| Flow | Works from |
+| Flow | Status |
 | --- | --- |
-| 1. Share from inside the agent | Slice 1 (CLI, private only); audiences and produced files in slice 2; MCP-only agents in slice 3 |
-| 2. Share a file from the dashboard | Slice 4 |
-| 3. Choose who sees what | Slice 2 (CLI); slice 3 (MCP); slice 4 (dashboard) |
-| 4. A colleague reads it in the browser | Slice 4; the "copy prompt" path needs slice 3 |
-| 5. A colleague pulls it without the dashboard | Slice 1 for your own traces; colleagues in slice 2 (CLI) and slice 3 (MCP) |
-| 6. Change your mind | Deleting works in slice 1; changing audiences in slice 2 |
+| 1. Share from inside the agent | Shipped (Claude Code and Codex via `--current`; MCP-only agents via an upload link) |
+| 2. Share a file from the dashboard | Shipped |
+| 3. Choose who sees what | Shipped (CLI, MCP, and dashboard) |
+| 4. A colleague reads it in the browser | Shipped |
+| 5. A colleague pulls it without the dashboard | Shipped |
+| 6. Change your mind | Shipped |
+| 7. Share from any other agent | Open trace format (D20), shipping with this reframe |
+| 8. Hand work across agents | Shipped: any MCP or CLI agent can load any trace |
+| 9. Share a session with no artifact | Shipped (trace-only Shiplets, D19) |
+| 10. Find out which version a comment was about | Shipped (every comment keeps its revision) |
 
 ## 1. Share a session from inside the agent (recommended)
 
@@ -122,3 +128,50 @@ it, this drop zone accepts it as is.
   someone's machine stay there, and the share screen says so before you share.
 - Delete the trace. The canonical copy, every variant, and every attachment are
   removed. Permanently deleting the Shiplet deletes its traces too.
+
+## 7. Share a session from any other agent
+
+Claude Code and Codex are built in. Any other agent, including one released
+after this was written, shares a session by writing the open trace format.
+
+1. The agent (or a small adapter for it) writes its session as a
+   `shiplet.trace/v1` JSONL file: a header line naming the agent, then one event
+   per line for messages, reasoning, tool calls, tool results, and subagents.
+2. It runs `shiplet trace share <file.jsonl> --shiplet <id>`, or sets
+   `SHIPLET_TRACE_FILE` so `--current` finds the file. `--dry-run` shows what
+   would be sent.
+3. Masking, audiences, levels, and the viewer work exactly as in flows 1–4. The
+   viewer shows the agent's name from the header.
+
+## 8. Hand work across agents
+
+1. Someone shares a Claude Code session at Conversation level with their team.
+2. A teammate working in Codex, or in any agent connected to Shiplet's MCP,
+   says "Load Shiplet trace `<trace>` and carry on."
+3. The agent calls `getTraceContext` (or runs
+   `shiplet trace pull <trace> --shiplet <id> --as context`) and receives the
+   handoff at the teammate's level: the goal, what was done, files touched,
+   checks, and where it stopped.
+4. The new agent continues in its own session. That session can be shared back
+   to the same Shiplet, so the work's full history stays in one place.
+
+Native resume (reopening the original session inside the original app) is not
+part of this flow.
+
+## 9. Share a session with no artifact
+
+1. Ask the agent to "share this session to a new Shiplet", or run
+   `shiplet trace share --current --new --title "Fix the flaky test"`.
+2. Shiplet creates an ordinary Shiplet whose page is the trace viewer, with the
+   same access, lifecycle, and URLs as any Shiplet.
+3. Continue with flow 3.
+
+## 10. Find out which version a comment was about
+
+1. A reviewer leaves a comment on Monday. The agent publishes six revisions
+   during the week.
+2. Every comment keeps the revision it was left on. The comments panel's
+   revision filter shows comments from the current revision or all revisions.
+3. The trace for each revision shows what the agent changed in response, so the
+   comment, the version it was about, and the fix can be read together.
+

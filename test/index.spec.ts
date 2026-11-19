@@ -990,7 +990,7 @@ describe("Shiplet", () => {
       expect(landingHtml).not.toContain('href="/docs/external-setup"');
       expect(landingHtml).toContain('data-shiplet-docs-page="introduction"');
       expect(landingHtml.indexOf("Choose your task")).toBeLessThan(
-        landingHtml.indexOf("How Shiplet fits around your work"),
+        landingHtml.indexOf("How it fits together"),
       );
 
       const reviewLayerResponse = await requestHelper("/docs/extensions");
@@ -1218,8 +1218,10 @@ describe("Shiplet", () => {
 
       expect(response.status).toBe(200);
       expect(html).toContain("1. Run the CLI");
-      expect(html).toContain("2. Prepare your build");
-      expect(html).toContain("3. Review and collect feedback");
+      expect(html).toContain("Ask your agent");
+      expect(html).toContain("2. Publish the artifact");
+      expect(html).toContain("3. Share the session");
+      expect(html).toContain("5. Review and collect feedback");
       expect(html).toContain("Code Mode MCP</a> is also supported");
       expect(html).toContain('href="/docs/review-feedback"');
       expect(html).not.toContain('href="/docs/packages-revisions"');
@@ -1241,7 +1243,7 @@ describe("Shiplet", () => {
       expect(quickstartHtml).toContain("supported static files");
       expect(quickstartHtml).not.toContain("source-checkout CLI");
       expect(quickstartHtml.indexOf("safe default")).toBeLessThan(
-        quickstartHtml.indexOf("3. Review and collect feedback"),
+        quickstartHtml.indexOf("5. Review and collect feedback"),
       );
       expect(quickstartHtml).toContain("Code Mode MCP</a> is also supported");
 
@@ -1361,6 +1363,7 @@ describe("Shiplet", () => {
         "/docs/api-surface",
         "/docs/cli",
         "/docs/code-mode-mcp",
+        "/docs/trace-format",
         "/docs/extensions",
         "/docs/security",
         "/docs/publishing",
@@ -4741,10 +4744,10 @@ describe("Shiplet", () => {
       const html = await response.text();
 
       expect(html).toContain(
-        "<title>Shiplet | Review Builds, Files, and Live URLs</title>",
+        "<title>Shiplet | Share Agent Sessions and the Work They Made</title>",
       );
       expect(html).toContain(
-        '<meta name="description" content="Add a trusted review layer to builds, files, and live URLs for contextual feedback and agent handoff.">',
+        '<meta name="description" content="Share what your agents made and how they made it: artifacts and full agent sessions, with access you control per person, team, and level. Works with Claude Code, Codex, and any agent.">',
       );
       expect(html).toContain(
         '<link rel="canonical" href="https://shiplet.cc/">',
@@ -4771,7 +4774,7 @@ describe("Shiplet", () => {
       const docsHtml = await docs.text();
       expect(docsHtml).toContain("<title>Introduction | Shiplet Docs</title>");
       expect(docsHtml).toContain(
-        '<meta name="description" content="Prepare an artifact, share a review link, and collect contextual feedback.">',
+        '<meta name="description" content="Share what your agents made, and how they made it, with exactly the access you choose.">',
       );
       expect(docsHtml).toContain(
         '<link rel="canonical" href="https://shiplet.cc/docs">',

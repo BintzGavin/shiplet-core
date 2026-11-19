@@ -1,0 +1,229 @@
+---
+title: "The open trace format"
+description: "Write shiplet.trace/v1 so any agent can share its sessions to Shiplet."
+---
+
+A **trace** is the full log of an agent session: the prompts, the agent's
+replies, and every tool call and result. Shiplet reads Claude Code and Codex
+sessions itself. Any other agent can share its sessions by writing one file in
+the open trace format, `shiplet.trace/v1`.
+
+The format is open so that sharing a session does not depend on which agent
+you use. Each agent keeps its sessions in its own format and folder. One small,
+documented format lets every agent's sessions be masked, shared at the levels
+you choose, read in the browser, and handed to another agent in the same way.
+It uses the same events Shiplet stores, so nothing is lost in translation.
+
+## A complete file
+
+A trace file is [JSON Lines](https://jsonlines.org): one JSON object per line.
+The first line is the header, and every later line is one event, in the order
+the session happened.
+
+```json
+{"format":"shiplet.trace/v1","harness":"acme-agent","harnessVersion":"1.4.0","title":"Fix the checkout total","cwd":"/work/shop","startedAt":"2026-11-19T09:00:00Z","models":["acme-large"]}
+{"seq":0,"t":"2026-11-19T09:00:01Z","kind":"user_message","text":"The checkout total ignores discounts. Fix it and run the tests."}
+{"seq":1,"t":"2026-11-19T09:00:04Z","kind":"tool_call","tool":{"name":"shell","callId":"c1","input":{"command":"npm test"}}}
+{"seq":2,"t":"2026-11-19T09:00:30Z","kind":"tool_result","result":{"callId":"c1","text":"12 passed"}}
+{"seq":3,"t":"2026-11-19T09:00:33Z","kind":"assistant_message","text":"Fixed, and the tests pass."}
+```
+
+## The header
+
+| Field | Required | Meaning |
+| --- | --- | --- |
+| `format` | Yes | Always `"shiplet.trace/v1"` for this version. |
+| `harness` | Yes | Your agent's name as a slug: lowercase letters, digits, dots, and hyphens, starting with a letter or digit, at most 40 characters (`^[a-z0-9][a-z0-9.-]{0,39}$`). The viewer shows it title-cased, so `acme-agent` reads "Acme Agent". |
+| `harnessVersion` | No | Your agent's version, at most 64 characters. |
+| `title` | No | The trace title, 1 to 200 characters. `--title` overrides it; without either, the first prompt is used. |
+| `cwd` | No | The session's working directory. Shiplet lists files touched relative to it and reads named files from inside it. Only its last folder name is stored. |
+| `startedAt` | No | When the session started, as an ISO 8601 date-time. Defaults to the first event's time. |
+| `models` | No | Up to 20 model names the session used. |
+
+Any other header field is an error. `null` is the same as leaving an optional
+field out.
+
+`claude-code` and `codex` are reserved for Shiplet's own importers, so a trace
+labeled "Claude Code" always came from Claude Code's own log. To share those
+sessions, pass their native session files instead.
+
+## Events
+
+Every event has these fields:
+
+| Field | Required | Meaning |
+| --- | --- | --- |
+| `seq` | Yes | The event's number: `0` for the first event, then one more on each line. A gap is an error, so a lost line is never silent. |
+| `kind` | Yes | One of the kinds below. |
+| `t` | No | When it happened, as an ISO 8601 date-time, or `null`. |
+| `agent` | No | `"main"` (the default) or a subagent ID. |
+| `id` | No | Derived from `seq` as `e` plus six digits (`e000000`). If you send it, it must match. |
+| `files` | No | Paths of screenshots, videos, or PDFs to attach. See [Attachments](#attachments). |
+
+Shiplet shows events in file order and does not re-sort them by time.
+
+### Messages, reasoning, and notes
+
+`user_message`, `assistant_message`, `reasoning`, and `system_note` each carry
+`text`.
+
+```json
+{"seq":0,"kind":"user_message","text":"Add pagination to the orders page."}
+{"seq":1,"kind":"reasoning","text":"Start with the query that loads orders."}
+{"seq":2,"kind":"assistant_message","text":"Pagination is in, with 50 orders per page."}
+{"seq":3,"kind":"system_note","text":"Earlier context was summarized."}
+```
+
+### Tool calls and results
+
+A `tool_call` carries `tool` with a `name`, a `callId` that is unique in the
+file, and an `input` object. A `tool_result` carries `result` with the
+`callId` of an earlier call, its `text`, and `isError` (`false` when left out).
+
+```json
+{"seq":4,"kind":"tool_call","tool":{"name":"read_file","callId":"c2","input":{"path":"src/orders.ts"}}}
+{"seq":5,"kind":"tool_result","result":{"callId":"c2","isError":false,"text":"export async function listOrders() {"}}
+```
+
+Name shell tools `shell`, `Bash`, `exec_command`, or `local_shell`, with the
+command in `input.command`, so Shiplet can recognize test, lint, typecheck, and
+build commands as checks.
+
+### Subagents
+
+Subagents are written inline. Give each one an ID, start it with
+`subagent_start` (with an optional `text` title of up to 200 characters), write
+its events with that `agent`, and end it with `subagent_end`.
+
+```json
+{"seq":6,"agent":"reviewer","kind":"subagent_start","text":"Check the discount rules"}
+{"seq":7,"agent":"reviewer","kind":"tool_call","tool":{"name":"grep","callId":"c3","input":{"pattern":"discount","path":"src"}}}
+{"seq":8,"agent":"reviewer","kind":"tool_result","result":{"callId":"c3","text":"src/discounts.ts:3"}}
+{"seq":9,"agent":"reviewer","kind":"subagent_end"}
+```
+
+A subagent's events must come after its start and before its end, and an ID
+can start only once. Subagents can run at the same time as the main agent.
+When a subagent is still running at the end of the file, Shiplet closes it
+there.
+
+### Things you leave out
+
+Use `omitted` with a `reason` for anything your agent leaves out on purpose,
+so readers can see that something was there.
+
+```json
+{"seq":10,"kind":"omitted","reason":"Internal planning notes are not exported."}
+```
+
+### Unknown kinds and fields are errors
+
+Version 1 is a closed set. An unknown `kind`, an unknown field, or a missing
+required field stops the share with the line and the field, for example
+`line 4, tool.input: must be an object`. Nothing is dropped quietly: if you
+mean to leave something out, write an `omitted` event. A final line that is
+not complete JSON, from a file still being written, is skipped and counted.
+A broken line anywhere else is an error.
+
+## Attachments
+
+An event can name up to 20 files to attach in `files`. The CLI reads them from
+your computer when you share:
+
+```json
+{"seq":11,"kind":"assistant_message","text":"Here is the new page.","files":["screenshots/orders.png"]}
+```
+
+- Paths are relative to the header's `cwd`, or absolute paths inside it, so
+  `cwd` is required when an event names files.
+- A path must stay inside `cwd`, including after symbolic links are followed.
+  A missing file is an error.
+- The file must be a `.png`, `.jpg`, `.jpeg`, `.gif`, `.webp`, `.mp4`,
+  `.webm`, or `.pdf`. Each can be up to 20 MiB. Files over a limit are skipped
+  and listed.
+- The CLI also attaches media files that tool calls and results mention, as it
+  does for other agents. `--no-files` leaves out both kinds.
+- Images, videos, and PDFs are not scanned for secrets.
+- Version 1 has no inline file data. The dashboard drop zone cannot read paths
+  from your computer, so it uploads the events without the named files; share
+  with the CLI to include them.
+
+## Limits
+
+| Limit | Value |
+| --- | --- |
+| One text field | 256 KiB. Longer text keeps its first and last 64 KiB. |
+| One event | 512 KiB after that. A larger tool input is replaced by its size. |
+| One upload | 16 MiB of events after masking. Files go up separately. |
+| Events per trace | 64 MiB. |
+| Files | 20 MiB each, 200 files and 256 MiB per trace. |
+| Session file the CLI reads | 256 MiB. |
+
+## What Shiplet works out
+
+You write only the header and events. Shiplet computes the rest on its server
+from the masked events, and never accepts these from a file:
+
+- a one-line summary of each tool call's input (sending `inputSummary` is an
+  error);
+- the trace summary: duration, models, prompt count, tool counts, files
+  touched, checks with their outcome, and error count;
+- the list of subagents, segments of at most 2,000 events or 1 MiB for paging
+  the viewer, and the hashes that identify each stored part.
+
+## How masking works
+
+Secrets are masked on your computer before the trace is sent, and again by
+Shiplet when it arrives, so an upload that skipped the CLI is still masked.
+
+- Every string field in every event, and the title, is scanned. A match
+  becomes a placeholder such as `[secret:github-token]`.
+- `seq`, `id`, `t`, `agent`, `kind`, and call IDs are not changed, so the
+  events still line up.
+- Masking catches common credential formats, such as API keys, tokens, private
+  keys, and passwords in assignments. It cannot promise to find every secret,
+  so check with `--dry-run` first.
+- The share output says how many secrets each side masked.
+
+## Share a file
+
+Check what would be sent, then share it to a Shiplet:
+
+```bash
+npx shiplet-cli trace share session.jsonl --shiplet <id> --dry-run
+npx shiplet-cli trace share session.jsonl --shiplet <id>
+```
+
+To share a session with no artifact to review, use `--new` instead of
+`--shiplet`: `npx shiplet-cli trace share session.jsonl --new --title "Fix the
+checkout total"`. A new trace is private until you share it. Read
+[Traces](/docs/traces) to choose who sees it, and at which level.
+
+### Let your agent share the session it is in
+
+Set `SHIPLET_TRACE_FILE` to the file your agent writes. Then `--current` shares
+that file, so the same command works in every agent:
+
+```bash
+SHIPLET_TRACE_FILE=/path/to/session.jsonl npx shiplet-cli trace share --current --shiplet <id>
+```
+
+- `SHIPLET_TRACE_FILE` must name a regular `.jsonl` file. Links, folders, and
+  devices are refused.
+- The CLI prints the path so you can check it, but never uploads it.
+- Without it, `--current` finds Claude Code and Codex sessions only.
+
+An agent connected to [Shiplet MCP](/docs/code-mode-mcp) calls
+`createTraceUploadLink`, then runs
+`npx shiplet-cli trace share --current --upload-url <link>`, which also reads
+`SHIPLET_TRACE_FILE`.
+
+## Versions
+
+The header's `format` names the version. Version 1 is fixed: new kinds or
+fields will come in a new version, such as `shiplet.trace/v2`, not added to
+version 1. A CLI that does not know a file's version refuses it and asks you to
+update `shiplet-cli`.
+
+**Next:** read [Traces](/docs/traces) to share and continue sessions, or the
+[CLI guide](/docs/cli) to sign in.

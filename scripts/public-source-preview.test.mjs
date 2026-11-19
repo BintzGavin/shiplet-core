@@ -7,7 +7,7 @@ test("public guidance keeps source preview, participation, and security routes d
 	const contributing = readFileSync("CONTRIBUTING.md", "utf8");
 	const security = readFileSync("SECURITY.md", "utf8");
 	assert.match(readme, /source-preview/i);
-	assert.match(readme, /Shiplet is the review layer for agent-first teams/i);
+	assert.match(readme, /Shiplet is where teams share what their agents made, and how they made it/i);
 	assert.match(readme, /https:\/\/shiplet\.cc\/docs\/quickstart/i);
 	assert.match(readme, /https:\/\/shiplet\.cc\/api\/mcp/i);
 	assert.match(readme, /npm run setup:self-host/i);

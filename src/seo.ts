@@ -3,11 +3,11 @@ import { getPublicDocsPaths } from "./docs";
 
 export const DEFAULT_SITE_URL = "https://shiplet.cc";
 export const SITE_NAME = "Shiplet";
-export const SITE_TITLE = "Shiplet | Review Builds, Files, and Live URLs";
+export const SITE_TITLE = "Shiplet | Share Agent Sessions and the Work They Made";
 export const SITE_DESCRIPTION =
-  "Add a trusted review layer to builds, files, and live URLs for contextual feedback and agent handoff.";
+  "Share what your agents made and how they made it: artifacts and full agent sessions, with access you control per person, team, and level. Works with Claude Code, Codex, and any agent.";
 export const SITE_KEYWORDS =
-  "shiplets, build review, website annotation, contextual feedback, secure sharing, Code Mode MCP";
+  "agent traces, agent sessions, Claude Code, Codex, shiplets, build review, contextual feedback, secure sharing, Code Mode MCP";
 export const OG_IMAGE_WIDTH = 1200;
 export const OG_IMAGE_HEIGHT = 630;
 export const ASSET_CACHE_CONTROL = "public, max-age=31536000, immutable";
@@ -178,16 +178,17 @@ export function llmsTxt(appUrl?: string) {
   const baseUrl = normalizeAppUrl(appUrl);
   return `# Shiplet
 
-Add a trusted review layer to builds, files, and live URLs for contextual feedback and agent handoff.
+Share what your agents made, and how they made it: artifacts and full agent sessions, with access you control per person, team, and level, across Claude Code, Codex, and any agent.
 
 ## Core capabilities
 
+- Share agent sessions as traces: the prompts, replies, and every tool call, masked locally, private until shared, and readable at Full, Conversation, or Summary level per audience.
+- Any agent can share a session by writing the open trace format (shiplet.trace/v1); Claude Code and Codex are built in.
+- Load a shared trace into another agent over Code Mode MCP or the CLI to continue the work.
 - Prepare build outputs, static exports, and files for review.
 - Manage organizations, teams, user invites, and project access.
 - Collect in-context review feedback directly on artifacts.
 - Keep the artifact separate from Shiplet's trusted review layer.
-- Share agent sessions as traces: the prompts, replies, and every tool call, masked locally, private until shared, and readable at Full, Conversation, or Summary level.
-- Load a shared trace into another agent over Code Mode MCP or the CLI to continue the work.
 - Customize the review layer with a sandboxed widget when the built-in toolbar does not fit the team's process.
 - Prepare artifacts with the installable CLI; use the browser, scoped REST, or MCP for feedback.
 
@@ -199,6 +200,7 @@ Add a trusted review layer to builds, files, and live URLs for contextual feedba
 - Why Shiplet: ${absoluteSiteUrl(baseUrl, "/docs/why-shiplet")}
 - Review artifacts: ${absoluteSiteUrl(baseUrl, "/docs/publishing")}
 - Traces: ${absoluteSiteUrl(baseUrl, "/docs/traces")}
+- Open trace format: ${absoluteSiteUrl(baseUrl, "/docs/trace-format")}
 - Review layer: ${absoluteSiteUrl(baseUrl, "/docs/extensions")}
 - Security and isolation: ${absoluteSiteUrl(baseUrl, "/docs/security")}
 - OpenAPI: ${absoluteSiteUrl(baseUrl, "/openapi.json")}

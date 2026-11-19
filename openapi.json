@@ -68,7 +68,7 @@
     "schemas": {
       "TraceUpload": {
         "type": "object",
-        "description": "A shiplet.trace/v1 upload: normalized events plus attachments, built by the Shiplet CLI (`shiplet trace share --dry-run --json`). At most 16 MiB.",
+        "description": "A shiplet.trace/v1 upload: normalized events plus attachments, built by the Shiplet CLI (`shiplet trace share --dry-run --json`) from a Claude Code or Codex session or from a file in the open trace format (/docs/trace-format). At most 16 MiB.",
         "required": [
           "schemaVersion",
           "title",
@@ -93,7 +93,32 @@
             ]
           },
           "source": {
-            "type": "object"
+            "type": "object",
+            "description": "Where the session came from. harness names the agent: claude-code and codex for the built-in importers, or any agent's own slug (from the open format's header).",
+            "required": [
+              "harness"
+            ],
+            "additionalProperties": false,
+            "properties": {
+              "harness": {
+                "type": "string",
+                "pattern": "^[a-z0-9][a-z0-9.-]{0,39}$"
+              },
+              "harnessVersion": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "maxLength": 64
+              },
+              "importer": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "maxLength": 64
+              }
+            }
           },
           "events": {
             "type": "array"
@@ -530,7 +555,7 @@
           "Traces"
         ],
         "summary": "List traces you can read across Shiplets",
-        "description": "A trace is the full log of an agent session: the prompts, the agent's replies, and every tool call and result, from Claude Code or Codex. New traces are private to their uploader and the Shiplet owner; sharing gives each audience a redaction level (full, conversation, summary, or hidden) plus optional rules. Returns the newest traces the caller can read, each with its Shiplet and the caller's level.",
+        "description": "A trace is the full log of an agent session: the prompts, the agent's replies, and every tool call and result, from Claude Code, Codex, or any agent that writes the open shiplet.trace/v1 format (see /docs/trace-format). New traces are private to their uploader and the Shiplet owner; sharing gives each audience a redaction level (full, conversation, summary, or hidden) plus optional rules. Returns the newest traces the caller can read, each with its Shiplet and the caller's level.",
         "parameters": [
           {
             "name": "limit",
@@ -576,7 +601,7 @@
           "Traces"
         ],
         "summary": "Create a Shiplet to share one agent session",
-        "description": "Creates an ordinary Shiplet whose page is the trace viewer, for sharing a session that has no artifact to review. Then upload the session to it: run npx shiplet-cli trace share --current --shiplet <id>, or call createTraceUploadLink. A trace is the full log of an agent session: the prompts, the agent's replies, and every tool call and result, from Claude Code or Codex. The Shiplet is visible to its organization, and new traces stay private to their uploader and the Shiplet owner until shared.",
+        "description": "Creates an ordinary Shiplet whose page is the trace viewer, for sharing a session that has no artifact to review. Then upload the session to it: run npx shiplet-cli trace share --current --shiplet <id>, or call createTraceUploadLink. A trace is the full log of an agent session: the prompts, the agent's replies, and every tool call and result, from Claude Code, Codex, or any agent that writes the open shiplet.trace/v1 format (see /docs/trace-format). The Shiplet is visible to its organization, and new traces stay private to their uploader and the Shiplet owner until shared.",
         "requestBody": {
           "required": true,
           "content": {
@@ -621,7 +646,7 @@
           "Traces"
         ],
         "summary": "List a Shiplet's traces you can read",
-        "description": "A trace is the full log of an agent session: the prompts, the agent's replies, and every tool call and result, from Claude Code or Codex. New traces are private to their uploader and the Shiplet owner; sharing gives each audience a redaction level (full, conversation, summary, or hidden) plus optional rules.",
+        "description": "A trace is the full log of an agent session: the prompts, the agent's replies, and every tool call and result, from Claude Code, Codex, or any agent that writes the open shiplet.trace/v1 format (see /docs/trace-format). New traces are private to their uploader and the Shiplet owner; sharing gives each audience a redaction level (full, conversation, summary, or hidden) plus optional rules.",
         "parameters": [
           {
             "$ref": "#/components/parameters/ProjectId"
@@ -675,7 +700,7 @@
           "Traces"
         ],
         "summary": "Upload a trace",
-        "description": "A trace is the full log of an agent session: the prompts, the agent's replies, and every tool call and result, from Claude Code or Codex. New traces are private to their uploader and the Shiplet owner; sharing gives each audience a redaction level (full, conversation, summary, or hidden) plus optional rules. Secrets are masked again on ingest. Agents connected through MCP should use createTraceUploadLink instead, because MCP request bodies are capped at 128 KiB.",
+        "description": "A trace is the full log of an agent session: the prompts, the agent's replies, and every tool call and result, from Claude Code, Codex, or any agent that writes the open shiplet.trace/v1 format (see /docs/trace-format). New traces are private to their uploader and the Shiplet owner; sharing gives each audience a redaction level (full, conversation, summary, or hidden) plus optional rules. Secrets are masked again on ingest. Agents connected through MCP should use createTraceUploadLink instead, because MCP request bodies are capped at 128 KiB.",
         "parameters": [
           {
             "$ref": "#/components/parameters/ProjectId"
@@ -734,7 +759,7 @@
           "Traces"
         ],
         "summary": "Read a trace's manifest at your level",
-        "description": "A trace is the full log of an agent session: the prompts, the agent's replies, and every tool call and result, from Claude Code or Codex. New traces are private to their uploader and the Shiplet owner; sharing gives each audience a redaction level (full, conversation, summary, or hidden) plus optional rules.",
+        "description": "A trace is the full log of an agent session: the prompts, the agent's replies, and every tool call and result, from Claude Code, Codex, or any agent that writes the open shiplet.trace/v1 format (see /docs/trace-format). New traces are private to their uploader and the Shiplet owner; sharing gives each audience a redaction level (full, conversation, summary, or hidden) plus optional rules.",
         "parameters": [
           {
             "$ref": "#/components/parameters/ProjectId"
@@ -868,7 +893,7 @@
           "Traces"
         ],
         "summary": "Load a trace into your context",
-        "description": "Returns an agent-ready Markdown handoff of the trace at the caller's level: summary, files touched, checks, and the condensed conversation. A trace is the full log of an agent session: the prompts, the agent's replies, and every tool call and result, from Claude Code or Codex. New traces are private to their uploader and the Shiplet owner; sharing gives each audience a redaction level (full, conversation, summary, or hidden) plus optional rules.",
+        "description": "Returns an agent-ready Markdown handoff of the trace at the caller's level: summary, files touched, checks, and the condensed conversation. A trace is the full log of an agent session: the prompts, the agent's replies, and every tool call and result, from Claude Code, Codex, or any agent that writes the open shiplet.trace/v1 format (see /docs/trace-format). New traces are private to their uploader and the Shiplet owner; sharing gives each audience a redaction level (full, conversation, summary, or hidden) plus optional rules.",
         "parameters": [
           {
             "$ref": "#/components/parameters/ProjectId"
@@ -1080,7 +1105,7 @@
           "Traces"
         ],
         "summary": "Get a link to upload a trace",
-        "description": "Returns a 30-minute upload URL for one trace on this Shiplet. POST the shiplet.trace/v1 upload JSON to it (for example with curl), then PUT any pending attachments to uploadUrl/attachments/<sha256>. Treat the link like a password. A trace is the full log of an agent session: the prompts, the agent's replies, and every tool call and result, from Claude Code or Codex. New traces are private to their uploader and the Shiplet owner; sharing gives each audience a redaction level (full, conversation, summary, or hidden) plus optional rules.",
+        "description": "Returns a 30-minute upload URL for one trace on this Shiplet. POST the shiplet.trace/v1 upload JSON to it (for example with curl), then PUT any pending attachments to uploadUrl/attachments/<sha256>. Treat the link like a password. A trace is the full log of an agent session: the prompts, the agent's replies, and every tool call and result, from Claude Code, Codex, or any agent that writes the open shiplet.trace/v1 format (see /docs/trace-format). New traces are private to their uploader and the Shiplet owner; sharing gives each audience a redaction level (full, conversation, summary, or hidden) plus optional rules.",
         "parameters": [
           {
             "$ref": "#/components/parameters/ProjectId"

@@ -1,12 +1,31 @@
 ---
 title: "Quickstart"
-description: "Upload an artifact and open its review link in a few minutes."
+description: "Share a build and the agent session that made it in a few minutes."
 ---
 
-Prepare your first review from your terminal or agent. Use Node.js 22.12.0
-or newer; no source checkout, global install, or npm account is required.
+Share a build and the agent session that made it, then choose who sees each.
+Use Node.js 22.12.0 or newer; no source checkout, global install, or npm account
+is required.
 
-## 1. Run the CLI
+## Ask your agent
+
+The fastest way is to ask the agent that did the work. In Claude Code, Codex, or
+any agent that can run commands, say:
+
+```text
+Publish ./dist to Shiplet for review, then share this session to it.
+```
+
+The agent runs `npx shiplet-cli prepare` and `npx shiplet-cli trace share
+--current`, and you approve the sign-in in your browser. On a cloud agent with
+no browser, it signs in with a code you approve on any device; see
+[Choosing how to sign in](/docs/authentication).
+[Code Mode MCP](/docs/code-mode-mcp) is also supported: an agent connected over
+MCP can do the same without the CLI.
+
+## Or run it yourself
+
+### 1. Run the CLI
 
 ```bash
 npx shiplet-cli --help
@@ -15,38 +34,49 @@ npx shiplet-cli --help
 Use `npx shiplet-cli` for Shiplet; `npx shiplet` is an unrelated project.
 See [CLI setup](/docs/cli) for global installation and the full command reference.
 
-## 2. Prepare your build
+### 2. Publish the artifact
 
 ```bash
 npx shiplet-cli prepare ./dist --name "Review build" --subdomain review-build --visibility organization --dry-run --json
 ```
 
-Replace `./dist` with your file or static build folder. Check the dry-run output,
-then rerun without `--dry-run`. Approve the browser session on the same computer.
-The CLI preserves folder paths, defaults to organization visibility, and returns
-the review URL. Use `npx shiplet-cli login`, `npx shiplet-cli whoami`, and
-`npx shiplet-cli logout` to manage the session; later commands reuse it for two
-hours by default.
+Replace `./dist` with your file or static build folder. Check the dry-run
+output, then rerun without `--dry-run` and approve the browser session on the
+same computer. The CLI returns the review link. Organization visibility is the
+safe default, and view access never grants edit access. Use
+`npx shiplet-cli login`, `npx shiplet-cli whoami`, and `npx shiplet-cli logout`
+to manage the session; later commands reuse it for two hours by default.
 
-## 3. Review and collect feedback
-
-Open the returned review URL and leave a harmless comment. Find the ticket in
-[Feedback](https://shiplet.cc/feedback). Feedback replies and status changes are
-available in the browser; the CLI does not expose those commands yet.
-
-## 4. Share the agent session
-
-If an agent built the artifact, attach its session as a trace so reviewers can
-see how the work was made. Ask the agent to "share this session to Shiplet
-review-build", or run:
+### 3. Share the session
 
 ```bash
 npx shiplet-cli trace share --current --shiplet <id> --dry-run
 ```
 
 Check what would be sent, then rerun without `--dry-run`. Secrets are masked on
-your computer first, and the trace stays private until you share it. Read
-[Traces](/docs/traces) to choose who can read it.
+your computer first, and the trace stays private until you share it. For a
+session with no artifact, use `--new` instead of `--shiplet`.
+
+### 4. Choose who sees what
+
+The artifact follows its visibility. Give the trace its own audiences and
+levels, for example the whole organization at Conversation and one reviewer at
+Full:
+
+```bash
+npx shiplet-cli trace audiences <trace> --shiplet <id> --audience organization=conversation --audience email:dana@example.com=full
+```
+
+Or open the trace and use its **Sharing** panel, with **Preview as this
+audience** to check before you share. Read [Traces](/docs/traces) and
+[Access control](/docs/access-control).
+
+### 5. Review and collect feedback
+
+Open the review link and leave a harmless comment on the work. It keeps the
+revision it was left on. Find the ticket in [Feedback](https://shiplet.cc/feedback),
+reply, and update its status in the browser. Read
+[Review feedback](/docs/review-feedback) for ticket work.
 
 ## Browser alternative
 
@@ -89,15 +119,6 @@ or global Feedback view to find the ticket.
 Read [Review feedback](/docs/review-feedback) for replies and ticket status.
 Read [Access control](/docs/access-control) before sharing the link.
 
-## Working with an agent
-
-Give your agent the [CLI guide](/docs/cli), let it check the artifact with
-`npx shiplet-cli prepare --dry-run`, then approve publishing in your browser.
-When it finishes, ask it to share its session as a [trace](/docs/traces).
-[Code Mode MCP](/docs/code-mode-mcp) is also supported for clients that use MCP,
-including API discovery and feedback automation. Follow its connection guide
-to use browser OAuth or supported agent registration.
-
 ## Troubleshooting
 
 | Problem | Safe recovery |
@@ -105,10 +126,11 @@ to use browser OAuth or supported agent registration.
 | A file is rejected | Remove the unsupported or oversized file and prepare again. |
 | The subdomain is unavailable | Choose another lowercase, hyphenated review name. |
 | Publishing fails | Keep the local artifact and retry after the reported problem clears. |
+| Sign-in never completes | On a computer without a browser, use `npx shiplet-cli login --device`. |
 | Sign-in or access is denied | Sign in with the invited email or ask an owner for the required viewing grant. |
 | An external URL cannot load | Confirm it is public HTTPS on a standard port and does not redirect to a private address. |
 | Review controls are unavailable | Reload the review link and sign in if asked. |
 
 ## Next action
 
-[Leave and manage review feedback](/docs/review-feedback).
+Read [Traces](/docs/traces) to decide who can read the session.

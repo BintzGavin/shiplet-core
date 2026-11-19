@@ -43,6 +43,7 @@
         "pages": [
           "docs/cli",
           "docs/code-mode-mcp",
+          "docs/trace-format",
           "docs/api-keys",
           "docs/api-surface"
         ]

@@ -1,79 +1,101 @@
 ---
 title: "Introduction"
-description: "Prepare an artifact, share a review link, and collect contextual feedback."
+description: "Share what your agents made, and how they made it, with exactly the access you choose."
 ---
 
-Shiplet is the review layer for agent-first teams. The artifact remains the work
-your team reviews, whether it is a build output, static export, standalone file,
-or public preview URL. Shiplet places that work inside a trusted review
-experience where people can comment and agents can pick up the resulting
-tickets.
+Shiplet is where teams share what their agents made, and how they made it.
 
-The agent session that made the work can travel with it. A
-[trace](/docs/traces) is the full log of that session: the prompts, the agent's
-replies, and every tool call and result. Share it next to the Shiplet so
-reviewers can see how a change was made, and so a colleague's agent can pick the
-work up where yours left off.
+Agents do much of the building now. The work itself turns into a link, a build,
+or a file. The session that produced it, with the prompts, the agent's
+reasoning, and every command and check, stays in one person's terminal and is
+gone when they close it. Feedback lands in scattered threads, on a version of
+the work that has changed six times since.
 
-[Open the Shiplet app](https://shiplet.cc/) to prepare a review. Shiplet hosts
-uploaded files and can attach its review layer to an existing public URL.
+Shiplet keeps both together and makes both shareable:
+
+- The **artifact** is the work: a build, prototype, document, file, or URL. It
+  gets one review link where people comment on the work itself, and every
+  comment keeps the version it was left on.
+- The **trace** is the full agent session: prompts, replies, every tool call
+  and result, screenshots, and videos. Secrets are masked on your computer
+  before it leaves, and it stays private until you share it.
+
+[Open the Shiplet app](https://shiplet.cc/), or ask your agent to share what it
+just built.
+
+## Decide exactly who sees what
+
+Access is set per Shiplet and per trace, and the two are separate. Someone can
+review the work without reading the session, or read a summary of the session
+without seeing its tool output.
+
+| You share | With | At |
+| --- | --- | --- |
+| An artifact | Yourself, your organization, anyone with the link, or the public; or one person, email address, or team | View or edit, granted separately |
+| A trace | A person, an email address, a team, your organization, anyone with the link, or an API key | Full, Conversation, or Summary, with optional rules to mask terms, hide paths, hide reasoning, or hide videos |
+
+The most specific audience wins, and **Preview as this audience** shows a trace
+exactly as someone else will see it. Read [Access control](/docs/access-control)
+and [Traces](/docs/traces).
+
+## Works with every agent
+
+Claude Code and Codex sessions can be shared from inside the agent: ask it to
+"share this session to Shiplet". Any other agent can share a session by writing
+the [open trace format](/docs/trace-format). Any agent that speaks MCP or can
+run the CLI can load a shared trace and pick the work up where the last one
+left off, whichever agent wrote it.
+
+## Keep the context
+
+The session sits next to the work it produced, so a reviewer can see how a
+change was made and a teammate can continue it days later. Comments stay
+attached to the revision they were left on, so "which version was that about?"
+has an answer. Everything stays for as long as you keep the Shiplet;
+[Traces](/docs/traces) lists the retention rules.
 
 ## Choose your task
 
-- **[Publish my first review](/docs/quickstart):** prepare an artifact and open
-  its review link.
-- **[Share an agent session](/docs/traces):** ask your agent to share the
-  session it is in, then choose who can read it and at what level.
-- **[Collect feedback](/docs/review-feedback):** leave contextual comments,
-  reply to reviewers, and move tickets through review.
-- **[Automate with an agent](/docs/cli):** install the CLI and approve access
-  in your browser; no custom MCP server is required.
+- **[Share your first artifact and session](/docs/quickstart):** publish a
+  build and attach the agent session that made it.
+- **[Share an agent session](/docs/traces):** share the session you are in,
+  then choose who can read it and at what level.
+- **[Collect feedback](/docs/review-feedback):** leave comments on the work and
+  work through review tickets.
 - **[Manage access](/docs/access-control):** choose who can view or edit each
   Shiplet.
-- **[Connect a website](/docs/embed):** attach the Shiplet review
-  layer to an existing site.
+- **[Connect your agent](/docs/authentication):** sign in the CLI or MCP with
+  OAuth, including from cloud agents with no browser.
+- **[Connect a website](/docs/embed):** collect feedback on a live site.
 
-Read [Why Shiplet](/docs/why-shiplet) for the product idea behind a customizable
-review room rooted in durable state.
+Read [Why Shiplet](/docs/why-shiplet) for the idea behind the product.
 
-## How Shiplet fits around your work
+## How it fits together
 
-The artifact and the review layer have different jobs:
+- A **Shiplet** owns the review link, its access, its revisions, its comments,
+  and its traces.
+- The **review layer** is the toolbar and trusted controls around the artifact.
+  A team can replace it with a [custom widget](/docs/extensions) without
+  changing the work under review.
+- A **trace-only Shiplet** holds a session with no artifact, for work that has
+  nothing to click on.
 
-- The **artifact** is the page, file, build, or URL under review.
-- The **Shiplet** owns the stable review link, access policy, and feedback.
-- The **review layer** provides the toolbar and trusted controls around the
-  artifact.
-- A **trace** is an agent session attached to the Shiplet. It is private until
-  you share it, and each audience sees it at the level you choose.
-
-Artifact code does not receive reviewer credentials or direct access to
-Shiplet's APIs. The trusted host keeps identity and review actions outside the
-artifact frame.
-
-## Customize the review experience
-
-The built-in review toolbar works for ordinary reviews. Shiplet can also attach
-a custom widget and workflow to the review layer when a team needs different
-controls or statuses. Those customizations belong to Shiplet's review
-experience, so they do not become part of the work being reviewed. Read
-[The review layer](/docs/extensions) for the boundary.
+Artifact and widget code never receive reviewer credentials or direct access to
+Shiplet's APIs. The trusted host keeps identity and every review action outside
+the artifact frame.
 
 ## Automation
 
-- **[CLI](/docs/cli):** run `npx shiplet-cli --help`, then approve a browser
-  session to prepare artifacts, manage revisions, and share traces from your
-  terminal or agent.
-- **[Code Mode MCP](/docs/code-mode-mcp):** connect an MCP client for API
-  discovery, publishing, feedback automation, and loading a shared trace into
-  your agent. Browser OAuth and supported
-  agent registration are available.
+- **[CLI](/docs/cli):** `npx shiplet-cli` publishes artifacts, manages
+  revisions, and shares and pulls traces from your terminal or agent.
+- **[Code Mode MCP](/docs/code-mode-mcp):** connect any MCP client to publish,
+  work with feedback, and load shared traces. Sign in with browser OAuth.
 - **[REST API](/docs/api-keys):** use a narrowly scoped organization API key
-  from a secret store for CI and unattended workflows.
+  for CI and other unattended jobs.
 
 The [OpenAPI document](https://shiplet.cc/openapi.json) is the machine-readable
 contract for documented public REST operations.
 
 ## Next action
 
-[Prepare your first review artifact](/docs/quickstart).
+[Share your first artifact and session](/docs/quickstart).

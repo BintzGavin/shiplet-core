@@ -7,6 +7,7 @@ import * as React from "react";
 
 import {
 	TRACE_LIMITS,
+	harnessLabel,
 	parseJsonl,
 	prepareTraceUpload,
 	type TraceEvent,
@@ -60,6 +61,14 @@ async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
 
 const tracePath = (projectId: string, traceId?: string) =>
 	`/api/shiplets/${encodeURIComponent(projectId)}/traces${traceId ? `/${encodeURIComponent(traceId)}` : ""}`;
+
+// Redaction rules write reasons such as "tool output hidden"; anything else is
+// the agent's own reason for leaving something out (open format, D20).
+function omittedText(reason: string | undefined) {
+	if (!reason) return "Hidden at your level.";
+	if (/\bhidden$/.test(reason)) return `${reason[0].toUpperCase()}${reason.slice(1)} at your level.`;
+	return `Left out by the agent: ${reason}`;
+}
 
 function countLabel(count: number, noun: string) {
 	return `${count} ${noun}${count === 1 ? "" : "s"}`;
@@ -211,11 +220,15 @@ export function TraceViewerApp({ projectId, traceId, origin, embedded = false }:
 	return (
 		<div className="trace-viewer" data-trace-id={traceId}>
 			<section className="success-card shiplet-panel shiplet-focus-strip trace-header">
-				<span className="success-card-label">Trace · {manifest.source?.harness === "codex" ? "Codex" : "Claude Code"} session</span>
+				<span className="success-card-label">Trace · {harnessLabel(manifest.source?.harness)} session</span>
 				{embedded ? <h2>{manifest.title}</h2> : <h1>{manifest.title}</h1>}
 				<p className="trace-definition">{TRACE_DEFINITION}</p>
 				<div className="trace-meta">
 					<span>You're seeing</span> <LevelStamp level={access.level} />
+					<span className="trace-harness" title={manifest.source?.harness}>
+						{harnessLabel(manifest.source?.harness)}
+						{manifest.source?.harnessVersion ? ` ${manifest.source.harnessVersion}` : ""}
+					</span>
 					<span>{formatDuration(summary?.durationSeconds)}</span>
 					<span>{(manifest.models || []).join(", ") || "unknown model"}</span>
 					<span className={`status-badge trace-outcome trace-outcome-${summary?.outcome}`}>
@@ -237,7 +250,7 @@ export function TraceViewerApp({ projectId, traceId, origin, embedded = false }:
 					)}
 				</div>
 				<p className="trace-hint">
-					Your browser cannot write into Claude Code or Codex. To continue this work, give your agent the prompt (it loads the trace over Shiplet MCP), or run the
+					Your browser cannot write into your agent. To continue this work, give your agent the prompt (it loads the trace over Shiplet MCP), or run the
 					command to print an agent-ready handoff.
 				</p>
 			</section>
@@ -450,7 +463,7 @@ function TraceTimeline({
 					case "omitted":
 						return (
 							<li key={event.id} className={`trace-event trace-event-omitted${nested}`}>
-								{event.reason ? `${event.reason[0].toUpperCase()}${event.reason.slice(1)} at your level.` : "Hidden at your level."}
+								{omittedText(event.reason)}
 							</li>
 						);
 					default:
@@ -712,7 +725,7 @@ export function TracesPanel({ projectId, canEdit }: { projectId: string; canEdit
 	const accept = async (dropped: DroppedFile[]) => {
 		setStatus("");
 		setPrepared(null);
-		if (!dropped.length) return setStatus("Drop a Claude Code .jsonl file or session folder, or a Codex rollout-*.jsonl.");
+		if (!dropped.length) return setStatus("Drop a Claude Code .jsonl file or session folder, a Codex rollout-*.jsonl, or a shiplet.trace/v1 file.");
 		const subagents = dropped.filter((item) => item.path.includes("/subagents/"));
 		const mains = dropped.filter((item) => !item.path.includes("/subagents/")).sort((a, b) => b.file.size - a.file.size);
 		const main = mains[0] || subagents.shift();
@@ -727,7 +740,10 @@ export function TracesPanel({ projectId, canEdit }: { projectId: string; canEdit
 			setPrepared(result);
 			setTitle(result.upload.title);
 		} catch (caught) {
-			setStatus((caught as Error).name === "TraceFormatError" ? "That file is not a Claude Code or Codex session." : (caught as Error).message);
+			const error = caught as Error & { format?: string | null };
+			if (error.name !== "TraceFormatError") setStatus(error.message);
+			else if (error.format === "shiplet") setStatus(`That shiplet.trace/v1 file is invalid: ${error.message}.`);
+			else setStatus("That file is not a Claude Code, Codex, or shiplet.trace/v1 session.");
 		}
 	};
 
@@ -772,7 +788,7 @@ export function TracesPanel({ projectId, canEdit }: { projectId: string; canEdit
 						<strong>Or drop a session file here</strong>
 						<span>
 							Claude Code: ~/.claude/projects/&lt;project&gt;/&lt;session&gt;.jsonl (drop its folder too, for subagents). Codex: ~/.codex/sessions/…/rollout-*.jsonl.
-							On a Mac, Cmd+Shift+. shows hidden folders.
+							Any other agent: a file in the <a href="/docs/trace-format">open trace format</a>. On a Mac, Cmd+Shift+. shows hidden folders.
 						</span>
 					</label>
 					{prepared ? (
@@ -796,8 +812,11 @@ export function TracesPanel({ projectId, canEdit }: { projectId: string; canEdit
 								<input id="traceUploadTitle" value={title} maxLength={200} onChange={(event) => setTitle(event.target.value)} />
 							</div>
 							<p>
-								{prepared.format === "codex" ? "Codex" : "Claude Code"} session · {prepared.upload.events.length} events · {prepared.upload.attachments.length} image(s) ·
+								{harnessLabel(prepared.upload.source.harness)} session · {prepared.upload.events.length} events · {prepared.upload.attachments.length} image(s) ·
 								secrets masked in this browser: {prepared.masked.count}. Nothing has been sent yet. The trace starts private.
+								{prepared.files.length
+									? ` ${prepared.files.length} file(s) named in the session are attached only by the CLI (npx shiplet-cli trace share).`
+									: ""}
 							</p>
 							<button type="submit" className="btn btn-primary btn-sm">
 								Upload
@@ -815,7 +834,7 @@ export function TracesPanel({ projectId, canEdit }: { projectId: string; canEdit
 						<li key={trace.id}>
 							<a href={`/shiplets/${encodeURIComponent(projectId)}/traces/${encodeURIComponent(trace.id)}`}>{trace.title}</a>
 							<span className="trace-attachment-meta">
-								{trace.harness === "codex" ? "Codex" : "Claude Code"} · {trace.eventCount} events · {new Date(trace.createdOn).toLocaleDateString()}
+								{harnessLabel(trace.harness)} · {trace.eventCount} events · {new Date(trace.createdOn).toLocaleDateString()}
 							</span>
 							{trace.access ? <LevelStamp level={trace.access.level} /> : null}
 							<span className={`status-badge trace-sharing-${trace.sharing}`}>{trace.sharing === "shared" ? "Shared" : "Private"}</span>

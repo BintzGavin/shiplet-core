@@ -7,6 +7,7 @@ import { describe, expect, it } from "vitest";
 import app from "../src/index";
 import claudeMain from "./fixtures/traces/claude-code-main.jsonl?raw";
 import claudeSub from "./fixtures/traces/claude-code-main/subagents/agent-a1.jsonl?raw";
+import openTrace from "./fixtures/traces/open-format.jsonl?raw";
 import { parseJsonl, prepareTraceUpload, type TraceUpload } from "../src/cli/trace-core.mjs";
 
 type TestEnv = Omit<Env, "SHIPLET_ENABLED_FEATURE_FLAGS"> & { SHIPLET_ENABLED_FEATURE_FLAGS?: string };
@@ -133,6 +134,47 @@ describe("trace API (slice 1)", () => {
       const text = await segment.text();
       expect(text).toContain("[secret:shiplet-api-key]");
       expect(text).not.toContain(planted);
+    });
+  });
+
+  it("stores a session from any agent in the open format, names its harness, and masks it on ingest", async () => {
+    await withTraces(async () => {
+      const organizationId = await createOrganization();
+      const projectId = await createShiplet(organizationId);
+      const prepared = await prepareTraceUpload({ main: parseJsonl(openTrace), importer: "trace-api-test" });
+      expect(prepared.upload.source.harness).toBe("acme-agent");
+      // Plant a secret after client masking, as a raw API client might.
+      const planted = `shiplet_org_${"d4e5f6".repeat(4)}`;
+      const upload = {
+        ...prepared.upload,
+        title: `Deploy with ${planted}`,
+        clientMasking: { coreVersion: "1", count: 0, kinds: {} },
+        events: prepared.upload.events.map((event) => (event.kind === "assistant_message" ? { ...event, text: `${event.text} ${planted}` } : event)),
+      };
+      const response = await post(projectId, upload);
+      expect(response.status).toBe(201);
+      const created = (await response.json()) as {
+        trace: { id: string; harness: string };
+        manifest: { title: string; source: { harness: string; harnessVersion: string }; agents: unknown[]; summary: { outcome: string } };
+        serverMasked: { count: number; kinds: Record<string, number> };
+      };
+      expect(created.trace.harness).toBe("acme-agent");
+      expect(created.manifest.source).toMatchObject({ harness: "acme-agent", harnessVersion: "1.4.0" });
+      expect(created.manifest.agents).toEqual([{ id: "reviewer", title: "Check the discount rules" }]);
+      expect(created.manifest.summary.outcome).toBe("last-check-passed");
+      expect(created.serverMasked).toEqual({ count: 2, kinds: { "shiplet-api-key": 2 } });
+      expect(created.manifest).toMatchObject({ title: "Deploy with [secret:shiplet-api-key]" });
+      expect(JSON.stringify(created)).not.toContain(planted);
+      const segment = await (await request(`/api/shiplets/${projectId}/traces/${created.trace.id}/segments/0`, { headers: OWNER })).text();
+      expect(segment).toContain("[secret:shiplet-api-key]");
+      expect(segment).toContain("[secret:github-token]");
+      expect(segment).not.toContain(planted);
+      const listed = (await (await request(`/api/shiplets/${projectId}/traces`, { headers: OWNER })).json()) as { traces: Array<{ harness: string }> };
+      expect(listed.traces.map((trace) => trace.harness)).toEqual(["acme-agent"]);
+
+      const invalid = await post(projectId, { ...prepared.upload, source: { ...prepared.upload.source, harness: "Acme Agent" } });
+      expect(invalid.status).toBe(400);
+      expect(((await invalid.json()) as { errors: Array<{ path: string }> }).errors.map((error) => error.path)).toContain("source.harness");
     });
   });
 
