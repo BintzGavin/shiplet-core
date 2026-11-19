@@ -297,8 +297,12 @@ export async function readSegment(env: Env, row: TraceRow, index: number): Promi
 		.map((line) => JSON.parse(line) as TraceEvent);
 }
 
-export async function readAttachment(env: Env, row: TraceRow, sha256: string) {
-	return env.REVIEW_ASSETS.get(attachmentKey(row.project_id, row.id, sha256));
+export async function readAttachment(env: Env, row: TraceRow, sha256: string, range?: R2Range) {
+	return env.REVIEW_ASSETS.get(attachmentKey(row.project_id, row.id, sha256), range ? { range } : undefined);
+}
+
+export async function attachmentSize(env: Env, row: TraceRow, sha256: string) {
+	return (await env.REVIEW_ASSETS.head(attachmentKey(row.project_id, row.id, sha256)))?.size ?? null;
 }
 
 async function deletePrefix(bucket: R2Bucket, prefix: string) {
