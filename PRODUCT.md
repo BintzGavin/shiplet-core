@@ -9,13 +9,16 @@ product
 Shiplet serves agent-first software teams reviewing build output, static exports,
 standalone files, and public preview URLs. Human reviewers work directly on the
 artifact while agents and CI systems collect the resulting tickets and continue
-the implementation workflow.
+the implementation workflow. Agent sessions travel with the work as traces, so
+reviewers can see how a change was made and teammates can continue it in their
+own agent.
 
 ## Product Purpose
 
 Shiplet places artifacts inside a trusted review experience with explicit
-identity, access policy, contextual feedback, and agent handoff. Success means a
-team can publish a review, understand who can access it, leave precise feedback,
+identity, access policy, contextual feedback, agent traces, and agent handoff.
+Success means a team can publish a review, understand who can access it, leave
+precise feedback, share the agent session behind the work at the right level,
 and move that feedback back into automated work without exposing credentials or
 mixing the artifact with the trusted host.
 

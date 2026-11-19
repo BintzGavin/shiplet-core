@@ -34,7 +34,9 @@ import {
 	canDeleteTrace,
 	canManageAudiences,
 	listAudiences,
+	listAudiencesForTraces,
 	resolveTraceLevel,
+	type MembershipMemo,
 	type AudienceTargetType,
 	type ResolvedAccess,
 } from "./audiences";
@@ -85,6 +87,9 @@ async function viewEvents(env: Env, view: TraceView, index: number) {
 		? readVariantSegment(env, view.row, view.resolved.profileDigest, index)
 		: readSegment(env, view.row, index);
 }
+
+// Only shared traces consult audiences (resolveTraceLevel).
+const sharedTraceIds = (rows: TraceRow[]) => rows.filter((row) => row.sharing === "shared").map((row) => row.id);
 
 const accessSummary = (resolved: ResolvedAccess) => ({ level: resolved.level, via: resolved.via });
 
@@ -180,9 +185,11 @@ export async function handleListTraces(env: Env, access: TraceAccess, query: { c
 	const limitParam = Number(query.limit ?? 50);
 	const limit = Number.isInteger(limitParam) ? Math.min(100, Math.max(1, limitParam)) : 50;
 	const { rows, nextCursor } = await listProjectTraces(env.DB, access.project.id, { cursor: decodeCursor(query.cursor), limit });
+	const audiences = await listAudiencesForTraces(env.DB, sharedTraceIds(rows));
+	const memberships: MembershipMemo = new Map();
 	const traces = [];
 	for (const row of rows) {
-		const resolved = await resolveTraceLevel(env, access.project, row, access.viewer);
+		const resolved = await resolveTraceLevel(env, access.project, row, access.viewer, audiences.get(row.id), memberships);
 		if (resolved.level !== "hidden") traces.push({ ...traceSummary(row), access: accessSummary(resolved) });
 	}
 	return ok({ traces, nextCursor });
@@ -212,13 +219,21 @@ export async function handleListReadableTraces(env: Env, actor: TraceActor, quer
 		candidates.push(...(rows.results || []));
 	}
 	candidates.sort((a, b) => (a.created_on < b.created_on ? 1 : a.created_on > b.created_on ? -1 : 0));
+	const audiences = await listAudiencesForTraces(env.DB, sharedTraceIds(candidates));
+	const memberships: MembershipMemo = new Map();
+	const authorized = new Map<string, ReturnType<typeof authorizeTraceActor>>();
 	const traces = [];
 	for (const row of candidates) {
 		if (traces.length >= limit) break;
 		const project = byId.get(row.project_id)!;
-		const access = await authorizeTraceActor(env, project, actor, "read");
+		let pending = authorized.get(project.id);
+		if (!pending) {
+			pending = authorizeTraceActor(env, project, actor, "read");
+			authorized.set(project.id, pending);
+		}
+		const access = await pending;
 		if (access instanceof Response) continue;
-		const resolved = await resolveTraceLevel(env, project, row, access.viewer);
+		const resolved = await resolveTraceLevel(env, project, row, access.viewer, audiences.get(row.id), memberships);
 		if (resolved.level === "hidden") continue;
 		traces.push({ ...traceSummary(row), shiplet: { id: project.id, name: project.name }, access: accessSummary(resolved) });
 	}

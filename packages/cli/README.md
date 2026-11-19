@@ -20,7 +20,8 @@ shiplet prepare ./dist --name "Review build" --subdomain review-build --visibili
 ```
 
 Remove `--dry-run` to publish. Network commands open browser authorization when
-needed. Run `shiplet login` to approve a session, `shiplet whoami` to inspect its
+needed. With no browser on this computer (a cloud agent, SSH, or a container),
+run `shiplet login --device` and approve with a code on any device. Run `shiplet login` to approve a session, `shiplet whoami` to inspect its
 account and expiry, and `shiplet logout` to revoke it. Sessions last two hours
 by default; use `--no-session-cache` for approval on every command. The CLI and
 browser must run on the same computer. Credentials are never printed.

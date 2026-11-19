@@ -58,6 +58,20 @@ export async function ensureTraceAudienceSchema(db: D1Database) {
 	]);
 }
 
+// The audiences of many traces in one query per 90 traces, for lists.
+export async function listAudiencesForTraces(db: D1Database, traceIds: string[]) {
+	const byTrace = new Map<string, AudienceRow[]>(traceIds.map((id) => [id, []]));
+	for (let index = 0; index < traceIds.length; index += 90) {
+		const chunk = traceIds.slice(index, index + 90);
+		const rows = await db
+			.prepare(`SELECT * FROM trace_audiences WHERE trace_id IN (${chunk.map(() => "?").join(",")}) ORDER BY created_on ASC, id ASC`)
+			.bind(...chunk)
+			.all<AudienceRow>();
+		for (const row of rows.results || []) byTrace.get(row.trace_id)?.push(row);
+	}
+	return byTrace;
+}
+
 export async function listAudiences(db: D1Database, traceId: string) {
 	const rows = await db
 		.prepare("SELECT * FROM trace_audiences WHERE trace_id = ? ORDER BY created_on ASC, id ASC")
@@ -91,6 +105,20 @@ async function teamIdsFor(db: D1Database, userId: string) {
 	return new Set((rows.results || []).map((row) => row.team_id));
 }
 
+// Remembers organization memberships while one request resolves levels, so
+// one trace (or a list of them) asks D1 once per organization.
+export type MembershipMemo = Map<string, ReturnType<typeof getOrganizationMembership>>;
+
+function membershipFor(env: Env, organizationId: string, userId: string, memo: MembershipMemo) {
+	const key = `${organizationId}\u0000${userId}`;
+	let membership = memo.get(key);
+	if (!membership) {
+		membership = getOrganizationMembership(env.DB, organizationId, userId);
+		memo.set(key, membership);
+	}
+	return membership;
+}
+
 function pickMostPermissive(candidates: AudienceRow[]) {
 	let best: { row: AudienceRow; profile: TraceProfile } | null = null;
 	for (const row of candidates) {
@@ -108,6 +136,7 @@ export async function resolveTraceLevel(
 	trace: TraceRow,
 	viewer: TraceViewer,
 	audiences?: AudienceRow[],
+	memberships: MembershipMemo = new Map(),
 ): Promise<ResolvedAccess> {
 	if (viewer.kind === "api_key" && trace.uploader_token_id === viewer.tokenId) {
 		return { level: "full", via: "uploader", profile: null };
@@ -118,7 +147,7 @@ export async function resolveTraceLevel(
 	}
 	if (trace.sharing !== "shared") return { level: "hidden", via: "none", profile: null };
 	if (viewer.kind === "user" && project.organization_id) {
-		const membership = await getOrganizationMembership(env.DB, project.organization_id, viewer.user.id);
+		const membership = await membershipFor(env, project.organization_id, viewer.user.id, memberships);
 		if (isOrganizationAdministrator(membership)) return { level: "full", via: "admin", profile: null };
 	}
 	const rows = audiences ?? (await listAudiences(env.DB, trace.id));
@@ -141,7 +170,7 @@ export async function resolveTraceLevel(
 			async () => {
 				const orgRows = rows.filter((row) => row.target_type === "organization" && row.target_id === project.organization_id);
 				if (!orgRows.length || !project.organization_id) return [];
-				return (await getOrganizationMembership(env.DB, project.organization_id, viewer.user.id)) ? orgRows : [];
+				return (await membershipFor(env, project.organization_id, viewer.user.id, memberships)) ? orgRows : [];
 			},
 			() => rows.filter((row) => row.target_type === "link"),
 		];

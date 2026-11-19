@@ -8,8 +8,13 @@ replies, and every tool call and result. Shiplet keeps traces next to the work
 they produced, so a reviewer can see how a change was made and a colleague can
 pick the session up in their own agent.
 
-Traces are behind the `traces` feature flag while they roll out. If a Shiplet's
-detail page has no **Traces** panel, they are not enabled on that server yet.
+Use a trace when the review needs the story behind the work: what was asked,
+what the agent tried, which checks ran, and what it changed. Reviewers read it
+beside the artifact, and teammates continue it in their own agent instead of
+starting over.
+
+A self-hosted server shows the **Traces** panel when
+`SHIPLET_ENABLED_FEATURE_FLAGS` includes `traces`.
 The design and decisions are in `docs/traces-spec.md`; user flows are in
 `docs/traces-user-flows.md`.
 

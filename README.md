@@ -6,6 +6,13 @@ a public preview URL. Shiplet places that work inside a trusted review
 experience where people can comment and agents can pick up the resulting
 tickets.
 
+The agent session that made the work can travel with it. A
+[trace](https://shiplet.cc/docs/traces) is the full log of that session: the
+prompts, the agent's replies, and every tool call and result. Shiplet masks
+secrets on your computer, keeps the trace private until you share it, and lets
+each audience read it at Full, Conversation, or Summary level. A colleague's
+agent can load it and carry on.
+
 [Open Shiplet](https://shiplet.cc/) · [Read the docs](https://shiplet.cc/docs) ·
 [View the OpenAPI contract](https://shiplet.cc/openapi.json)
 
@@ -13,6 +20,9 @@ tickets.
 
 - **[Publish your first review](https://shiplet.cc/docs/quickstart):** prepare an
   artifact and open its review link.
+- **[Share an agent session](https://shiplet.cc/docs/traces):** ask your agent
+  to "share this session to Shiplet <name>", or run
+  `npx shiplet-cli trace share --current --shiplet <id>`.
 - **[Collect feedback](https://shiplet.cc/docs/review-feedback):** leave
   contextual comments and work through review tickets.
 - **[Automate with an agent](https://shiplet.cc/docs/cli):** connect
@@ -28,7 +38,8 @@ tickets.
 Shiplet review link
 ├── trusted host      identity, access policy, feedback, and review actions
 ├── artifact frame    the page, file, build, or URL under review
-└── widget frame      optional custom review controls and workflow
+├── widget frame      optional custom review controls and workflow
+└── traces            agent sessions behind the work, shared per audience
 ```
 
 The artifact and optional widget run in separate sandboxed frames. Neither

@@ -158,12 +158,32 @@ export function TraceViewerApp({ projectId, traceId, origin, embedded = false }:
 	);
 
 	React.useEffect(() => {
+		let cancelled = false;
+		// The first page is requested alongside the trace, not after it, so the
+		// timeline waits for one round trip instead of two. A trace with no
+		// pages answers 404 here, which is ignored.
+		const firstPage = api<{ events: TraceEvent[] }>(`${tracePath(projectId, traceId)}/segments/0`).catch(() => null);
+		setLoadingMore(true);
 		api<TraceDetail>(tracePath(projectId, traceId))
-			.then((loaded) => {
+			.then(async (loaded) => {
+				if (cancelled) return;
 				setDetail(loaded);
-				if (loaded.manifest.segments.length) void loadSegment(0);
+				if (!loaded.manifest.segments.length) return;
+				const page = await firstPage;
+				if (cancelled) return;
+				if (!page) return loadSegment(0);
+				setEvents(page.events);
+				setNextSegment(1);
 			})
-			.catch((caught) => setError(caught.status === 404 ? "This trace does not exist, or it is not shared with you." : caught.message));
+			.catch((caught) => {
+				if (!cancelled) setError(caught.status === 404 ? "This trace does not exist, or it is not shared with you." : caught.message);
+			})
+			.finally(() => {
+				if (!cancelled) setLoadingMore(false);
+			});
+		return () => {
+			cancelled = true;
+		};
 	}, [projectId, traceId, loadSegment]);
 
 	if (error && !detail) {
