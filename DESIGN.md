@@ -15,9 +15,9 @@ who pick the manifest up over MCP and get the work done.
 The interface should feel like the front office of a tidy working harbor:
 paper manifests, stamped statuses, signal-flag colors — run by people who have
 never once lost a package. Everything in that office sits **level on the
-waterline**: labels rest on a load line, dividers and loaders are drawn from
-the same swell as the header sea, and only a rubber stamp ever lands at an
-angle.
+waterline**: labels rest on a load line, dividers and loaders are drawn with
+the same single-stroke swell as the header sea, and only the round CLEARED
+customs stamp ever lands at an angle.
 
 ### Where the quirk is allowed to live
 
@@ -29,8 +29,8 @@ unclear labels"):
 | Stamp-styled status badges | Renaming "Publish" to "Set sail" |
 | Mono "deck label" eyebrows on a waterline | Nautical jargon in form labels |
 | A waterline rule under the header | Decorative gradients, oversized heroes |
-| Swell line work for dividers, empty states, loaders | Tilted labels, chips, tags or cards ("stickers") |
-| One small, per-stamp angle on rubber stamps | The same angle repeated on every element |
+| Swell line work for dividers, empty states, loaders | Tilted labels, pills, chips, badges, tags or cards |
+| A small per-render angle on the CLEARED customs stamp | Any other rotated UI element |
 | Hard 1px borders and a sturdy base | Offset or skewed "sticker" shadows |
 | A sea that follows the theme | Weather that signals status or blocks controls |
 | Warm copy in empty states & confirmations | Cute icons that obscure meaning |
@@ -147,14 +147,12 @@ Cards are paper manifests, not floating glass:
   major section break inside a card (the review bridge's comments) uses a
   **swell rule** instead (section 6b).
 - Section eyebrows (`.success-card-label`) are mono micro **deck labels on a
-  waterline**: harbor-teal text with no box, resting on a load line made of
-  one swell followed by a hairline that thins out under the words. The label
-  is level, always.
-- Chips (feedback ticket IDs such as `PF-3`) are level tags: tinted fill,
-  1.5px border, and a 2px harbor **keel** along the base, echoing the card's
-  sturdy base. No tilt, no offset shadow.
-- The publish page's URL tag is a level luggage tag with the same sturdy 3px
-  base as a card.
+  waterline**: harbor-teal text with no box, resting on a load line drawn as
+  one stroke (a single swell that settles into a straight run and fades out
+  under the words). The label is level, always.
+- Chips (feedback ticket IDs such as `PF-3`), pills, tags and status badges
+  keep their boxes, borders, fills and mono type, and are always level.
+- The publish page's URL tag is a level luggage tag: no tilt, no offset shadow.
 
 Page background is flat warm paper. The header carries a **waterline**: a thin
 repeating wave under a double ledger rule. That one detail does the work the
@@ -162,32 +160,43 @@ old grid wallpaper was failing to do.
 
 ## 6b. Sea line work
 
-One swell is drawn once (`--swell-mask`, a 24×6 SVG path that tiles every
-`--swell-length`) and reused everywhere as a CSS mask, so it takes the ink of
+Waves are generated in `src/render.ts` (`waveTile`, `WATERLINE_MASK`) and used
+as CSS masks (`--swell-mask`, `--swell-mask-long`, `--waterline-mask`), so they
+take the ink of
 whatever draws it and follows the theme with no extra assets:
 
 | Use | Rule | Ink |
 | --- | --- | --- |
-| Deck label waterline | one swell, then a fading 1.2px hairline | `--accent` |
-| Section rule | a long, low swell (2.5× wavelength, 5px tall) across the card | `--line` |
+| Deck label waterline | one swell flowing into a straight run, faded by a gradient | `--accent` |
+| Section rule | a long, low swell (64px wavelength) across the card | `--line` |
 | Empty state | five low swells under the message (`.shiplet-list-empty`) | `--accent` at 45% |
-| Busy button | a swell along the button's base, drifting one wavelength per 0.9s | `currentColor` |
+| Busy button | the button's base becomes a swell, drifting one wavelength per 0.9s | button's border ink |
 | Loading placeholder | a swell rolling where content will land (`.invite-link-url-skeleton`) | `--line` |
+
+**Single-stroke rule.** Every wave is one continuous SVG path with a single
+1.25px stroke, round caps and joins, and one ink. Crests, troughs and the
+label's settle into its straight run all have level tangents, so there is no
+kink or gap where curve meets line. Masks are drawn at their displayed size
+(never stretched), so the stroke never thickens on a slope. A wave fades
+with a gradient on that same stroke, never by thinning it or by butting a
+separate hairline against it.
 
 Rules: line work is decoration, never the only signal (busy buttons keep
 `aria-busy` and their label; empty states keep their sentence). It stays at
 hairline weight, never under dense text, and drifting swells stand still under
-reduced motion. Do not add new wave shapes; reuse the one swell.
+reduced motion. Do not add new wave shapes; reuse these.
 
 ### No rotated UI
 
-**No rotated UI, except stamps, which get a small per-stamp angle.** Labels,
-chips, tags, badges that are not stamps, cards, buttons, inputs and panels
-are always level, at rest and in their entry animations. No skewed or offset
-"sticker" shadows. Motion that belongs to the sea is exempt: the boat's
-pitch, the pennant in the wind, the helm turning, the water itself.
-Geometry is also exempt: a popover caret or map-pin tail drawn as a 45°
-square renders as a level triangle.
+**Labels, pills, chips and badges are always level. The only rotated UI
+element is the homepage customs stamp, which gets a small per-render angle
+like a real stamp.** That covers section labels, status badges (ACTIVE,
+FAILED, FULL, PRIVATE, CHECKS PASSED), `.stamp-xl` (READY FOR REVIEW), ticket
+chips, tags, cards, buttons, inputs and panels, at rest and in their entry
+animations. No skewed or offset "sticker" shadows. Motion that belongs to the
+sea is exempt: the boat's pitch, the pennant in the wind, the helm turning,
+the water itself. Geometry is also exempt: a popover caret or map-pin tail
+drawn as a 45° square renders as a level triangle.
 
 ## 7. Controls
 
@@ -201,26 +210,19 @@ square renders as a level triangle.
   (`role="switch"`, labelled "Dark mode"). The knob position comes from theme
   tokens, so it is right before the script reports `aria-checked`. It is
   hidden under `@media (scripting: none)` because it cannot work there.
-- **Stamps** (`.status-badge`, `.stamp-xl`): mono uppercase, 1.5px border
-  (2px on `.stamp-xl`), tinted fill, and the only tilted UI. Like a real
-  rubber stamp, each one lands a little differently:
-  - **Angle**: 1.5–3deg either way (never near zero), as `--stamp-tilt`.
-  - **Placement**: up to ±1px of offset (`--stamp-x`, `--stamp-y`).
-  - **Wear**: corners vary slightly (`--stamp-radius`), and the ink is
-    uneven: a tiny inline SVG noise mask (`--stamp-ink-mask`) fades the fill
-    and border toward one side (`--stamp-ink-angle`, `--stamp-wear`). The
-    texture sits between the fill and the words, so text stays solid and only
-    gains contrast where the fill thins.
-  - **Seed**: all of it comes from one stable seed. The enhance script hashes
-    the stamp's text with its row (its `data-stamp-seed`, else the nearest
-    `id`, else the row's first link, else the row's words) and sets the
-    properties inline, for server-rendered and React stamps alike. The same
-    stamp lands the same way on every render and poll. Without JS, row-position
-    fallbacks still vary the angle.
-  - **Entry**: `.stamp-xl` slams in at a steeper version of its own angle and
-    lands exactly on it. Reduced motion skips the slam but keeps the angle.
-  - Statuses always carry a word; color is never the only signal.
-  - The CLI loopback page carries two fixed stamps, each with its own angle.
+- **Status badges** (`.status-badge`, `.stamp-xl`, the CLI loopback page's
+  `.stamp`): mono uppercase, 1.5px border (2px on `.stamp-xl`), tinted fill,
+  always level. `.stamp-xl` lands with a level scale-in.
+- **The CLEARED customs stamp** (round passport-style ink: ring, dashed inner
+  circle, a band with CLEARED, a small wave) is the one rotated element. It
+  sits behind the top-right corner of the homepage card (`.auth-card`, signed
+  out) and the publish panel (`.publish-primary-panel`, signed in) as a card
+  background, clipped square by the card's corner, and also appears on the join and invitation
+  cards.
+  - **Angle**: 2–6deg either way, never level, picked once per page render
+    by the enhance script and baked into the stamp image (`--customs-stamp`),
+    so it stays fixed through polls and re-renders. It is static artwork, so
+    reduced motion shows the same angle. Without JS it rests at -4deg.
 - **Tables**: ledger style — mono micro headers, hairline rows, row hover in
   paper-100.
 
@@ -278,8 +280,7 @@ and embeds, with the Harbor Office palette and system UI typography:
   the complete static artwork. Legacy header playback preferences are ignored.
 - One orchestrated page-load (staggered card rise + scene line-draw), then a
   few high-impact moments: the publish stepper's rope drawing between
-  bollards, the arrival sail-in + stamp slam on the cockpit (landing on that
-  stamp's own angle), ticket stagger. Loading uses the drifting swell
+  bollards, the arrival sail-in + stamp slam on the cockpit, ticket stagger. Loading uses the drifting swell
   (section 6b), never a spinner on new work.
 - SVG line work animates via `pathLength="1"` + `stroke-dashoffset` (the
   `.draw-path` rule); 140ms `ease` on hover/active.
@@ -324,7 +325,7 @@ watermark per screen; decorations never sit under dense text.
 - Keyboard: visible focus ring on every interactive element.
 - Semantic native controls only; labels always associated with inputs.
 - Reduced motion honored; no information conveyed by color alone (stamps carry
-  text). Stamp ink texture never sits over a stamp's words.
+  text).
 
 ## 11. Engineering constraints (why it's built this way)
 
