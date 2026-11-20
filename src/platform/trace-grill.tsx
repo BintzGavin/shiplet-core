@@ -9,7 +9,8 @@ import { createPortal } from "react-dom";
 import { harnessLabel, type TraceEvent, type TraceManifest } from "../cli/trace-core.mjs";
 import { buildModel, offset, span, type Item, type Level, type Model, type Subagent, type ToolItem, type Turn } from "./trace-grill-model";
 import { DiffStat, DiffView, FAMILY_GLYPH, LEVEL_NAME, Md, ToolBody, itemText, words } from "./trace-grill-parts";
-import { GRILL_CSS } from "./trace-grill-styles";
+import { ChatElements, ChatSteps } from "./trace-grill-chat";
+import { CHAT_CSS, GRILL_CSS } from "./trace-grill-styles";
 
 export function grillEnabled() {
 	return typeof window !== "undefined" && /^(localhost|127\.0\.0\.1|\[::1\])$/.test(window.location.hostname) && new URLSearchParams(window.location.search).get("grill") !== "off";
@@ -21,7 +22,7 @@ type Detail = {
 	access: { level: Level; via: string; canManage: boolean };
 };
 
-type Shared = {
+export type Shared = {
 	model: Model;
 	manifest: Detail["manifest"];
 	detail: Detail;
@@ -494,7 +495,7 @@ function TurnByTurn({ shared }: { shared: Shared }) {
 }
 
 // ---------------------------------------------------------------------------
-// 3. What changed: the diff is the deliverable; the talk explains it.
+// 3. What changed (retired in round 1b, kept until cleanup).
 
 function WhatChanged({ shared }: { shared: Shared }) {
 	const { model, manifest, level } = shared;
@@ -851,7 +852,7 @@ function SubCard({ sub, tool, shared, forceOpen }: { sub: Subagent; tool: ToolIt
 }
 
 // ---------------------------------------------------------------------------
-// 5. Inspector: a list of every event and one event in detail.
+// 5. Inspector (retired in round 1b, kept until cleanup).
 
 type Row = { item: Item; depth: number; sub?: Subagent };
 function flatten(items: Item[], depth = 0, out: Row[] = []) {
@@ -1035,12 +1036,15 @@ function InspectorDetail({ item, shared }: { item: Item; shared: Shared }) {
 // Registry and stage
 
 type Variant = { id: string; name: string; descriptor: string; render: (shared: Shared) => React.ReactNode };
+void WhatChanged;
+void Inspector;
+
 export const GRILL_VARIANTS: Variant[] = [
 	{ id: "ships-log", name: "Ship's log", descriptor: "One line per event, full width, filters and search; prompts break the rhythm.", render: (shared) => <ShipsLog shared={shared} /> },
 	{ id: "turn-by-turn", name: "Turn by turn", descriptor: "Reads like the conversation; each prompt's work folds into one bar, the ending is on top.", render: (shared) => <TurnByTurn shared={shared} /> },
-	{ id: "what-changed", name: "What changed", descriptor: "Diffs first, grouped by file and annotated with why; conversation and checks are tabs.", render: (shared) => <WhatChanged shared={shared} /> },
+	{ id: "chat-elements", name: "Chat, every step a card", descriptor: "A native chat transcript: your prompts as bubbles, the agent's replies flat, each tool call an AI Elements tool card.", render: (shared) => <ChatElements shared={shared} /> },
 	{ id: "session-map", name: "Session map", descriptor: "The whole session on a time axis with a lane per subagent, above a grouped transcript.", render: (shared) => <SessionMap shared={shared} /> },
-	{ id: "inspector", name: "Inspector", descriptor: "A list of every event beside one event in detail, with keyboard stepping and next error.", render: (shared) => <Inspector shared={shared} /> },
+	{ id: "chat-steps", name: "Chat, work folded", descriptor: "A native chat transcript where the work between replies folds into one line that opens into a chain of steps.", render: (shared) => <ChatSteps shared={shared} /> },
 ];
 
 function useVariantIndex(count: number) {
@@ -1087,7 +1091,7 @@ export function TraceGrill(props: {
 		style.id = "trace-grill-css";
 		const nonce = document.querySelector<HTMLScriptElement>("script[nonce]")?.nonce;
 		if (nonce) style.nonce = nonce;
-		style.textContent = GRILL_CSS;
+		style.textContent = GRILL_CSS + CHAT_CSS;
 		document.head.append(style);
 	}, []);
 
