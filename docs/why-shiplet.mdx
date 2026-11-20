@@ -132,8 +132,9 @@ the trusted host exposes, with the engineer's own access. Publishing, reading
 feedback, sharing a trace, and loading one with `getTraceContext` all go through
 that same narrow door.
 
-The program produces a preview for the PM to try against the build, and her
-approval goes to the Shiplet's root. Each Shiplet gets one ShipletRoot, built on
+The program produces a preview that a person with edit access tries against the
+build and approves, and that approval goes to the Shiplet's root. Each Shiplet
+gets one ShipletRoot, built on
 [Cloudflare Durable Objects](https://developers.cloudflare.com/durable-objects/concepts/what-are-durable-objects/).
 The Platform Worker resolves it with `getByName(shiplet.id)`, so every request
 for that Shiplet reaches the same object, with storage of its own. In its own
