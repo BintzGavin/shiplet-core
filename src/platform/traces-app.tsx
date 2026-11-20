@@ -13,6 +13,7 @@ import {
 	type TraceEvent,
 	type TraceManifest,
 } from "../cli/trace-core.mjs";
+import { TraceGrill, grillEnabled, type GrillDetail } from "./trace-grill";
 
 export const TRACE_DEFINITION =
 	"A trace is the full log of an agent session: your prompts, the agent's replies, and every tool call and result.";
@@ -195,6 +196,11 @@ export function TraceViewerApp({ projectId, traceId, origin, embedded = false }:
 		};
 	}, [projectId, traceId, loadSegment]);
 
+	// DESIGN GRILL PROTOTYPE: the variants read the whole session at once.
+	React.useEffect(() => {
+		if (grillEnabled() && detail && !loadingMore && nextSegment > 0 && nextSegment < detail.manifest.segments.length) void loadSegment(nextSegment);
+	}, [detail, loadingMore, nextSegment, loadSegment]);
+
 	if (error && !detail) {
 		return (
 			<section className="success-card shiplet-panel">
@@ -208,6 +214,31 @@ export function TraceViewerApp({ projectId, traceId, origin, embedded = false }:
 		);
 	}
 	if (!detail) return <div className="banner banner-info">Loading trace…</div>;
+
+	// DESIGN GRILL PROTOTYPE: localhost only; remove before production.
+	if (grillEnabled()) {
+		const prompt = `Load Shiplet trace ${traceId} from Shiplet ${projectId} into context and summarize where it left off.`;
+		const command = `npx shiplet-cli trace pull ${traceId} --shiplet ${projectId} --as context`;
+		return (
+			<TraceGrill
+				detail={detail as unknown as GrillDetail}
+				events={events}
+				projectId={projectId}
+				traceId={traceId}
+				tracePath={tracePath(projectId, traceId)}
+				share={detail.access.canManage ? <TraceSharePanel projectId={projectId} traceId={traceId} /> : null}
+				actions={
+					<>
+						<CopyButton text={prompt} label="Copy prompt for your agent" />
+						<CopyButton text={command} label="Copy CLI command" />
+						<a className="btn btn-secondary btn-sm" href={embedded ? `/shiplets/${encodeURIComponent(projectId)}/traces/${encodeURIComponent(traceId)}` : `/shiplets/${encodeURIComponent(projectId)}`}>
+							{embedded ? "Open full page" : "Back to the Shiplet"}
+						</a>
+					</>
+				}
+			/>
+		);
+	}
 
 	const { manifest, access } = detail;
 	const summary = manifest.summary;
