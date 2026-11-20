@@ -232,6 +232,14 @@ export const CSS = `
   --ease: cubic-bezier(0.2, 0, 0.2, 1);
   --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
 
+  /* Sea line work (DESIGN.md section 6b). One swell, drawn once and used as a
+     mask, so it takes whatever ink the element sets in either theme. It tiles
+     seamlessly every --swell-length. */
+  --swell-length: 24px;
+  --swell-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='6' viewBox='0 0 24 6' preserveAspectRatio='none'%3E%3Cpath d='M-12 3.4C-8 5.9-4 5.9 0 3.4S8 .9 12 3.4s8 2.5 12 0s8-2.5 12 0' fill='none' stroke='%23000' stroke-width='1.4'/%3E%3C/svg%3E");
+  /* Uneven stamp ink: tiny fractal noise, alpha only, about 0.4 KB. */
+  --stamp-ink-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='72' height='72'%3E%3Cfilter id='n' x='0' y='0'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.72' numOctaves='2' seed='11' stitchTiles='stitch'/%3E%3CfeColorMatrix values='0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 4.2 0 0 0 -2.05'/%3E%3C/filter%3E%3Crect width='72' height='72' filter='url(%23n)'/%3E%3C/svg%3E");
+
   /* Header sea: daylight shows the calm sea, the night watch the storm.
      Display values are tokens so one override flips both. */
   --sea-calm: block;
@@ -343,7 +351,15 @@ hr.solid {
   100% { transform: translateX(22px) scaleX(1.2); opacity: 0; }
 }
 @keyframes draw { to { stroke-dashoffset: 0; } }
-@keyframes stamp-in { 0% { opacity: 0; transform: scale(1.55) rotate(-8deg); } 62% { opacity: 1; transform: scale(0.95) rotate(-1deg); } 100% { opacity: 1; transform: scale(1) rotate(-2deg); } }
+/* A rubber stamp comes down at a steeper version of its own angle and lands on
+   exactly the angle it rests at, so every stamp slams differently. */
+@keyframes stamp-in {
+  0% { opacity: 0; transform: var(--stamp-place) scale(1.32) rotate(calc(var(--stamp-tilt) * 2.4)); }
+  62% { opacity: 1; transform: var(--stamp-place) scale(0.97) rotate(calc(var(--stamp-tilt) * 0.7)); }
+  100% { opacity: 1; transform: var(--stamp-place) scale(1) rotate(var(--stamp-tilt)); }
+}
+/* Tide motion for line work: a swell drifts one wavelength and loops. */
+@keyframes swell-drift { from { mask-position: 0 50%; -webkit-mask-position: 0 50%; } to { mask-position: var(--swell-length) 50%; -webkit-mask-position: var(--swell-length) 50%; } }
 @keyframes flag-pop { 0% { transform: scale(0); } 70% { transform: scale(1.25); } 100% { transform: scale(1); } }
 @keyframes wave-flag { 0%, 100% { transform: rotate(0); } 40% { transform: rotate(-9deg); } 70% { transform: rotate(4deg); } }
 @keyframes sail-in { from { opacity: 0; transform: translateX(-110px); } to { opacity: 1; transform: none; } }
@@ -1083,32 +1099,99 @@ html:not(.js) .shiplet-brand-mark :is(.shiplet-mark-vessel, .shiplet-mark-water-
   text-wrap: balance;
 }
 
-/* Rubber stamp: the section tag, inked slightly off-square. */
+/* Deck label: the section tag sits level on its own waterline, like a load
+   line on a hull. A single swell marks the start; a hairline carries on under
+   the words and thins out. Never boxed, never tilted. */
 .success-card-label {
+  position: relative;
   display: inline-block;
+  width: fit-content;
+  max-width: 100%;
   font-family: var(--font-mono);
   font-size: var(--type-micro);
   font-weight: 600;
+  line-height: 1.35;
   text-transform: uppercase;
   letter-spacing: 0.13em;
   color: var(--accent-strong);
-  background: color-mix(in oklch, var(--info-surface), transparent 30%);
-  border: 1.5px solid color-mix(in oklch, var(--accent), transparent 45%);
-  border-radius: 4px;
-  padding: 3px 9px;
-  transform: rotate(-1.6deg);
+  padding: 0 0 8px;
   margin-bottom: 8px;
 }
 
-.stamp-xl {
+.success-card-label::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 6px;
+  background: var(--accent);
+  pointer-events: none;
+  -webkit-mask:
+    var(--swell-mask) left center / var(--swell-length) 6px no-repeat,
+    linear-gradient(90deg, #000, rgb(0 0 0 / 0.18)) var(--swell-length) 54% / calc(100% - var(--swell-length)) 1.2px no-repeat;
+  mask:
+    var(--swell-mask) left center / var(--swell-length) 6px no-repeat,
+    linear-gradient(90deg, #000, rgb(0 0 0 / 0.18)) var(--swell-length) 54% / calc(100% - var(--swell-length)) 1.2px no-repeat;
+}
+
+/* Rubber stamps (.status-badge, .stamp-xl, DESIGN.md section 7). The only
+   tilted UI. Each stamp gets its own small angle, a pixel of offset, its own
+   corner wear and uneven ink, all from one stable seed the enhance script
+   derives from the stamp's text and its row (stampSeed). Without the script
+   the row-position fallbacks below still vary the angle. The ink texture
+   lives on a pseudo-element painted between the stamp's fill and its words,
+   so it fades the fill and border while the text stays solid. */
+.status-badge,
+.success-card-label.stamp-xl {
+  --stamp-tilt: -1.8deg;
+  --stamp-place: translate(var(--stamp-x, 0px), var(--stamp-y, 0px));
+  position: relative;
+  isolation: isolate;
+  transform: var(--stamp-place) rotate(var(--stamp-tilt));
+  border-radius: var(--stamp-radius, 4px);
+}
+
+:where(tr, li, article):nth-child(3n + 2) .status-badge { --stamp-tilt: 1.7deg; }
+:where(tr, li, article):nth-child(3n) .status-badge { --stamp-tilt: -2.4deg; }
+
+.status-badge::after,
+.success-card-label.stamp-xl::after {
+  content: "";
+  position: absolute;
+  inset: calc(-1 * var(--stamp-border, 1.5px));
+  z-index: -1;
+  height: auto;
+  border-radius: inherit;
+  background: var(--stamp-paper, var(--surface));
+  opacity: var(--stamp-wear, 0.5);
+  pointer-events: none;
+  -webkit-mask:
+    var(--stamp-ink-mask) var(--stamp-ink-x, 0px) var(--stamp-ink-y, 0px) / 72px 72px repeat,
+    linear-gradient(var(--stamp-ink-angle, 120deg), #000 10%, rgb(0 0 0 / 0.25) 70%);
+  -webkit-mask-composite: source-in;
+  mask:
+    var(--stamp-ink-mask) var(--stamp-ink-x, 0px) var(--stamp-ink-y, 0px) / 72px 72px repeat,
+    linear-gradient(var(--stamp-ink-angle, 120deg), #000 10%, rgb(0 0 0 / 0.25) 70%);
+  mask-composite: intersect;
+}
+
+/* The big stamp keeps the stamp's ink box, not the label's waterline. */
+.success-card-label.stamp-xl {
+  --stamp-tilt: -2.2deg;
+  --stamp-border: 2px;
+  display: inline-flex;
+  align-items: center;
+  color: var(--accent-strong);
+  background: color-mix(in oklch, var(--info-surface), transparent 20%);
+  border: 2px solid color-mix(in oklch, var(--accent), transparent 30%);
   font-size: 0.82rem;
   padding: 6px 14px;
-  border-width: 2px;
-  transform: rotate(-2deg);
 }
 
 /* CSS owns the stamp slam (completes even when rAF throttles); fill: both
-   keeps it hidden through the delay without JS. */
+   keeps it hidden through the delay without JS. Reduced motion skips the slam
+   but keeps the stamp's resting angle. */
 @media (prefers-reduced-motion: no-preference) {
   .js .stamp-xl { animation: stamp-in 0.5s 1s both; }
 }
@@ -1449,10 +1532,11 @@ details textarea { margin-top: 8px; }
   text-transform: uppercase;
   letter-spacing: 0.08em;
   padding: 3px 8px;
-  border-radius: 4px;
   border: 1.5px solid currentColor;
-  transform: rotate(-1deg);
 }
+
+/* A stamp sitting in a sunken row wears into that row's paper, not the card's. */
+.trace-event-marker .status-badge { --stamp-paper: var(--surface-sunken); justify-self: start; }
 
 .status-badge.status-active { color: var(--ok); background: var(--ok-surface); }
 .status-badge.status-pending { color: var(--warn); background: var(--warn-surface); }
@@ -1807,6 +1891,20 @@ details textarea { margin-top: 8px; }
   color: var(--text-soft);
 }
 
+/* Slack water: an empty list ends on a few low swells instead of a void. */
+.shiplet-list-empty::after {
+  content: "";
+  display: block;
+  width: calc(var(--swell-length) * 5);
+  max-width: 100%;
+  height: 6px;
+  margin-top: 6px;
+  background: var(--accent);
+  opacity: 0.45;
+  -webkit-mask: var(--swell-mask) 0 50% / var(--swell-length) 6px repeat-x;
+  mask: var(--swell-mask) 0 50% / var(--swell-length) 6px repeat-x;
+}
+
 .script-preview {
   font-family: var(--font-mono);
   font-size: var(--type-small);
@@ -1831,9 +1929,8 @@ details textarea { margin-top: 8px; }
   padding: 10px 16px 10px 12px;
   background: var(--surface);
   border: 1.5px solid var(--line-strong);
+  border-bottom-width: 3px;
   border-radius: 8px 16px 16px 8px;
-  box-shadow: 3px 3px 0 color-mix(in oklch, var(--line), transparent 35%);
-  transform: rotate(1.6deg);
 }
 
 .url-tag-hole {
@@ -2402,25 +2499,49 @@ details textarea { margin-top: 8px; }
 .invite-link-row-actions .btn.is-copied { color: var(--ok); background: var(--ok-surface); }
 .invite-link-revoke-prompt { font-size: var(--type-small); font-weight: 600; }
 
+/* Loading placeholder: a calm swell rolling along where the URL will land,
+   not a shimmer bar. */
 .invite-link-url-skeleton {
   display: block;
   margin-top: 8px;
   height: 14px;
   width: 60%;
-  border-radius: 4px;
-  background: linear-gradient(90deg, var(--surface-sunken), var(--line-soft), var(--surface-sunken));
-  background-size: 200% 100%;
+  background: var(--line);
+  -webkit-mask: var(--swell-mask) 0 50% / var(--swell-length) 6px repeat-x;
+  mask: var(--swell-mask) 0 50% / var(--swell-length) 6px repeat-x;
 }
 
 @media (prefers-reduced-motion: no-preference) {
-  .invite-link-url-skeleton { animation: invite-link-shimmer 1.2s linear infinite; }
-  @keyframes invite-link-shimmer {
-    from { background-position: 200% 0; }
-    to { background-position: -200% 0; }
-  }
+  .invite-link-url-skeleton { animation: swell-drift 1.4s linear infinite; }
 }
 
-.btn[aria-busy="true"] { cursor: progress; opacity: 0.7; }
+/* Busy: the button's sturdy base turns into a running swell, a hull riding
+   water while the work happens. The label stays put and readable; reduced
+   motion shows the swell standing still. */
+.btn[aria-busy="true"] {
+  --busy-ink: var(--line-strong);
+  position: relative;
+  cursor: progress;
+  opacity: 0.78;
+  border-bottom-color: transparent;
+}
+.btn-primary[aria-busy="true"] { --busy-ink: var(--action-hover); }
+.btn-destructive[aria-busy="true"] { --busy-ink: color-mix(in oklch, var(--err), black 18%); }
+.btn[aria-busy="true"]::after {
+  content: "";
+  position: absolute;
+  left: 3px;
+  right: 3px;
+  bottom: -3px;
+  height: 5px;
+  background: var(--busy-ink);
+  pointer-events: none;
+  -webkit-mask: var(--swell-mask) 0 50% / var(--swell-length) 5px repeat-x;
+  mask: var(--swell-mask) 0 50% / var(--swell-length) 5px repeat-x;
+}
+@media (prefers-reduced-motion: no-preference) {
+  .btn[aria-busy="true"]::after { animation: swell-drift 0.9s linear infinite; }
+}
 
 .invite-links-empty { margin-top: 14px; color: var(--text-soft); }
 
@@ -2565,12 +2686,27 @@ details textarea { margin-top: 8px; }
 
 .review-side-stack { display: grid; gap: 16px; min-width: 0; }
 
+/* Section rule between the artifact and its comments: a low swell across the
+   card, the same line work as the header waterline, at hairline weight. */
 .review-comments-panel {
+  position: relative;
   display: grid;
   gap: 12px;
   margin-top: 16px;
-  padding-top: 16px;
-  border-top: 1px solid var(--line-soft);
+  padding-top: 18px;
+}
+
+.review-comments-panel::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 6px;
+  background: var(--line);
+  pointer-events: none;
+  -webkit-mask: var(--swell-mask) 0 50% / calc(var(--swell-length) * 2.5) 5px repeat-x;
+  mask: var(--swell-mask) 0 50% / calc(var(--swell-length) * 2.5) 5px repeat-x;
 }
 
 .bridge-comment-form {
@@ -2615,9 +2751,9 @@ details textarea { margin-top: 8px; }
   color: var(--accent-strong);
   background: var(--info-surface);
   border: 1.5px solid color-mix(in oklch, var(--accent), transparent 40%);
-  border-radius: 4px;
-  padding: 2px 7px;
-  transform: rotate(-1deg);
+  border-bottom: 2px solid var(--accent);
+  border-radius: 4px 4px 3px 3px;
+  padding: 2px 7px 1px;
 }
 
 .dashboard-shell .feedback-ticket-header .feedback-ticket-status-select {
@@ -3111,6 +3247,8 @@ details textarea { margin-top: 8px; }
 .trace-outcome-last-check-failed, .trace-check-failed { color: var(--err); background: var(--err-surface); }
 .trace-sharing-private { color: var(--ink-700); background: var(--paper-100); }
 .trace-sharing-shared { color: var(--harbor-700); background: var(--harbor-100); }
+/* These stamps use light primitives in both themes, so their ink wears to light paper. */
+.trace-level, .trace-sharing-private, .trace-sharing-shared { --stamp-paper: var(--paper-0); }
 .trace-timeline { list-style: none; margin: 12px 0 0; padding: 0; display: grid; gap: 8px; }
 .trace-event { border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--surface); padding: 10px 12px; display: grid; gap: 6px; min-width: 0; }
 .trace-event-user { border-left: 4px solid var(--buoy-600); }
@@ -3232,6 +3370,8 @@ function HeaderSky() {
 
 /* The reader's theme choice; without one the page follows the system. */
 const THEME_STORAGE_KEY = "shiplet-theme";
+/* Rubber stamps are the only tilted UI (DESIGN.md section 7). */
+const STAMP_SELECTOR = ".status-badge, .stamp-xl";
 
 const THEME_SWITCH = `<button class="shiplet-theme-switch" type="button" role="switch" aria-checked="false" aria-label="Dark mode" title="Dark mode" data-theme-switch>
         <span class="shiplet-theme-switch-knob" aria-hidden="true"></span>
@@ -3543,6 +3683,66 @@ const EnhanceScript = (nonce: KernelDocumentNonce) => `
 		if (chosen === "light" || chosen === "dark") return chosen;
 		return darkScheme && darkScheme.matches ? "dark" : "light";
 	}
+
+	// Rubber stamps: every stamp gets its own small angle, offset, corner wear
+	// and ink, seeded from what it says and which row it sits in, so a stamp
+	// lands the same way on every render and poll. DESIGN.md section 7.
+	var STAMPS = ${scriptJson(STAMP_SELECTOR)};
+	function stampSeed(el) {
+		var key = el.getAttribute("data-stamp-seed");
+		if (!key) {
+			var host = el.closest("[data-stamp-seed], [id], tr, li, article, section");
+			var context = "";
+			if (host) {
+				context = host.getAttribute("data-stamp-seed") || host.id || "";
+				var link = !context && host.querySelector("a[href]");
+				if (link) context = link.getAttribute("href") || "";
+				// Last resort: the row's own words, so two identical stamps in
+				// different rows still land differently.
+				if (!context) context = (host.textContent || "").replace(/\\s+/g, " ").trim().slice(0, 96);
+			}
+			key = (el.textContent || "").trim().toLowerCase() + "|" + context + "|" + el.className;
+		}
+		var hash = 2166136261;
+		for (var k = 0; k < key.length; k++) {
+			hash ^= key.charCodeAt(k);
+			hash = Math.imul(hash, 16777619);
+		}
+		return (hash >>> 0) || 1;
+	}
+	function inkStamp(el) {
+		if (el._shipletStamp) return;
+		el._shipletStamp = true;
+		var state = stampSeed(el);
+		function next() {
+			state ^= state << 13; state ^= state >>> 17; state ^= state << 5;
+			state >>>= 0;
+			return state / 4294967296;
+		}
+		function px(range) { return ((next() * 2 - 1) * range).toFixed(2) + "px"; }
+		var tilt = (1.5 + next() * 1.5) * (next() < 0.5 ? -1 : 1);
+		el.style.setProperty("--stamp-tilt", tilt.toFixed(2) + "deg");
+		el.style.setProperty("--stamp-x", px(1));
+		el.style.setProperty("--stamp-y", px(0.8));
+		el.style.setProperty("--stamp-radius", [0, 1, 2, 3].map(function () { return (3 + next() * 2.2).toFixed(1) + "px"; }).join(" "));
+		el.style.setProperty("--stamp-ink-x", Math.round(next() * 72) + "px");
+		el.style.setProperty("--stamp-ink-y", Math.round(next() * 72) + "px");
+		el.style.setProperty("--stamp-ink-angle", Math.round(next() * 360) + "deg");
+		el.style.setProperty("--stamp-wear", (0.38 + next() * 0.3).toFixed(2));
+	}
+	function inkStamps(scope) {
+		if (scope.matches && scope.matches(STAMPS)) inkStamp(scope);
+		if (scope.querySelectorAll) scope.querySelectorAll(STAMPS).forEach(inkStamp);
+	}
+	inkStamps(d);
+	if (window.MutationObserver) {
+		new MutationObserver(function (records) {
+			records.forEach(function (record) {
+				record.addedNodes.forEach(function (node) { if (node.nodeType === 1) inkStamps(node); });
+			});
+		}).observe(root, { childList: true, subtree: true });
+	}
+
 	d.addEventListener("DOMContentLoaded", function () {
 		var header = d.querySelector(".shiplet-brand-header");
 		var water = header && header.querySelector(".shiplet-waterline-svg");
