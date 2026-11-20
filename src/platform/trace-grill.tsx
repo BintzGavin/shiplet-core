@@ -10,7 +10,8 @@ import { harnessLabel, type TraceEvent, type TraceManifest } from "../cli/trace-
 import { buildModel, offset, span, type Item, type Level, type Model, type Subagent, type ToolItem, type Turn } from "./trace-grill-model";
 import { DiffStat, DiffView, FAMILY_GLYPH, LEVEL_NAME, Md, ToolBody, itemText, words } from "./trace-grill-parts";
 import { ChatElements, ChatSteps } from "./trace-grill-chat";
-import { CHAT_CSS, GRILL_CSS } from "./trace-grill-styles";
+import { ROUND2 } from "./trace-grill-r2";
+import { CHAT_CSS, GRILL_CSS, R2_CSS } from "./trace-grill-styles";
 
 export function grillEnabled() {
 	return typeof window !== "undefined" && /^(localhost|127\.0\.0\.1|\[::1\])$/.test(window.location.hostname) && new URLSearchParams(window.location.search).get("grill") !== "off";
@@ -1039,13 +1040,18 @@ type Variant = { id: string; name: string; descriptor: string; render: (shared: 
 void WhatChanged;
 void Inspector;
 
-export const GRILL_VARIANTS: Variant[] = [
+// Round 1 (kept until cleanup): Ship's log, Turn by turn, two chat transcripts, Session map.
+const ROUND1: Variant[] = [
 	{ id: "ships-log", name: "Ship's log", descriptor: "One line per event, full width, filters and search; prompts break the rhythm.", render: (shared) => <ShipsLog shared={shared} /> },
 	{ id: "turn-by-turn", name: "Turn by turn", descriptor: "Reads like the conversation; each prompt's work folds into one bar, the ending is on top.", render: (shared) => <TurnByTurn shared={shared} /> },
 	{ id: "chat-elements", name: "Chat, every step a card", descriptor: "A native chat transcript: your prompts as bubbles, the agent's replies flat, each tool call an AI Elements tool card.", render: (shared) => <ChatElements shared={shared} /> },
 	{ id: "session-map", name: "Session map", descriptor: "The whole session on a time axis with a lane per subagent, above a grouped transcript.", render: (shared) => <SessionMap shared={shared} /> },
 	{ id: "chat-steps", name: "Chat, work folded", descriptor: "A native chat transcript where the work between replies folds into one line that opens into a chain of steps.", render: (shared) => <ChatSteps shared={shared} /> },
 ];
+void ROUND1;
+
+// Round 2: the locked chat default with five ways into the work.
+export const GRILL_VARIANTS: Variant[] = ROUND2;
 
 function useVariantIndex(count: number) {
 	const [index, setIndex] = React.useState(0);
@@ -1091,7 +1097,7 @@ export function TraceGrill(props: {
 		style.id = "trace-grill-css";
 		const nonce = document.querySelector<HTMLScriptElement>("script[nonce]")?.nonce;
 		if (nonce) style.nonce = nonce;
-		style.textContent = GRILL_CSS + CHAT_CSS;
+		style.textContent = GRILL_CSS + CHAT_CSS + R2_CSS;
 		document.head.append(style);
 	}, []);
 

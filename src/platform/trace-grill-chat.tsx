@@ -133,7 +133,7 @@ export function Icon({ name, size = 16, className = "" }: { name: keyof typeof P
 	);
 }
 
-const FAMILY_ICON: Record<ToolItem["family"], keyof typeof PATHS> = {
+export const FAMILY_ICON: Record<ToolItem["family"], keyof typeof PATHS> = {
 	read: "file",
 	search: "search",
 	edit: "pencil",
@@ -148,7 +148,7 @@ const FAMILY_ICON: Record<ToolItem["family"], keyof typeof PATHS> = {
 // ---------------------------------------------------------------------------
 // Shared chat pieces
 
-function CopyIconButton({ text, label }: { text: string; label: string }) {
+export function CopyIconButton({ text, label }: { text: string; label: string }) {
 	const [done, setDone] = React.useState(false);
 	return (
 		<button
@@ -171,7 +171,7 @@ function CopyIconButton({ text, label }: { text: string; label: string }) {
 	);
 }
 
-function CodeBlock({ title, text, diff }: { title?: string; text?: string; diff?: ToolItem["diff"] }) {
+export function CodeBlock({ title, text, diff }: { title?: string; text?: string; diff?: ToolItem["diff"] }) {
 	const raw = diff ? diff.lines.map((line) => `${line.type === "add" ? "+" : line.type === "del" ? "-" : " "} ${line.text}`).join("\n") : text || "";
 	return (
 		<div className="tc-code">
@@ -206,14 +206,14 @@ function CodeBlock({ title, text, diff }: { title?: string; text?: string; diff?
 	);
 }
 
-function statusOf(tool: ToolItem): { label: string; tone: "ok" | "err" | "hidden" | "muted"; icon: keyof typeof PATHS } {
+export function statusOf(tool: ToolItem): { label: string; tone: "ok" | "err" | "hidden" | "muted"; icon: keyof typeof PATHS } {
 	if (tool.error) return { label: "Error", tone: "err", icon: "err" };
 	if (tool.resultHidden) return { label: "Output hidden", tone: "hidden", icon: "eyeOff" };
 	if (tool.resultText === undefined) return { label: "No output", tone: "muted", icon: "circle" };
 	return { label: "Completed", tone: "ok", icon: "ok" };
 }
 
-function StatusBadge({ tool }: { tool: ToolItem }) {
+export function StatusBadge({ tool }: { tool: ToolItem }) {
 	const status = statusOf(tool);
 	return (
 		<span className={`tc-badge tc-badge-${status.tone}`}>
@@ -223,7 +223,7 @@ function StatusBadge({ tool }: { tool: ToolItem }) {
 	);
 }
 
-function ReasoningBlock({ item, level, seconds }: { item: Extract<Item, { type: "reasoning" }>; level: Level; seconds: number | null }) {
+export function ReasoningBlock({ item, level, seconds }: { item: Extract<Item, { type: "reasoning" }>; level: Level; seconds: number | null }) {
 	const [open, setOpen] = React.useState(false);
 	if (item.hidden) {
 		return (
@@ -245,7 +245,7 @@ function ReasoningBlock({ item, level, seconds }: { item: Extract<Item, { type: 
 	);
 }
 
-function TodoQueue({ tool }: { tool: ToolItem }) {
+export function TodoQueue({ tool }: { tool: ToolItem }) {
 	const todos = Array.isArray(tool.input?.todos) ? (tool.input!.todos as Array<{ content: string; status: string }>) : null;
 	if (!todos) return null;
 	const done = todos.filter((todo) => todo.status === "completed").length;
@@ -270,7 +270,7 @@ function TodoQueue({ tool }: { tool: ToolItem }) {
 	);
 }
 
-function stepPhrase(tool: ToolItem) {
+export function stepPhrase(tool: ToolItem) {
 	const path = tool.path ? tool.path.split("/").pop() : "";
 	switch (tool.family) {
 		case "read":
@@ -294,7 +294,7 @@ function stepPhrase(tool: ToolItem) {
 	}
 }
 
-function reasoningSeconds(items: Item[], index: number) {
+export function reasoningSeconds(items: Item[], index: number) {
 	const item = items[index];
 	const before = items[index - 1];
 	if (!item?.t || !before?.t) return null;
@@ -302,7 +302,7 @@ function reasoningSeconds(items: Item[], index: number) {
 	return seconds > 0 ? seconds : null;
 }
 
-function LevelBanner({ shared }: { shared: Shared }) {
+export function LevelBanner({ shared }: { shared: Shared }) {
 	if (shared.level === "full") return null;
 	return (
 		<div className="tc-levelbanner" role="note">
@@ -316,7 +316,7 @@ function LevelBanner({ shared }: { shared: Shared }) {
 	);
 }
 
-function ChatTopBar({ shared, onShare }: { shared: Shared; onShare: (() => void) | null }) {
+export function ChatTopBar({ shared, onShare }: { shared: Shared; onShare: (() => void) | null }) {
 	const { manifest, model } = shared;
 	return (
 		<header className="tc-topbar">
@@ -342,7 +342,7 @@ function ChatTopBar({ shared, onShare }: { shared: Shared; onShare: (() => void)
 	);
 }
 
-function ShareSheet({ shared, open, onClose }: { shared: Shared; open: boolean; onClose: () => void }) {
+export function ShareSheet({ shared, open, onClose }: { shared: Shared; open: boolean; onClose: () => void }) {
 	if (!open || !shared.share) return null;
 	return (
 		<div className="tc-sheet-backdrop" onClick={onClose}>
@@ -357,11 +357,11 @@ function ShareSheet({ shared, open, onClose }: { shared: Shared; open: boolean; 
 }
 
 // The place a chat app keeps its composer: here it hands the session to an agent.
-function ContinueBar({ shared }: { shared: Shared }) {
+export function ContinueBar({ shared }: { shared: Shared }) {
 	return <div className="tc-continue">{shared.actions}</div>;
 }
 
-function ScrollToEnd() {
+export function ScrollToEnd() {
 	const [show, setShow] = React.useState(false);
 	React.useEffect(() => {
 		const onScroll = () => setShow(window.innerHeight + window.scrollY < document.documentElement.scrollHeight - 400);
@@ -377,7 +377,7 @@ function ScrollToEnd() {
 	);
 }
 
-function UserMessage({ item }: { item: Extract<Item, { type: "prompt" }> }) {
+export function UserMessage({ item }: { item: Extract<Item, { type: "prompt" }> }) {
 	return (
 		<div className="tc-msg tc-msg-user" id={`tg-ev-${item.id}`}>
 			<div className="tc-bubble">
@@ -387,7 +387,7 @@ function UserMessage({ item }: { item: Extract<Item, { type: "prompt" }> }) {
 	);
 }
 
-function AssistantText({ item, shared, first }: { item: Extract<Item, { type: "reply" }>; shared: Shared; first: boolean }) {
+export function AssistantText({ item, shared, first }: { item: Extract<Item, { type: "reply" }>; shared: Shared; first: boolean }) {
 	return (
 		<div className={`tc-msg tc-msg-agent${item.final ? " is-final" : ""}`} id={`tg-ev-${item.id}`}>
 			{first ? (
@@ -406,7 +406,7 @@ function AssistantText({ item, shared, first }: { item: Extract<Item, { type: "r
 	);
 }
 
-function SummaryBlock({ shared }: { shared: Shared }) {
+export function SummaryBlock({ shared }: { shared: Shared }) {
 	const files = shared.manifest.summary?.filesTouched || [];
 	const checks = shared.manifest.summary?.checks || [];
 	return (
@@ -441,7 +441,7 @@ function SummaryBlock({ shared }: { shared: Shared }) {
 // ---------------------------------------------------------------------------
 // Variant A: AI Elements, as built. Every tool call is a Tool card.
 
-function ToolCard({ tool, shared }: { tool: ToolItem; shared: Shared }) {
+export function ToolCard({ tool, shared }: { tool: ToolItem; shared: Shared }) {
 	const [open, setOpen] = React.useState(Boolean(tool.diff && !tool.error));
 	if (tool.family === "plan" && tool.input?.todos) return <TodoQueue tool={tool} />;
 	if (tool.sub) return <TaskBlock tool={tool} sub={tool.sub} shared={shared} />;
@@ -488,7 +488,7 @@ function ToolCard({ tool, shared }: { tool: ToolItem; shared: Shared }) {
 	);
 }
 
-function TaskBlock({ tool, sub, shared }: { tool: ToolItem; sub: Subagent; shared: Shared }) {
+export function TaskBlock({ tool, sub, shared }: { tool: ToolItem; sub: Subagent; shared: Shared }) {
 	const [open, setOpen] = React.useState(false);
 	const files = [...new Set(sub.items.filter((item): item is ToolItem => item.type === "tool" && Boolean(item.path)).map((item) => item.path!.split("/").pop()!))];
 	return (
@@ -573,9 +573,9 @@ export function ChatElements({ shared }: { shared: Shared }) {
 // Variant B: the agent-app pattern. Work between messages folds into one
 // "Read 3 files, ran 2 commands" line that opens into a chain of steps.
 
-type Block = { kind: "item"; item: Item; index: number } | { kind: "work"; items: Item[] };
+export type Block = { kind: "item"; item: Item; index: number } | { kind: "work"; items: Item[] };
 
-function blocksOf(items: Item[]): Block[] {
+export function blocksOf(items: Item[]): Block[] {
 	const blocks: Block[] = [];
 	items.forEach((item, index) => {
 		const isWork = item.type === "tool" || item.type === "reasoning" || item.type === "omitted" || item.type === "note";
@@ -587,7 +587,7 @@ function blocksOf(items: Item[]): Block[] {
 	return blocks;
 }
 
-function workSummary(items: Item[]) {
+export function workSummary(items: Item[]) {
 	const tools = items.filter((item): item is ToolItem => item.type === "tool");
 	const count = (family: ToolItem["family"]) => tools.filter((tool) => tool.family === family).length;
 	const parts: string[] = [];
@@ -654,7 +654,7 @@ function StepRow({ tool, shared }: { tool: ToolItem; shared: Shared }) {
 	);
 }
 
-function StepList({ items, shared, nested = false }: { items: Item[]; shared: Shared; nested?: boolean }) {
+export function StepList({ items, shared, nested = false }: { items: Item[]; shared: Shared; nested?: boolean }) {
 	return (
 		<ol className={`tc-steps${nested ? " is-nested" : ""}`}>
 			{items.map((item, index) => {
@@ -695,7 +695,7 @@ function StepList({ items, shared, nested = false }: { items: Item[]; shared: Sh
 	);
 }
 
-function WorkGroup({ items, shared }: { items: Item[]; shared: Shared }) {
+export function WorkGroup({ items, shared }: { items: Item[]; shared: Shared }) {
 	const tools = items.filter((item): item is ToolItem => item.type === "tool");
 	const failed = tools.filter((tool) => tool.error).length + tools.reduce((n, tool) => n + (tool.sub?.errors || 0), 0);
 	const [open, setOpen] = React.useState(false);
