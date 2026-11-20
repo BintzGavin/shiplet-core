@@ -31,8 +31,8 @@ import {
 // ---------------------------------------------------------------------------
 // Turn helpers
 
-const workOf = (turn: Turn) => turn.items.filter((item) => item !== turn.reply);
-function toolsOf(items: Item[]): ToolItem[] {
+export const workOf = (turn: Turn) => turn.items.filter((item) => item !== turn.reply);
+export function toolsOf(items: Item[]): ToolItem[] {
 	const out: ToolItem[] = [];
 	for (const item of items) {
 		if (item.type !== "tool") continue;
@@ -41,7 +41,7 @@ function toolsOf(items: Item[]): ToolItem[] {
 	}
 	return out;
 }
-function statsOf(turn: Turn) {
+export function statsOf(turn: Turn) {
 	const tools = toolsOf(workOf(turn));
 	const edits = tools.filter((tool) => tool.family === "edit" && tool.path && !tool.error);
 	return {
@@ -75,7 +75,7 @@ function WorkLine({ turn, open, onClick, label }: { turn: Turn; open?: boolean; 
 	);
 }
 
-function TurnChanges({ turn, shared }: { turn: Turn; shared: Shared }) {
+export function TurnChanges({ turn, shared }: { turn: Turn; shared: Shared }) {
 	const stats = statsOf(turn);
 	if (!stats.edits.length) return <p className="r2-empty">No files changed in this part of the session.</p>;
 	return (
@@ -117,7 +117,7 @@ function CheckRow({ tool, shared }: { tool: ToolItem; shared: Shared }) {
 	);
 }
 
-function TurnChecks({ turn, shared }: { turn: Turn; shared: Shared }) {
+export function TurnChecks({ turn, shared }: { turn: Turn; shared: Shared }) {
 	const stats = statsOf(turn);
 	if (!stats.checks.length) return <p className="r2-empty">No tests, lint or builds were run in this part of the session.</p>;
 	return (
@@ -129,7 +129,7 @@ function TurnChecks({ turn, shared }: { turn: Turn; shared: Shared }) {
 	);
 }
 
-function Shell({ shared, children, wide = false, toolbar }: { shared: Shared; children: React.ReactNode; wide?: boolean; toolbar?: React.ReactNode }) {
+export function Shell({ shared, children, wide = false, toolbar }: { shared: Shared; children: React.ReactNode; wide?: boolean; toolbar?: React.ReactNode }) {
 	const [sheet, setSheet] = React.useState(false);
 	return (
 		<div className={`tg-v tc r2${wide ? " r2-wide" : ""}`}>
@@ -144,7 +144,7 @@ function Shell({ shared, children, wide = false, toolbar }: { shared: Shared; ch
 	);
 }
 
-function TurnFrame({ turn, shared, between, aboveReply, reply }: { turn: Turn; shared: Shared; between?: React.ReactNode; aboveReply?: React.ReactNode; reply?: React.ReactNode }) {
+export function TurnFrame({ turn, shared, between, aboveReply, reply }: { turn: Turn; shared: Shared; between?: React.ReactNode; aboveReply?: React.ReactNode; reply?: React.ReactNode }) {
 	return (
 		<section className="r2-turn" id={`tg-turn-${turn.index}`} aria-label={turn.prompt ? `Prompt ${turn.index + 1}` : "Session start"}>
 			{turn.prompt ? <UserMessage item={turn.prompt} /> : null}
@@ -264,7 +264,7 @@ function TracePanel({ shared }: { shared: Shared }) {
 
 type Mark = { tool: ToolItem; sub?: boolean };
 
-function StepDetail({ tool, shared }: { tool: ToolItem; shared: Shared }) {
+export function StepDetail({ tool, shared }: { tool: ToolItem; shared: Shared }) {
 	if (tool.sub) {
 		return (
 			<div className="r2-stack">

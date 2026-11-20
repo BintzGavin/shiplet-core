@@ -605,12 +605,29 @@ export function workSummary(items: Item[]) {
 	return text ? text[0].toUpperCase() + text.slice(1) : "Worked";
 }
 
-function StepRow({ tool, shared }: { tool: ToolItem; shared: Shared }) {
+// A strip outside the list can point at one step: `focus` opens it (unless
+// open is false) and scrolls it into view; `active` marks the step in view.
+export type StepFocus = { id: string; n: number; open: boolean } | null;
+
+function StepRow({ tool, shared, focus, active }: { tool: ToolItem; shared: Shared; focus?: StepFocus; active?: boolean }) {
 	const [open, setOpen] = React.useState(false);
+	const ref = React.useRef<HTMLLIElement>(null);
 	const status = statusOf(tool);
 	const expandable = Boolean(tool.diff || tool.input || tool.resultText !== undefined || tool.sub);
+	const focusN = focus && focus.id === tool.id ? focus.n : 0;
+	React.useEffect(() => {
+		if (!focusN || !ref.current) return;
+		if (focus?.open && expandable) setOpen(true);
+		const reduce = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+		const top = ref.current.getBoundingClientRect().top + window.scrollY - 96;
+		window.scrollTo({ top, behavior: reduce ? "auto" : "smooth" });
+		ref.current.classList.remove("is-focus");
+		void ref.current.offsetWidth;
+		ref.current.classList.add("is-focus");
+		// eslint-disable-next-line react-hooks/exhaustive-deps
+	}, [focusN]);
 	return (
-		<li className={`tc-step${tool.error ? " is-error" : ""}`} id={`tg-ev-${tool.id}`}>
+		<li ref={ref} className={`tc-step${tool.error ? " is-error" : ""}${active ? " is-active" : ""}`} id={`tg-ev-${tool.id}`}>
 			<span className={`tc-step-icon${tool.error ? " is-error" : ""}`}>
 				<Icon name={tool.error ? "err" : FAMILY_ICON[tool.family]} size={14} />
 			</span>
@@ -654,11 +671,11 @@ function StepRow({ tool, shared }: { tool: ToolItem; shared: Shared }) {
 	);
 }
 
-export function StepList({ items, shared, nested = false }: { items: Item[]; shared: Shared; nested?: boolean }) {
+export function StepList({ items, shared, nested = false, focus, activeId }: { items: Item[]; shared: Shared; nested?: boolean; focus?: StepFocus; activeId?: string | null }) {
 	return (
 		<ol className={`tc-steps${nested ? " is-nested" : ""}`}>
 			{items.map((item, index) => {
-				if (item.type === "tool") return <StepRow key={item.id} tool={item} shared={shared} />;
+				if (item.type === "tool") return <StepRow key={item.id} tool={item} shared={shared} focus={focus} active={activeId === item.id} />;
 				if (item.type === "reasoning")
 					return (
 						<li key={item.id} className="tc-step tc-step-thought" id={`tg-ev-${item.id}`}>

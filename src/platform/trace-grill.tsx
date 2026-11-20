@@ -11,7 +11,8 @@ import { buildModel, offset, span, type Item, type Level, type Model, type Subag
 import { DiffStat, DiffView, FAMILY_GLYPH, LEVEL_NAME, Md, ToolBody, itemText, words } from "./trace-grill-parts";
 import { ChatElements, ChatSteps } from "./trace-grill-chat";
 import { ROUND2 } from "./trace-grill-r2";
-import { CHAT_CSS, GRILL_CSS, R2_CSS } from "./trace-grill-styles";
+import { ROUND3 } from "./trace-grill-r3";
+import { CHAT_CSS, GRILL_CSS, R2_CSS, R3_CSS } from "./trace-grill-styles";
 
 export function grillEnabled() {
 	return typeof window !== "undefined" && /^(localhost|127\.0\.0\.1|\[::1\])$/.test(window.location.hostname) && new URLSearchParams(window.location.search).get("grill") !== "off";
@@ -1051,7 +1052,8 @@ const ROUND1: Variant[] = [
 void ROUND1;
 
 // Round 2: the locked chat default with five ways into the work.
-export const GRILL_VARIANTS: Variant[] = ROUND2;
+void ROUND2;
+export const GRILL_VARIANTS: Variant[] = ROUND3;
 
 function useVariantIndex(count: number) {
 	const [index, setIndex] = React.useState(0);
@@ -1097,7 +1099,7 @@ export function TraceGrill(props: {
 		style.id = "trace-grill-css";
 		const nonce = document.querySelector<HTMLScriptElement>("script[nonce]")?.nonce;
 		if (nonce) style.nonce = nonce;
-		style.textContent = GRILL_CSS + CHAT_CSS + R2_CSS;
+		style.textContent = GRILL_CSS + CHAT_CSS + R2_CSS + R3_CSS;
 		document.head.append(style);
 	}, []);
 
@@ -1174,7 +1176,7 @@ export function TraceGrill(props: {
 				if (event.defaultPrevented || event.nativeEvent.isComposing) return;
 				if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
 				const target = event.target as HTMLElement;
-				if (target.closest(TEXT_ENTRY) || target.closest("[role=radiogroup], [role=tablist], .tg-i-list")) return;
+				if (target.closest(TEXT_ENTRY) || target.closest("[role=radiogroup], [role=tablist], [role=listbox], .tg-i-list")) return;
 				event.preventDefault();
 				select(index + (event.key === "ArrowLeft" ? -1 : 1));
 			}}
