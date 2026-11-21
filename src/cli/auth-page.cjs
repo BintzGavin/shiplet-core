@@ -86,7 +86,7 @@ header{position:relative;overflow:hidden;min-height:66px;background:color-mix(in
 .waterline .far{opacity:.46}.waterline .mid{opacity:.65}.waterline .near{opacity:.9}.waterline .near-body{fill:var(--mark-harbor);fill-opacity:.2;stroke:none}
 main{display:grid;place-items:center;padding:clamp(24px,6vh,64px) 16px}
 .card{display:grid;gap:20px;width:100%;max-width:520px;padding:26px;background:var(--surface);border:1px solid var(--line);border-bottom:3px solid var(--line-strong);border-radius:10px;box-shadow:0 1px 2px oklch(23% 0.04 255 / 0.06);overflow-wrap:anywhere}
-.stamp{justify-self:start;font-family:var(--font-mono);font-size:.6875rem;font-weight:600;text-transform:uppercase;letter-spacing:.08em;padding:3px 8px;border:1.5px solid currentColor;border-radius:4px;transform:rotate(-1deg);color:var(--ok);background:var(--ok-surface)}
+.stamp{justify-self:start;font-family:var(--font-mono);font-size:.6875rem;font-weight:600;text-transform:uppercase;letter-spacing:.08em;padding:3px 8px;border:1.5px solid currentColor;border-radius:4px;color:var(--ok);background:var(--ok-surface)}
 .stamp[data-tone="err"]{color:var(--err);background:var(--err-surface)}
 h1{font-family:var(--font-display);font-size:clamp(1.6rem,1.2rem + 1.6vw,2.2rem);font-weight:800;line-height:1.15;letter-spacing:-.025em;text-wrap:balance}
 p{color:var(--text-soft);line-height:1.6}
