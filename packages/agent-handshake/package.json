@@ -1,0 +1,27 @@
+{
+  "name": "shiplet-agent-handshake",
+  "version": "0.1.0",
+  "description": "Agent Handshake: live messaging between Claude Code, Codex and other agent sessions, with export to Shiplet traces.",
+  "private": true,
+  "type": "module",
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/BintzGavin/shiplet-core.git",
+    "directory": "packages/agent-handshake"
+  },
+  "bin": {
+    "shiplet-handshake": "bin/shiplet-handshake.js"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "test": "node --test --test-concurrency=1 --test-reporter=spec test/*.test.js",
+    "check": "node --check bin/shiplet-handshake.js && for f in src/*/*.js src/*/*/*.js; do node --check \"$f\" || exit 1; done"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "1.32.2",
+    "zod": "4.6.7"
+  }
+}

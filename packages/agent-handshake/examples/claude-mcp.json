@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "shiplet-handshake": {
+      "type": "stdio",
+      "command": "/ABSOLUTE/PATH/TO/node",
+      "args": ["/ABSOLUTE/PATH/TO/shiplet-core/packages/agent-handshake/bin/shiplet-handshake.js", "mcp", "--kind", "claude"]
+    }
+  }
+}
