@@ -12,7 +12,8 @@ import { DiffStat, DiffView, FAMILY_GLYPH, LEVEL_NAME, Md, ToolBody, itemText, w
 import { ChatElements, ChatSteps } from "./trace-grill-chat";
 import { ROUND2 } from "./trace-grill-r2";
 import { ROUND3 } from "./trace-grill-r3";
-import { CHAT_CSS, GRILL_CSS, R2_CSS, R3_CSS } from "./trace-grill-styles";
+import { ROUND4 } from "./trace-grill-r4";
+import { CHAT_CSS, GRILL_CSS, R2_CSS, R3_CSS, R4_CSS } from "./trace-grill-styles";
 
 export function grillEnabled() {
 	return typeof window !== "undefined" && /^(localhost|127\.0\.0\.1|\[::1\])$/.test(window.location.hostname) && new URLSearchParams(window.location.search).get("grill") !== "off";
@@ -1053,7 +1054,8 @@ void ROUND1;
 
 // Round 2: the locked chat default with five ways into the work.
 void ROUND2;
-export const GRILL_VARIANTS: Variant[] = ROUND3;
+void ROUND3;
+export const GRILL_VARIANTS: Variant[] = ROUND4;
 
 function useVariantIndex(count: number) {
 	const [index, setIndex] = React.useState(0);
@@ -1099,7 +1101,7 @@ export function TraceGrill(props: {
 		style.id = "trace-grill-css";
 		const nonce = document.querySelector<HTMLScriptElement>("script[nonce]")?.nonce;
 		if (nonce) style.nonce = nonce;
-		style.textContent = GRILL_CSS + CHAT_CSS + R2_CSS + R3_CSS;
+		style.textContent = GRILL_CSS + CHAT_CSS + R2_CSS + R3_CSS + R4_CSS;
 		document.head.append(style);
 	}, []);
 

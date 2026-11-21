@@ -10,12 +10,12 @@ import type { Shared } from "./trace-grill";
 import { AssistantText, FAMILY_ICON, Icon, StepList, stepPhrase, type StepFocus } from "./trace-grill-chat";
 import { Shell, StepDetail, TurnChanges, TurnChecks, TurnFrame, statsOf, workOf } from "./trace-grill-r2";
 
-type Tab = "answer" | "steps" | "changes" | "checks";
+export type Tab = "answer" | "steps" | "changes" | "checks";
 
 // ---------------------------------------------------------------------------
 // Strip
 
-const marksOf = (turn: Turn) => workOf(turn).filter((item): item is ToolItem => item.type === "tool");
+export const marksOf = (turn: Turn) => workOf(turn).filter((item): item is ToolItem => item.type === "tool");
 
 function toneOf(tool: ToolItem) {
 	if (tool.sub) return tool.sub.errors ? "sub-err" : "sub";
@@ -40,8 +40,9 @@ function weightsByTime(turn: Turn, marks: ToolItem[]) {
 		return from !== null && to !== null ? Math.max(0, to - from) : 0;
 	});
 	const total = raw.reduce((a, b) => a + b, 0) || 1;
-	// Never thinner than 0.6% of the bar, so every step stays clickable.
-	return raw.map((ms) => Math.max(0.6, (ms / total) * 100));
+	// Never thinner than 0.6% of the bar, so every step stays clickable; a
+	// subagent keeps room for its name pill.
+	return raw.map((ms, index) => Math.max(marks[index].sub ? 9 : 0.6, (ms / total) * 100));
 }
 
 function Strip({
@@ -101,7 +102,7 @@ function Strip({
 						onClick={() => onPick(tool)}
 					>
 						<span className="r3-pip" aria-hidden="true" />
-						{tool.sub && mode === "dots" ? <span className="r3-sub-label">{tool.sub.kind}</span> : null}
+						{tool.sub ? <span className="r3-sub-label">{tool.sub.kind}</span> : null}
 					</button>
 				);
 			})}
@@ -112,8 +113,10 @@ function Strip({
 // ---------------------------------------------------------------------------
 // Tabs, shared by every variant
 
-function TabRow({ turn, tab, setTab, after }: { turn: Turn; tab: Tab; setTab: (tab: Tab) => void; after?: React.ReactNode }) {
+export function TabRow({ turn, tab, setTab, after, locked }: { turn: Turn; tab: Tab; setTab: (tab: Tab) => void; after?: React.ReactNode; locked?: Partial<Record<Tab, string>> }) {
 	const stats = statsOf(turn);
+	// A failed check counts even when the level dropped the step's output.
+	const failed = stats.tools.filter((tool) => tool.error || tool.check?.ok === false).length;
 	// Count steps the way the strip does: a subagent is one step.
 	const tabs = [
 		["answer", "Answer"],
@@ -127,7 +130,13 @@ function TabRow({ turn, tab, setTab, after }: { turn: Turn; tab: Tab; setTab: (t
 				{tabs.map(([id, label]) => (
 					<button key={id} type="button" role="tab" aria-selected={tab === id} className={`r2-tab${tab === id ? " is-on" : ""}`} onClick={() => setTab(id)}>
 						{label}
-						{id === "steps" && stats.errors ? <span className="r2-tab-err">{stats.errors}</span> : null}
+						{id === "steps" && failed ? <span className="r2-tab-err">{failed}</span> : null}
+						{locked?.[id] ? (
+							<span className="r4-lock" title={locked[id]}>
+								<Icon name="lock" size={12} />
+								<span className="r3-sr">{locked[id]}</span>
+							</span>
+						) : null}
 					</button>
 				))}
 			</div>
@@ -136,7 +145,7 @@ function TabRow({ turn, tab, setTab, after }: { turn: Turn; tab: Tab; setTab: (t
 	);
 }
 
-function TabBody({ turn, shared, tab, steps }: { turn: Turn; shared: Shared; tab: Tab; steps: React.ReactNode }) {
+export function TabBody({ turn, shared, tab, steps }: { turn: Turn; shared: Shared; tab: Tab; steps: React.ReactNode }) {
 	if (tab === "answer") return turn.reply ? <AssistantText item={turn.reply} shared={shared} first={false} /> : <p className="r2-empty">No reply in this part of the session.</p>;
 	if (tab === "steps") return <>{steps}</>;
 	if (tab === "changes") return <TurnChanges turn={turn} shared={shared} />;
@@ -306,7 +315,7 @@ function ReaderTurn({ turn, shared }: { turn: Turn; shared: Shared }) {
 // ---------------------------------------------------------------------------
 // 5. Steps tab with a sticky strip that follows the list
 
-function SyncedSteps({ turn, shared }: { turn: Turn; shared: Shared }) {
+export function SyncedSteps({ turn, shared }: { turn: Turn; shared: Shared }) {
 	const marks = marksOf(turn);
 	const [activeId, setActiveId] = React.useState<string | null>(marks[0]?.id ?? null);
 	const [focus, setFocus] = React.useState<StepFocus>(null);
@@ -339,7 +348,7 @@ function SyncedSteps({ turn, shared }: { turn: Turn; shared: Shared }) {
 	return (
 		<div className="r3-sync">
 			<div className="r3-sync-bar" ref={stripRef}>
-				<Strip turn={turn} shared={shared} activeId={activeId} onPick={(tool) => setFocus((prev) => ({ id: tool.id, n: (prev?.n || 0) + 1, open: false }))} />
+				<Strip turn={turn} shared={shared} mode="bar" activeId={activeId} onPick={(tool) => setFocus((prev) => ({ id: tool.id, n: (prev?.n || 0) + 1, open: false }))} />
 				<div className="r3-sync-meta" aria-live="polite">
 					<span>{active ? `Step ${marks.indexOf(active) + 1} of ${marks.length}` : ""}</span>
 					<span>{span(turn.start, turn.end)}{stats.errors ? ` · ${stats.errors} failed` : ""}</span>
@@ -350,7 +359,7 @@ function SyncedSteps({ turn, shared }: { turn: Turn; shared: Shared }) {
 	);
 }
 
-function SyncTurn({ turn, shared }: { turn: Turn; shared: Shared }) {
+export function SyncTurn({ turn, shared, locked }: { turn: Turn; shared: Shared; locked?: Partial<Record<Tab, string>> }) {
 	const [tab, setTab] = React.useState<Tab>("answer");
 	return (
 		<TurnFrame
@@ -358,7 +367,7 @@ function SyncTurn({ turn, shared }: { turn: Turn; shared: Shared }) {
 			shared={shared}
 			reply={
 				<div className="r2-tabbed">
-					<TabRow turn={turn} tab={tab} setTab={setTab} />
+					<TabRow turn={turn} tab={tab} setTab={setTab} locked={locked} />
 					<TabBody turn={turn} shared={shared} tab={tab} steps={<SyncedSteps turn={turn} shared={shared} />} />
 				</div>
 			}

@@ -2,7 +2,7 @@
 // Shared read model for the trace viewer variants: pairs tool calls with their
 // results, splits the session into turns, folds subagents under the Task call
 // that started them, and derives diffs and checks from tool inputs.
-import type { TraceEvent, TraceManifest } from "../cli/trace-core.mjs";
+import { isCheckCommand, type TraceEvent, type TraceManifest } from "../cli/trace-core.mjs";
 
 export type Level = "full" | "conversation" | "summary" | "hidden";
 
@@ -24,7 +24,7 @@ export type ToolItem = {
 	resultHidden: boolean;
 	error: boolean;
 	diff?: FileDiff;
-	check?: { command: string; ok: boolean | null };
+	check?: { command: string; ok: boolean | null; fromSummary?: boolean };
 	sub?: Subagent;
 	path?: string;
 };
@@ -75,7 +75,6 @@ export type Model = {
 	errorCount: number;
 };
 
-const CHECK = /\b(test|vitest|jest|lint|eslint|typecheck|tsc|build|pytest|cargo test)\b/;
 
 export function relPath(value: string, cwdLabel: string | null | undefined) {
 	if (!value) return value;
@@ -215,7 +214,9 @@ export function buildModel(events: TraceEvent[], manifest: TraceManifest & { cwd
 				};
 				if (fam === "shell") {
 					const command = String(input?.command || event.tool?.inputSummary || "");
-					if (CHECK.test(command)) item.check = { command, ok: result ? !result.result?.isError : null };
+					// Same rule the server uses for the manifest's check list, so
+					// every level agrees on what counts as a check.
+					if (isCheckCommand(String(event.tool?.inputSummary || command))) item.check = { command, ok: result ? !result.result?.isError : null };
 				}
 				if (!result) pending.set(base.agent, [...(pending.get(base.agent) || []), item]);
 				all.push(item);
@@ -337,6 +338,23 @@ export function buildModel(events: TraceEvent[], manifest: TraceManifest & { cwd
 				if (tool.diff.isNew) file.isNew = true;
 			}
 		} else if (tool.family === "read" && tool.path) touch(tool.path).reads++;
+	}
+	// Every level keeps the session's check results in the manifest summary
+	// (command + passed/failed), even when the tool output itself is dropped.
+	// Match them to the check steps in order so a Conversation reader still
+	// sees which checks passed.
+	const summaryChecks = manifest.summary?.checks || [];
+	let cursor = 0;
+	for (const tool of [...everyTool].sort((a, b) => a.seq - b.seq)) {
+		if (!tool.check) continue;
+		const head = tool.check.command.split("\n")[0].slice(0, 120);
+		const at = summaryChecks.findIndex((check, index) => index >= cursor && check.command.split("\n")[0].slice(0, 120) === head);
+		if (at < 0) continue;
+		cursor = at + 1;
+		if (tool.check.ok === null) {
+			tool.check.ok = summaryChecks[at].ok;
+			tool.check.fromSummary = true;
+		}
 	}
 	const times = events.map((event) => event.t).filter(Boolean).map((t) => Date.parse(t!));
 	return {

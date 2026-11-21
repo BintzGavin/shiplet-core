@@ -85,7 +85,7 @@ export function TurnChanges({ turn, shared }: { turn: Turn; shared: Shared }) {
 					<Icon name="eyeOff" size={14} /> Diffs are hidden at {LEVEL_NAME[shared.level]}. These files were changed:
 				</p>
 			) : null}
-			{stats.edits.map((edit) =>
+			{stats.edits.filter((edit, index) => edit.diff || stats.edits.findIndex((other) => !other.diff && other.path === edit.path) === index).map((edit) =>
 				edit.diff ? (
 					<CodeBlock key={edit.id} title={edit.diff.path} diff={edit.diff} />
 				) : (

@@ -117,6 +117,27 @@ const PATHS: Record<string, React.ReactNode> = {
 			<line x1="12" x2="12" y1="2" y2="15" />
 		</>
 	),
+	lock: (
+		<>
+			<rect width="18" height="11" x="3" y="11" rx="2" ry="2" />
+			<path d="M7 11V7a5 5 0 0 1 10 0v4" />
+		</>
+	),
+	info: (
+		<>
+			<circle cx="12" cy="12" r="10" />
+			<path d="M12 16v-4" />
+			<path d="M12 8h.01" />
+		</>
+	),
+	users: (
+		<>
+			<path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2" />
+			<circle cx="9" cy="7" r="4" />
+			<path d="M22 21v-2a4 4 0 0 0-3-3.87" />
+			<path d="M16 3.13a4 4 0 0 1 0 7.75" />
+		</>
+	),
 	x: (
 		<>
 			<path d="M18 6 6 18" />
@@ -615,6 +636,8 @@ function StepRow({ tool, shared, focus, active }: { tool: ToolItem; shared: Shar
 	const status = statusOf(tool);
 	const expandable = Boolean(tool.diff || tool.input || tool.resultText !== undefined || tool.sub);
 	const focusN = focus && focus.id === tool.id ? focus.n : 0;
+	// A check's result survives every level (manifest summary), even when its output doesn't.
+	const failed = tool.error || tool.check?.ok === false;
 	React.useEffect(() => {
 		if (!focusN || !ref.current) return;
 		if (focus?.open && expandable) setOpen(true);
@@ -627,9 +650,9 @@ function StepRow({ tool, shared, focus, active }: { tool: ToolItem; shared: Shar
 		// eslint-disable-next-line react-hooks/exhaustive-deps
 	}, [focusN]);
 	return (
-		<li ref={ref} className={`tc-step${tool.error ? " is-error" : ""}${active ? " is-active" : ""}`} id={`tg-ev-${tool.id}`}>
-			<span className={`tc-step-icon${tool.error ? " is-error" : ""}`}>
-				<Icon name={tool.error ? "err" : FAMILY_ICON[tool.family]} size={14} />
+		<li ref={ref} className={`tc-step${failed ? " is-error" : ""}${active ? " is-active" : ""}`} id={`tg-ev-${tool.id}`}>
+			<span className={`tc-step-icon${failed ? " is-error" : ""}`}>
+				<Icon name={failed ? "err" : FAMILY_ICON[tool.family]} size={14} />
 			</span>
 			<div className="tc-step-main">
 				<button type="button" className="tc-step-line" aria-expanded={expandable ? open : undefined} disabled={!expandable} onClick={() => setOpen(!open)}>
@@ -640,8 +663,8 @@ function StepRow({ tool, shared, focus, active }: { tool: ToolItem; shared: Shar
 							{tool.diff.removed ? <span className="tc-del">−{tool.diff.removed}</span> : null}
 						</span>
 					) : null}
-					{tool.check && !tool.error && tool.check.ok ? <span className="tc-badge tc-badge-ok">passed</span> : null}
-					{tool.error ? <span className="tc-badge tc-badge-err">failed</span> : null}
+					{tool.check && !failed && tool.check.ok ? <span className="tc-badge tc-badge-ok">passed</span> : null}
+					{failed ? <span className="tc-badge tc-badge-err">failed</span> : null}
 					{tool.resultHidden && status.tone === "hidden" ? (
 						<span className="tc-step-hidden" title={`Output hidden at ${LEVEL_NAME[shared.level]}`}>
 							<Icon name="eyeOff" size={12} />
