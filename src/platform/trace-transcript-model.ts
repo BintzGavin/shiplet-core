@@ -37,6 +37,7 @@ export type Item =
 export type Subagent = {
 	id: string;
 	title: string;
+	// The agent type ("Explore"), or "" when the reader's level dropped it.
 	kind: string;
 	items: Item[];
 	start: string | null;
@@ -112,8 +113,19 @@ function lineDiff(before: string, after: string): DiffLine[] {
 	return out;
 }
 
+// The model is rebuilt each time a page of the session arrives; an edit's input
+// object is kept across rebuilds, so its line diff is computed once.
+const diffCache = new WeakMap<object, FileDiff | undefined>();
+
 function diffFor(name: string, input: Record<string, unknown> | undefined, cwdLabel: string | null): FileDiff | undefined {
 	if (!input) return undefined;
+	if (diffCache.has(input)) return diffCache.get(input);
+	const diff = computeDiff(name, input, cwdLabel);
+	diffCache.set(input, diff);
+	return diff;
+}
+
+function computeDiff(name: string, input: Record<string, unknown>, cwdLabel: string | null): FileDiff | undefined {
 	const path = typeof input.file_path === "string" ? relPath(input.file_path, cwdLabel) : typeof input.path === "string" ? relPath(input.path, cwdLabel) : null;
 	if (!path) return undefined;
 	let lines: DiffLine[] = [];
@@ -141,8 +153,11 @@ function labelFor(event: TraceEvent, cwdLabel: string | null) {
 		return `Plan: ${todos.filter((todo) => todo.status === "completed").length} of ${todos.length} done${active ? ` · now: ${active.content}` : ""}`;
 	}
 	if (name === "TodoWrite") return "Updated the plan";
-	if (name.startsWith("mcp__") && typeof input?.code === "string") {
-		const call = /method:\s*'(\w+)'[\s\S]*?path:\s*[`'"]([^`'"]+)/.exec(input.code);
+	// Code-mode calls read as "GET /path". Below Full only the input summary is
+	// kept, and it carries the same code.
+	const code = typeof input?.code === "string" ? input.code : name.startsWith("mcp__") ? event.tool?.inputSummary : undefined;
+	if (name.startsWith("mcp__") && code) {
+		const call = /method:\s*'(\w+)'[\s\S]*?path:\s*[`'"]([^`'"]+)/.exec(code);
 		if (call) return `${call[1]} ${call[2]}`;
 	}
 	if (name === "Grep" && input?.pattern) return `"${input.pattern}" in ${relPath(String(input.path || "."), cwdLabel) || "."}`;
@@ -230,7 +245,7 @@ export function buildModel(events: TraceEvent[], manifest: Pick<TraceManifest, "
 				break;
 			}
 			case "subagent_start":
-				agents.set(base.agent, { id: base.agent, title: event.text || base.agent, kind: "Subagent", items: [], start: event.t, end: null, toolCount: 0, errors: 0 });
+				agents.set(base.agent, { id: base.agent, title: event.text || base.agent, kind: "", items: [], start: event.t, end: null, toolCount: 0, errors: 0 });
 				break;
 			case "subagent_end": {
 				const sub = agents.get(base.agent);
@@ -279,7 +294,8 @@ export function buildModel(events: TraceEvent[], manifest: Pick<TraceManifest, "
 		const sub = unclaimed.splice(index, 1)[0];
 		if (sub) {
 			item.sub = sub;
-			sub.kind = String(item.input?.subagent_type || "Subagent");
+			// The agent type lives in the call's input, which levels below Full drop.
+			sub.kind = typeof item.input?.subagent_type === "string" ? item.input.subagent_type : "";
 			sub.title = item.label;
 		}
 	}

@@ -3,7 +3,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 
 import type { TraceEvent, TraceManifest } from "../src/cli/trace-core.mjs";
-import { TraceTranscript } from "../src/platform/trace-transcript";
+import { LEVEL_SEES, TraceTranscript } from "../src/platform/trace-transcript";
 import { buildModel, stepsOf, toolsOf } from "../src/platform/trace-transcript-model";
 
 // A small Claude Code style session: one prompt, a subagent, an edit, a failed
@@ -128,6 +128,25 @@ describe("trace transcript model", () => {
 		expect(checks.every((tool) => tool.resultHidden && tool.resultText === undefined)).toBe(true);
 	});
 
+	it("names a subagent by its task when the level dropped its type", () => {
+		const events = session().map((event) => (event.kind === "tool_call" ? { ...event, tool: { ...event.tool!, input: {} } } : event));
+		const task = stepsOf(buildModel(atConversation(events), manifest()).turns[0])[0];
+		expect(task.sub?.kind).toBe("");
+		expect(task.label).toBe("Map the export path");
+	});
+
+	it("labels a code-mode call by its method and path at every level", () => {
+		const events = session();
+		const at = events.findIndex((event) => event.tool?.callId === "t3");
+		const code = "async () => await codemode.request({ method: 'GET', path: '/api/projects/q3/review-feedback' })";
+		events.splice(at, 0, { id: "mcp1", seq: 0.5, t: events[at].t, agent: "main", kind: "tool_call", tool: { name: "mcp__shiplet__execute", callId: "m1", input: { code }, inputSummary: code } });
+		const full = stepsOf(buildModel(events, manifest()).turns[0]).find((tool) => tool.family === "mcp")!;
+		const dropped = events.map((event) => (event.tool?.callId === "m1" ? { ...event, tool: { ...event.tool!, input: {} } } : event));
+		const conversation = stepsOf(buildModel(atConversation(dropped), manifest()).turns[0]).find((tool) => tool.family === "mcp")!;
+		expect(full.label).toBe("GET /api/projects/q3/review-feedback");
+		expect(conversation.label).toBe("GET /api/projects/q3/review-feedback");
+	});
+
 	it("treats only the server's check commands as checks", () => {
 		const events = session();
 		const loop = events.find((event) => event.tool?.callId === "t4")!;
@@ -178,6 +197,11 @@ describe("trace transcript view", () => {
 		expect(html).toContain('aria-label="What this level leaves out"');
 		expect(html).toContain("Steps · 4");
 		expect(html).toMatch(/aria-label="1 failed"/);
+	});
+
+	it("says that Conversation leaves out errors from steps that aren't checks", () => {
+		expect(LEVEL_SEES.conversation.leaves).toContain("errors from steps that aren't checks");
+		expect(LEVEL_SEES.conversation.keeps).toContain("which checks passed or failed");
 	});
 
 	it("shows only the summary at the Summary level", () => {

@@ -39,27 +39,38 @@ decided and why, so later changes start from the same reasons.
    those to the check steps in order, using the server's own `isCheckCommand`
    rule. A Conversation reader sees which checks failed and passed, in the bar,
    the step list, the tab badge, and the Checks tab, without any output.
-   Errors from steps that are not checks stay hidden below Full.
+   Errors from steps that are not checks stay hidden below Full, so a turn can
+   show fewer failures at Conversation than at Full; the level's info button
+   says so.
 
 ## Behaviour
 
 - **Loading.** The viewer reads every segment, one after another, and the
   transcript fills in as they arrive. Turns are built from the whole session,
   so a prompt's final reply is the last reply before the next prompt.
-- **Hidden content** is marked where it would be: an eye-off icon on a step
-  whose output was left out, "Reasoning hidden at Conversation" in the step
-  list, and a note above the file list in Changes.
+- **Hidden content.** Below Full the header's level line is the one place that
+  says what is left out; steps carry no per-row "hidden" marks, rows whose only
+  content was dropped don't expand, and hidden reasoning has no rows. Changes
+  keeps a short note above its file list. At Full, anything a sharing rule hid
+  is marked on its row.
+- **Subagents** show their type ("Explore") when the level keeps it, and their
+  task otherwise, on the bar and in the list.
 - **Attachments** render inline at the event that carried them. Any the
   session's events never reference are listed after the conversation.
 - **Keyboard.** Tabs follow the ARIA tab pattern (Left, Right, Home, End). The
   activity bar is a listbox with one tab stop; arrow keys move along it.
 - **Motion.** Jumping to a step scrolls smoothly and flashes the row, unless
   the reader prefers reduced motion.
-- **Narrow screens.** The prompt bubble widens, the tab row scrolls
-  sideways, and the Share button wraps under the title.
+- **Narrow screens.** The prompt bubble widens, the tab row and the copy bar
+  each stay one row and scroll sideways, subagent pills keep room for their
+  name, and the Share button wraps under the title.
+- **Long sessions.** The bar finds the step being read by binary search over
+  the rows, and each edit's diff is computed once while pages load.
 
 ## Open questions
 
+- A turn's final reply can be a one-liner ("0 of 30 runs fail now.") when
+  that is how the agent ended; the tab counts carry the rest.
 - Very long sessions (hundreds of steps in one prompt) make the activity bar's
   segments thin. Zooming the bar or grouping quiet stretches may help.
 - Changes lists every edit in order. Grouping edits by file was the next

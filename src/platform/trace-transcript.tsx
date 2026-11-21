@@ -27,7 +27,10 @@ export const LEVEL_NAME: Record<Level, string> = { full: "Full", conversation: "
 // What each level keeps and leaves out, in reader terms.
 export const LEVEL_SEES: Record<Level, { keeps: string[]; leaves: string[] }> = {
 	full: { keeps: ["prompts and replies", "every step with its output", "diffs", "reasoning"], leaves: [] },
-	conversation: { keeps: ["prompts and replies", "every step the agent took", "which checks passed"], leaves: ["tool output", "diffs", "reasoning"] },
+	conversation: {
+		keeps: ["prompts and replies", "every step the agent took", "which checks passed or failed"],
+		leaves: ["tool output", "diffs", "reasoning", "errors from steps that aren't checks"],
+	},
 	summary: { keeps: ["what was done", "files touched", "checks and the outcome"], leaves: ["the conversation itself"] },
 	hidden: { keeps: [], leaves: ["everything"] },
 };
@@ -271,8 +274,10 @@ export function stepPhrase(tool: ToolItem) {
 			return tool.label.startsWith("Plan:") ? `Updated the plan (${tool.label.slice(6).split(" · ")[0]})` : "Updated the plan";
 		case "web":
 			return `Fetched ${tool.label}`;
-		case "mcp":
-			return `${tool.display.split(" · ")[0]}: ${tool.label}`;
+		case "mcp": {
+			const server = tool.display.split(" · ")[0];
+			return `${server.charAt(0).toUpperCase()}${server.slice(1)}: ${tool.label}`;
+		}
 		default:
 			return `${tool.display} ${tool.label}`;
 	}
@@ -399,7 +404,7 @@ function StepBody({ tool, ctx }: { tool: ToolItem; ctx: Ctx }) {
 		<>
 			{typeof tool.input?.command === "string" ? <CodeBlock text={`$ ${tool.input.command}`} /> : null}
 			{tool.resultText !== undefined ? <pre className={`tt-output${tool.error ? " is-error" : ""}`}>{tool.resultText || "(no output)"}</pre> : null}
-			{tool.resultHidden ? <HiddenNote>Output hidden at {LEVEL_NAME[ctx.level]}.</HiddenNote> : null}
+			{tool.resultHidden && ctx.level === "full" ? <HiddenNote>Output hidden by a sharing rule.</HiddenNote> : null}
 			{ctx.media(tool.attachmentIds)}
 		</>
 	);
@@ -409,7 +414,10 @@ function StepRow({ tool, ctx, focus, active }: { tool: ToolItem; ctx: Ctx; focus
 	const [open, setOpen] = React.useState(false);
 	const ref = React.useRef<HTMLLIElement>(null);
 	const failed = failedOf(tool);
-	const expandable = Boolean(tool.sub || tool.diff || typeof tool.input?.command === "string" || tool.resultText !== undefined || tool.resultHidden || tool.attachmentIds.length);
+	// Below Full the header already says output is left out, so a row whose only
+	// content would be "Output hidden" neither expands nor carries an icon.
+	const markHidden = tool.resultHidden && ctx.level === "full";
+	const expandable = Boolean(tool.sub || tool.diff || typeof tool.input?.command === "string" || tool.resultText !== undefined || markHidden || tool.attachmentIds.length);
 	const focusN = focus && focus.id === tool.id ? focus.n : 0;
 	React.useEffect(() => {
 		const node = ref.current;
@@ -427,12 +435,14 @@ function StepRow({ tool, ctx, focus, active }: { tool: ToolItem; ctx: Ctx; focus
 			</span>
 			<div className="tt-step-main">
 				<button type="button" className="tt-step-line" aria-expanded={expandable ? open : undefined} disabled={!expandable} onClick={() => setOpen(!open)}>
-					<span className="tt-step-text">{stepPhrase(tool)}</span>
+					<span className="tt-step-text" title={stepPhrase(tool)}>
+						{stepPhrase(tool)}
+					</span>
 					{tool.diff ? <DiffStat added={tool.diff.added} removed={tool.diff.removed} /> : null}
 					{tool.check && !failed && tool.check.ok ? <span className="tt-badge">passed</span> : null}
 					{failed ? <span className="tt-badge tt-badge-err">failed</span> : null}
 					{tool.sub ? <span className="tt-step-count">{plural(tool.sub.toolCount, "step")}</span> : null}
-					{tool.resultHidden ? (
+					{markHidden ? (
 						<span className="tt-step-hidden" title={`Output hidden at ${LEVEL_NAME[ctx.level]}`}>
 							<Icon name="eyeOff" size={12} />
 						</span>
@@ -453,13 +463,15 @@ function StepList({ items, ctx, nested = false, focus, activeId }: { items: Item
 					case "tool":
 						return <StepRow key={item.id} tool={item} ctx={ctx} focus={focus} active={activeId === item.id} />;
 					case "reasoning":
+						// Below Full, hidden reasoning is said once in the header, not per row.
+						if (item.hidden && ctx.level !== "full") return null;
 						return (
 							<li key={item.id} className="tt-step tt-step-thought" id={`tt-ev-${item.id}`}>
 								<span className="tt-step-icon">
 									<Icon name={item.hidden ? "eyeOff" : "bulb"} size={14} />
 								</span>
 								<div className="tt-step-main">
-									<p className="tt-step-thoughttext">{item.hidden ? `Reasoning hidden at ${LEVEL_NAME[ctx.level]}` : item.text}</p>
+									<p className="tt-step-thoughttext">{item.hidden ? "Reasoning hidden by a sharing rule" : item.text}</p>
 								</div>
 							</li>
 						);
@@ -549,12 +561,12 @@ function ActivityBar({ turn, ctx, activeId, onPick }: { turn: Turn; ctx: Ctx; ac
 						title={label}
 						tabIndex={index === focusIndex ? 0 : -1}
 						className={`tt-mark tt-mark-${toneOf(tool)}${activeId === tool.id ? " is-on" : ""}`}
-						style={{ flexGrow: weights[index], flexBasis: 0 }}
+						style={{ flexGrow: weights[index], flexBasis: 0, minWidth: tool.sub ? `${Math.min((tool.sub.kind || tool.label).length, 14) * 6 + 18}px` : undefined }}
 						onFocus={() => setFocusIndex(index)}
 						onClick={() => onPick(tool)}
 					>
 						<span className="tt-pip" aria-hidden="true" />
-						{tool.sub ? <span className="tt-sub-label">{tool.sub.kind}</span> : null}
+						{tool.sub ? <span className="tt-sub-label">{tool.sub.kind || tool.label}</span> : null}
 					</button>
 				);
 			})}
@@ -570,15 +582,24 @@ function StepsPanel({ turn, ctx }: { turn: Turn; ctx: Ctx }) {
 	// Light the step being read: the last one whose top has passed the bar.
 	React.useEffect(() => {
 		let frame = 0;
+		const rows = steps.map((tool) => document.getElementById(`tt-ev-${tool.id}`));
+		// Rows are in document order, so the last one above the reading line is
+		// found by binary search: a few layout reads per frame, not one per step.
 		const update = () => {
 			frame = 0;
 			const line = (barRef.current?.getBoundingClientRect().bottom ?? 0) + 24;
-			let current = steps[0]?.id ?? null;
-			for (const tool of steps) {
-				const node = document.getElementById(`tt-ev-${tool.id}`);
-				if (node && node.getBoundingClientRect().top <= line) current = tool.id;
+			let low = 0;
+			let high = rows.length - 1;
+			let found = 0;
+			while (low <= high) {
+				const mid = (low + high) >> 1;
+				const top = rows[mid]?.getBoundingClientRect().top ?? Infinity;
+				if (top <= line) {
+					found = mid;
+					low = mid + 1;
+				} else high = mid - 1;
 			}
-			setActiveId(current);
+			setActiveId(steps[found]?.id ?? null);
 		};
 		const onScroll = () => {
 			if (!frame) frame = requestAnimationFrame(update);
@@ -658,7 +679,7 @@ function CheckRow({ tool, ctx }: { tool: ToolItem; ctx: Ctx }) {
 				<span className={`tt-check-icon tt-check-${tone}`}>
 					<Icon name={tone === "unknown" ? "circle" : tone === "ok" ? "ok" : "err"} size={14} />
 				</span>
-				<code>{tool.check?.command.split("\n")[0]}</code>
+				<code title={tool.check?.command}>{tool.check?.command.split("\n")[0]}</code>
 				<span className="tt-muted">{tone === "unknown" ? "result not shared" : tone === "ok" ? "passed" : "failed"}</span>
 				<Icon name="chevron" className={open ? "is-open" : ""} />
 			</button>

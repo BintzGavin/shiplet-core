@@ -3231,7 +3231,7 @@ details textarea { margin-top: 8px; }
 .tt-check-ok { color: var(--ok); } .tt-check-err { color: var(--err); } .tt-check-unknown { color: var(--text-muted); }
 .tt-summaryonly { padding: 16px; border-radius: 12px; background: var(--tt-secondary); display: grid; gap: 12px; }
 .tt-summaryonly p { margin: 0; }
-.tt-continue { position: sticky; bottom: 12px; z-index: 6; display: flex; flex-wrap: wrap; gap: 8px; justify-content: center; padding: 10px; border: 1px solid var(--line); border-radius: 16px; background: color-mix(in oklab, var(--surface) 92%, transparent); backdrop-filter: blur(8px); box-shadow: 0 8px 24px color-mix(in oklab, black 22%, transparent); }
+.tt-continue { position: sticky; bottom: 12px; z-index: 6; display: flex; flex-wrap: wrap; gap: 8px; justify-content: center; padding: 10px; border: 1px solid var(--line); border-radius: 16px; background: var(--surface); box-shadow: 0 8px 24px color-mix(in oklab, black 22%, transparent); }
 .tt-scrollend { position: fixed; left: 50%; bottom: 92px; transform: translateX(-50%); z-index: 7; width: 36px; height: 36px; border-radius: 99px; border: 1px solid var(--line); background: var(--surface); color: var(--text); display: grid; place-items: center; cursor: pointer; }
 .tt-sheet-backdrop { position: fixed; inset: 0; z-index: 50; background: color-mix(in oklab, black 40%, transparent); display: flex; justify-content: flex-end; }
 .tt-sheet { width: min(440px, 100%); height: 100%; overflow: auto; background: var(--bg); padding: 12px; border-left: 1px solid var(--line); position: relative; }
@@ -3239,7 +3239,11 @@ details textarea { margin-top: 8px; }
 .tt.is-embedded { max-width: none; }
 .tt.is-embedded .tt-title { font-size: clamp(22px, 3vw, 30px); }
 @media (prefers-reduced-motion: reduce) { .tt-step.is-focus { animation: none; background: color-mix(in oklab, var(--harbor-600) 10%, transparent); } .tt-icon, .tt-pip { transition: none; } }
-@media (max-width: 640px) { .tt-msg-user { max-width: 92%; } .tt-continue { bottom: 8px; } }
+@media (max-width: 640px) {
+  .tt-msg-user { max-width: 92%; }
+  .tt-continue { bottom: 8px; flex-wrap: nowrap; justify-content: flex-start; overflow-x: auto; padding: 8px; border-radius: 14px; }
+  .tt-continue > * { flex: none; }
+}
 
 `;
 
