@@ -93,10 +93,14 @@ it, this drop zone accepts it as is.
 
 1. The colleague opens the trace link. They need view access to the Shiplet and
    a matching audience; anyone else gets "not found".
-2. The header shows the session's source, models, duration, outcome, and **the
-   level they are seeing**.
-3. They read the timeline page by page. Tool calls are collapsed to one line,
-   subagents are nested threads, and images and video play inline.
+2. The header shows the session's source, duration, prompts, files changed, and
+   outcome. Below Full it says **the level they are seeing**, and an info button
+   lists what that level leaves out.
+3. They read each prompt and the agent's final reply. To see how it got there,
+   they open the reply's Steps tab: every step in order, with an activity bar
+   that lights the step they are reading. Changes shows the diffs and Checks
+   shows the test, lint, and build runs. Subagents fold under the step that
+   started them, and images and video play inline.
 4. When they want to continue the work in their own agent, they pick one of
    two buttons:
    - **Copy prompt for your agent** copies:

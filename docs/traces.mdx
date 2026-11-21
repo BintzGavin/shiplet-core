@@ -68,8 +68,10 @@ npx shiplet-cli trace preview <trace> --shiplet <id> --level summary
 
 ## Read a trace and continue it
 
-The viewer at `/shiplets/<id>/traces/<trace>` shows the timeline, images,
-videos, and files at the reader's level. A browser cannot write into Claude Code
+The viewer at `/shiplets/<id>/traces/<trace>` reads like a chat: each prompt,
+then the agent's final reply. Tabs on the reply show the steps behind it, the
+files it changed, and the checks it ran, at the reader's level. Images, videos,
+and files appear where they came up. A browser cannot write into Claude Code
 or Codex, so the viewer offers **Copy prompt for your agent** (loads the trace
 over MCP with `getTraceContext`) and **Copy CLI command**
 (`npx shiplet-cli trace pull <trace> --shiplet <id> --as context`).
