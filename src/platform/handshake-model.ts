@@ -8,9 +8,9 @@
 // messages. A handshake that has ended is gone; if it was recorded and shared,
 // it lives on as a trace with harness "agent-handshake".
 //
-// There is no hosted relay yet. The only HandshakeSource is the sample one in
-// ./handshake-fixture.ts, which runs the real Hub. What the relay still needs
-// is in packages/agent-handshake/README.md.
+// The snapshots come from the hosted relay (src/handshakes/relay.ts, one per
+// organization). A server with the flag but no relay binding shows the sample
+// source in ./handshake-fixture.ts instead, which runs the same Hub.
 import type {
 	HandshakeSnapshot,
 	Message,
@@ -61,7 +61,7 @@ export type HandshakeDetail = HandshakeSummary & {
 };
 
 export interface HandshakeSource {
-	// "sample" is the fixture; "relay" will be the hosted service.
+	// "sample" is the fixture; "relay" is the hosted service.
 	readonly kind: "sample" | "relay";
 	// Every live handshake this reader may watch.
 	list(): Promise<HandshakeSnapshot[]>;

@@ -1,12 +1,11 @@
-// SAMPLE handshakes. There is no hosted relay yet, so this is the only
-// HandshakeSource. It runs the real handshake Hub from
+// SAMPLE handshakes, shown only on a server with the agent-handshakes flag
+// but no HANDSHAKE_RELAY binding. It runs the real handshake Hub from
 // packages/agent-handshake in the Worker: sample agents register, open
 // handshakes around the reader's own newest open request, and talk. The
 // screens then read Hub#handshakes(), exactly what a relay would return.
 // Every screen that shows these says they are sample data.
 //
-// It is enabled only by the "agent-handshakes" feature flag (see
-// src/feature-flags.ts). Never enable it in production.
+// Production always has the relay binding, so it never shows these.
 import { Hub } from "../../packages/agent-handshake/src/core/hub.js";
 import type { HubConnection } from "../../packages/agent-handshake/src/core/hub.js";
 import type { HandshakeSnapshot } from "../../packages/agent-handshake/src/core/protocol.js";

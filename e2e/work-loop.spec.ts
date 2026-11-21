@@ -1,18 +1,16 @@
 // One annotation, followed around the whole loop: it is left on a Shiplet,
-// shows up on Home waiting for agents, agents open a handshake for it, a trace
-// comes back (one from a coding session, one exported from a handshake), and
-// the person goes back to the Shiplet to check the work and annotate again.
-// Every step links to the next and back.
+// shows up on Home waiting for agents, real agents open a handshake for it
+// through the hosted relay, a trace comes back (one from a coding session, one
+// exported from that handshake), and the person goes back to the Shiplet to
+// check the work and annotate again. Every step links to the next and back.
 //
 // Set SHIPLET_E2E_SCREENSHOTS=<dir> to also save each screen at desktop and
 // phone width.
 import fs from "node:fs";
 import path from "node:path";
 
-import { expect, test, type Page } from "@playwright/test";
+import { expect, test, type APIRequestContext, type Page } from "@playwright/test";
 
-import { Hub } from "../packages/agent-handshake/src/core/hub.js";
-import { toShipletTrace } from "../packages/agent-handshake/src/core/trace.js";
 import { parseJsonl, prepareTraceUpload } from "../src/cli/trace-core.mjs";
 import {
 	authHeaders,
@@ -79,17 +77,27 @@ function codingSessionTrace(title: string) {
 		.join("\n");
 }
 
-// A handshake run through the real hub and exported exactly as the MCP tool
-// export_handshake writes it.
-async function exportedHandshake(request: { shiplet: string; feedback: string; label: string }) {
-	const hub = new Hub();
-	const a = hub.open();
-	const b = hub.open();
-	await a.handle("register", { name: "builder", kind: "claude", app: "claude-cli", machine: "studio" });
-	await b.handle("register", { name: "checker", kind: "codex", app: "codex-cli", machine: "ci" });
-	const sent = await a.handle("send", { to: "checker", text: "Can you run the contrast check?", record: true, topic: `${request.label}: pay button contrast`, request });
-	await b.handle("send", { to: "builder", room: sent.room, text: "Passes on the new version." });
-	return toShipletTrace(await a.handle("export", { room: sent.room }), { version: "0.1.0" });
+// An agent on the hosted relay, acting either for a signed-in person or for an
+// organization API key, exactly as an agent over Shiplet MCP would.
+type Agent = { session: string; headers: Record<string, string> };
+
+async function relayCall(request: APIRequestContext, headers: Record<string, string>, method: "GET" | "POST" | "DELETE", url: string, data?: unknown) {
+	const response = await request.fetch(url, {
+		method,
+		headers: { ...headers, "Content-Type": "application/json", Origin: "http://localhost:8787" },
+		...(data === undefined ? {} : { data }),
+	});
+	expect(response.ok(), `${method} ${url}: ${await response.text()}`).toBe(true);
+	return response.json();
+}
+
+async function joinRelay(request: APIRequestContext, organizationId: string, headers: Record<string, string>, peer: Record<string, string>): Promise<Agent> {
+	const body = await relayCall(request, headers, "POST", `/api/organizations/${organizationId}/handshake-sessions`, peer);
+	return { session: body.session, headers };
+}
+
+function say(request: APIRequestContext, organizationId: string, agent: Agent, message: Record<string, unknown>) {
+	return relayCall(request, agent.headers, "POST", `/api/organizations/${organizationId}/handshake-sessions/${agent.session}/messages`, message);
 }
 
 test.describe("the annotation loop", () => {
@@ -107,6 +115,37 @@ test.describe("the annotation loop", () => {
 		const { feedback } = await createReviewFeedback(request, user, project, { comment });
 		const label = feedback.ticket_label;
 		const annotationHref = `/shiplets/${project.id}?feedback=${feedback.id}`;
+		// Agents in the organization open handshakes through the relay. The
+		// builder acts for the person; the checker is an API key on a CI runner.
+		const keyResponse = await request.post(`/api/organizations/${organization.id}/api-tokens`, {
+			headers: { ...authHeaders(user), "Content-Type": "application/json", Origin: "http://localhost:8787" },
+			data: { name: "CI runner", scopes: ["mcp", "feedback:read"], projectAccessMode: "all" },
+		});
+		expect(keyResponse.status(), await keyResponse.text()).toBe(201);
+		const ciKey = { authorization: `Bearer ${((await keyResponse.json()) as { token: string }).token}` };
+		const org = organization.id;
+		const builder = await joinRelay(request, org, authHeaders(user), { name: "builder", kind: "claude", app: "claude-cli", machine: "studio" });
+		const checker = await joinRelay(request, org, ciKey, { name: "checker", kind: "codex", app: "codex-cli", machine: "ci-runner-04" });
+		const reviewer = await joinRelay(request, org, authHeaders(user), { name: "a11y-review", kind: "other", app: "acme-review", machine: "review-pool" });
+		const opened = await say(request, org, builder, {
+			to: "checker",
+			text: "Darkened the Pay label. Can you run the contrast check on the new version?",
+			record: true,
+			topic: `${label}: pay button contrast`,
+			request: { shiplet: project.id, feedback: feedback.id },
+		});
+		const handshake = opened.handshake as string;
+		await say(request, org, checker, { to: "builder", handshake, text: "4.8:1 on the green. Passes AA." });
+		await say(request, org, builder, { to: "a11y-review", handshake, text: "Anything else on that button?" });
+		await say(request, org, reviewer, { to: "builder", handshake, text: "Focus ring is fine. Nothing else." });
+		await relayCall(request, reviewer.headers, "DELETE", `/api/organizations/${org}/handshake-sessions/${reviewer.session}`);
+		await say(request, org, checker, { to: "builder", handshake, text: "Exporting this one to the Shiplet." });
+		await say(request, org, builder, { to: "checker", handshake, text: "Thanks." });
+		// A second, unrecorded handshake between two other agents.
+		const dana = await joinRelay(request, org, authHeaders(user), { name: "dana-desktop", kind: "claude", app: "claude-desktop" });
+		await joinRelay(request, org, ciKey, { name: "lee-codex", kind: "codex", app: "codex-cli" });
+		await say(request, org, dana, { to: "lee-codex", text: "Can we agree on one retry policy?", topic: "Agree on one retry policy for trace uploads" });
+
 		await loginAs(page, user);
 
 		// 1. Home: the way in is annotating, and the annotation is being worked on.
@@ -117,7 +156,7 @@ test.describe("the annotation loop", () => {
 		const handshakeCard = working.locator(".work-card-handshake").filter({ hasText: label });
 		await expect(handshakeCard).toBeVisible();
 		await expect(handshakeCard.getByRole("link", { name: label, exact: true })).toHaveAttribute("href", annotationHref);
-		await expect(page.getByText("Sample handshakes. The hosted relay is not built yet.")).toBeVisible();
+		await expect(page.getByText(/Sample handshakes/)).toHaveCount(0);
 
 		// 2. The annotations list: the request and the agent work on it.
 		await page.goto("/feedback", { waitUntil: "networkidle" });
@@ -128,7 +167,7 @@ test.describe("the annotation loop", () => {
 
 		// 3. The handshake opened for it: who is in it, what they said, and the way back.
 		await row.locator(".work-link-live").click();
-		await expect(page).toHaveURL(/\/handshakes\/hs_sample/);
+		await expect(page).toHaveURL(new RegExp(`/handshakes/${handshake}$`));
 		await expect(page.locator(".app-page-topbar h1")).toContainText(label);
 		const origin = page.locator(".work-origin");
 		await expect(origin).toContainText(comment);
@@ -136,13 +175,15 @@ test.describe("the annotation loop", () => {
 		await expect(page.locator(".handshake-message")).toHaveCount(6);
 		await expect(page.locator(".handshake-peers li")).toHaveCount(3);
 		await expect(page.locator(".handshake-peers li[data-peer-state='left']")).toContainText("a11y-review");
+		await expect(page.locator(".handshake-peers li").filter({ hasText: "checker" })).toContainText("for CI runner");
 		await expect(page.getByRole("heading", { name: "Share it as a trace" })).toBeVisible();
 		await expect(page.locator(".work-prompt")).toContainText(`--shiplet ${project.id}`);
 		await capture(page, "3-handshake");
 
 		// Agents share their work: a coding session, and the handshake itself.
 		const sessionTraceId = await shareTrace(request, user, project.id, codingSessionTrace("Fix pay button contrast"));
-		await shareTrace(request, user, project.id, await exportedHandshake({ shiplet: project.id, feedback: feedback.id, label }));
+		const exported = await relayCall(request, checker.headers, "POST", `/api/organizations/${org}/handshake-sessions/${checker.session}/handshakes/${handshake}/export`);
+		await shareTrace(request, user, project.id, exported.trace);
 
 		// 4. Home again: the traces came back for the person to check.
 		await page.goto("/", { waitUntil: "networkidle" });
@@ -160,6 +201,8 @@ test.describe("the annotation loop", () => {
 		await expect(recorded.getByText("Recording")).toBeVisible();
 		await expect(page.locator(".work-row[data-handshake-id]").filter({ hasText: "retry policy" }).getByText("Not recorded")).toBeVisible();
 		await expect(page.locator("#keptHandshakesTitle")).toHaveText("Handshakes shared as traces");
+		await expect(page.locator("#joinHandshakesTitle")).toHaveText("How an agent joins");
+		await expect(page.locator(".work-prompt").first()).toContainText(`/api/organizations/${org}/handshake-sessions`);
 		await expect(page.locator(".work-row[data-trace-id]")).toContainText(`Handshake: ${label}: pay button contrast`);
 		await capture(page, "4-handshakes");
 

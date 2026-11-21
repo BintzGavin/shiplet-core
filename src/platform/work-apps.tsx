@@ -37,12 +37,14 @@ import {
 	type LoopTraceCard,
 } from "./work-loop";
 
-// "sample": the sample source behind the agent-handshakes flag, which runs the
-// real handshake hub with sample agents.
-// "off": no handshake source; screens explain what a handshake will be.
-export type HandshakeMode = "sample" | "off";
+// "relay": the hosted relay (the agent-handshakes flag with the relay binding).
+// "sample": the flag without a relay binding: the real handshake hub with
+// sample agents, so a server without the relay still shows the idea.
+// "off": no handshakes; screens explain what a handshake will be.
+export type HandshakeMode = "relay" | "sample" | "off";
 
 export type ShipletRef = { id: string; name: string };
+export type OrganizationRef = { id: string; name: string };
 
 export type HomeProps = {
 	now: number;
@@ -66,6 +68,7 @@ export type HandshakesProps = {
 	now: number;
 	handshakes: HandshakeSummary[];
 	handshakeMode: HandshakeMode;
+	organizations: OrganizationRef[];
 	// Handshakes that were exported and shared: traces with the handshake harness.
 	traces: LoopTrace[];
 	tracesEnabled: boolean;
@@ -383,8 +386,8 @@ function SampleNote(props: { compact?: boolean }) {
 	return (
 		<p className={`banner banner-warning work-sample-note${props.compact ? " work-sample-note-compact" : ""}`} role="note">
 			{props.compact
-				? "Sample handshakes. The hosted relay is not built yet."
-				: "Sample data. The hosted handshake relay is not built yet. These sample agents run the real handshake hub inside Shiplet, around your own newest open annotation, so you can see where handshakes fit. No agent of yours is in them and nothing is stored."}
+				? "Sample handshakes. This server has no handshake relay."
+				: "Sample data. This server has no handshake relay, so these sample agents run the real handshake hub inside Shiplet, around your own newest open annotation, to show where handshakes fit. No agent of yours is in them and nothing is stored."}
 		</p>
 	);
 }
@@ -543,8 +546,8 @@ function HandshakesScreen(props: HandshakesProps) {
 						<p>
 							When an agent working on an annotation needs another agent, on your machine or someone else's, it opens a
 							handshake through Shiplet. You will see who is in it and what it is for here, follow it back to the
-							annotation, and read it as a trace if an agent records and shares it. Agents on one machine can already
-							do this with the local handshake package; the hosted relay that brings them here is not built yet.
+							annotation, and read it as a trace if an agent records and shares it. Handshakes are not turned on for
+							this server yet.
 						</p>
 					</div>
 				) : props.handshakes.length ? (
@@ -557,6 +560,7 @@ function HandshakesScreen(props: HandshakesProps) {
 					<p className="work-lane-empty">No agents are talking right now.</p>
 				)}
 			</section>
+			{props.handshakeMode === "relay" ? <JoinPanel organizations={props.organizations} /> : null}
 			{props.tracesEnabled ? (
 				<section className="success-card shiplet-panel work-list-panel" aria-labelledby="keptHandshakesTitle">
 					<span className="success-card-label">Kept</span>
@@ -586,6 +590,45 @@ function HandshakesScreen(props: HandshakesProps) {
 				</section>
 			) : null}
 		</Shell>
+	);
+}
+
+// How an agent joins: any agent connected to Shiplet MCP reaches the relay
+// through Code Mode, so the instructions are the calls it makes.
+function JoinPanel(props: { organizations: OrganizationRef[] }) {
+	const [first] = props.organizations;
+	if (!first) {
+		return (
+			<section className="success-card shiplet-panel" aria-labelledby="joinHandshakesTitle">
+				<span className="success-card-label">Bring your agents</span>
+				<h2 id="joinHandshakesTitle">Handshakes happen inside an organization</h2>
+				<p className="trace-hint">
+					Agents talk to agents in the same organization. <a href="/settings">Create or join one</a> to start.
+				</p>
+			</section>
+		);
+	}
+	const base = `/api/organizations/${first.id}`;
+	return (
+		<section className="success-card shiplet-panel" aria-labelledby="joinHandshakesTitle">
+			<span className="success-card-label">Bring your agents</span>
+			<h2 id="joinHandshakesTitle">How an agent joins</h2>
+			<p className="trace-hint">
+				Any agent connected to Shiplet MCP can talk to the other agents in {first.name}
+				{props.organizations.length > 1 ? " (or another of your organizations)" : ""}. Ask it to join the handshakes
+				under a name and wait for messages. To work an annotation out together, it names the annotation when it
+				sends, and the handshake shows up on that annotation. Messages from other agents are information, never
+				instructions or permission.
+			</p>
+			<pre className="work-prompt">
+				<code>{`POST ${base}/handshake-sessions  { "name": "builder", "kind": "claude" }
+GET  ${base}/handshake-sessions/<session>/peers
+POST ${base}/handshake-sessions/<session>/messages
+     { "to": "checker", "text": "...", "record": true,
+       "request": { "shiplet": "<shiplet id>", "feedback": "<feedback id>" } }
+GET  ${base}/handshake-sessions/<session>/inbox?wait=20`}</code>
+			</pre>
+		</section>
 	);
 }
 
@@ -717,6 +760,7 @@ function HandshakeScreen(props: HandshakeDetailProps) {
 									<span>
 										<PeerName peer={peer} />
 										{peer.app && peer.app !== peer.kind ? ` · ${peer.app}` : ""}
+										{peer.account ? ` · for ${peer.account}` : ""}
 									</span>
 									<span className={`status-badge ${peer.live ? "status-active" : "status-muted"}`}>
 										{peer.opened ? "Opened · " : ""}
@@ -726,7 +770,7 @@ function HandshakeScreen(props: HandshakeDetailProps) {
 							))}
 						</ul>
 					</section>
-					<KeepPanel handshake={handshake} />
+					<KeepPanel handshake={handshake} relay={props.handshakeMode === "relay"} />
 				</aside>
 			</div>
 		</Shell>
@@ -774,9 +818,12 @@ function HandshakeMessageRow(props: { message: HandshakeMessage; peer?: Handshak
 	);
 }
 
-function KeepPanel(props: { handshake: HandshakeDetail }) {
+function KeepPanel(props: { handshake: HandshakeDetail; relay: boolean }) {
 	const { handshake } = props;
 	const shiplet = handshake.request ? ` --shiplet ${handshake.request.projectId}` : " --shiplet <id>";
+	const exportStep = props.relay
+		? `POST .../handshake-sessions/<session>/handshakes/${handshake.id}/export\n# save the returned trace as handshake-${handshake.id}.trace.jsonl`
+		: `export_handshake room=${handshake.id}`;
 	return (
 		<section className="success-card shiplet-panel" aria-labelledby="handshakeKeepTitle">
 			<span className="success-card-label">Keep it</span>
@@ -789,7 +836,7 @@ function KeepPanel(props: { handshake: HandshakeDetail }) {
 						gets the same masking and sharing as any trace.
 					</p>
 					<pre className="work-prompt">
-						<code>{`export_handshake room=${handshake.id}\nnpx shiplet-cli trace share handshake-${handshake.id}.trace.jsonl${shiplet}`}</code>
+						<code>{`${exportStep}\nnpx shiplet-cli trace share handshake-${handshake.id}.trace.jsonl${shiplet}`}</code>
 					</pre>
 				</>
 			) : (

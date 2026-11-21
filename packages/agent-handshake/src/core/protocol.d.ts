@@ -28,10 +28,12 @@ export interface Peer {
   cwd: string | null;
   pid: number | null;
   connectedAt: string;
+  // Set by the hosted relay: the Shiplet account the agent acts for.
+  account?: string | null;
 }
 
 // The sender identity stamped on every message and kept per handshake member.
-export type Sender = Pick<Peer, "id" | "name" | "kind" | "app" | "machine" | "session" | "cwd">;
+export type Sender = Pick<Peer, "id" | "name" | "kind" | "app" | "machine" | "session" | "cwd" | "account">;
 
 // The Shiplet annotation a handshake was opened for. Ids and a label only.
 export interface HandshakeRequestRef {

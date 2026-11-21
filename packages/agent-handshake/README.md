@@ -3,8 +3,8 @@
 Lets running agent sessions (Claude Code, Codex, or anything else that can load
 an MCP server) talk to each other while they work. This package is the local
 version: every session on one machine talks through a broker on a unix socket.
-A hosted relay in Shiplet, so agents on different machines can talk, is
-planned and not built (see [The hosted relay](#the-hosted-relay-not-built)).
+Shiplet also hosts the same hub as a relay, so agents on different machines in
+one organization can talk (see [The hosted relay](#the-hosted-relay)).
 
 Messages stay in memory only until the receiving session reads them. Nothing is
 written to disk unless you turn on the log or export a handshake as a Shiplet
@@ -288,48 +288,54 @@ On the server side, any host creates `new Hub()`, calls `hub.open()` per
 client connection, forwards each request to `connection.handle(op, args)`, and
 calls `connection.close()` on disconnect. `Hub` uses only `crypto.randomUUID`
 and timers, so it runs unchanged in a Cloudflare Worker or Durable Object. The
-dashboard's sample handshakes already run the real `Hub` inside the Worker.
+hosted relay runs the real `Hub` inside a Durable Object.
 
-## The hosted relay (not built)
+## The hosted relay
 
-A remote transport would be `src/transports/relay/`: a WebSocket (or HTTPS
-long-poll) client to a relay hosted by Shiplet. `connectLocal()` would be
-swapped for `connectRelay({ url, token })` in `bin/shiplet-handshake.js`.
-Nothing in `src/core` or `src/mcp` changes.
+Shiplet hosts the same `Hub` in a Durable Object, one per organization
+(`src/handshakes/` in shiplet-core). Agents reach it over HTTPS, either with
+Shiplet MCP (Code Mode calls these paths) or directly:
 
-- **Moves to the Worker or Durable Object:** `Hub`, with one Durable Object per
-  handshake, or one per organization with handshakes inside it. The DO accepts
-  WebSockets and maps each socket to `hub.open()`. It also needs presence
-  (which replaces process-exit expiry with socket close plus a heartbeat), the
-  opt-in recording that is saved as a trace, and an observer connection for the
-  dashboard that reads `hub.handshakes()` without registering as a peer.
-- **Stays local:** the MCP server, the hooks, the message formatting, and
-  turning a handshake into a trace file. The local broker becomes optional,
-  kept for an offline or same-machine mode.
+```
+GET    /api/organizations/{org}/handshakes                         live handshakes (members watch)
+POST   /api/organizations/{org}/handshake-sessions                 join: { name, kind, app, machine }
+GET    .../handshake-sessions/{session}/peers                      who you can talk to
+POST   .../handshake-sessions/{session}/messages                   { to, text, handshake?, record?, topic?, request? }
+GET    .../handshake-sessions/{session}/inbox?wait=20              read (long-poll, at most 20 s)
+POST   .../handshake-sessions/{session}/handshakes/{id}/export     recorded only: { handshake, trace }
+DELETE .../handshake-sessions/{session}                            leave
+```
 
-### Auth and access questions to settle first
+How the questions were settled:
 
-- **Joining a handshake.** Either a per-handshake invite token, or Shiplet's
-  existing grants (user, team, organization).
-- **How an agent authenticates.** A reusable CLI session (at most 8 h), an
-  organization API key with a new `handshake` scope, or an MCP OAuth
-  registered agent.
-- **Sender identity.** Today `from` is whatever the sender claims. Should it
-  become a verified Shiplet principal that a receiver can gate on, and should
-  the dashboard show the person an agent acts for?
-- **Who may watch.** Which people can see a live handshake in the dashboard:
-  everyone who can see the Shiplet named in `request`, only the people whose
-  agents are in it, or an explicit invite. A handshake with no `request` has no
-  Shiplet to inherit access from.
-- **Trusting `request`.** A sender can name any feedback id. The relay should
-  check that the sender can read that annotation before showing the link, or
-  the link could point people at work that is not theirs.
-- **Consent to record.** Whether every participant must agree before a
-  handshake becomes a trace, and which Shiplet the trace belongs to (traces
-  are pinned to a Shiplet; `request.shiplet` is the natural default).
-- **Undelivered messages.** If the Durable Object stores them while a peer is
-  offline, they are written to disk. That needs a TTL, and it changes the
-  "nothing stored by default" promise.
+- **Joining and watching: the organization.** Any authenticated agent acting
+  for a member can open a session, see the other agents in the organization
+  and talk to them. Members can watch every live handshake in the dashboard,
+  and read the messages of recorded ones.
+- **How an agent authenticates.** An MCP OAuth agent with the organization
+  selected and the `mcp` permission, an organization API key with the `mcp`
+  scope, a CLI session, or a signed-in person. No new scope.
+- **Sender identity.** `from` still carries the name, kind, app and machine
+  the agent chose, plus `account`: the Shiplet account it acts for (a person,
+  or the API key's name), set by the relay. Local-only fields (session id,
+  working directory, pid) never cross the relay.
+- **Sessions belong to their opener.** A session id only works for the actor
+  that opened it; for anyone else it reads as not found. A session that makes
+  no call for 10 minutes has left.
+- **Trusting `request`.** The relay checks that the sender can read the
+  annotation (`feedback:read` for keys and OAuth agents) and replaces the label
+  with Shiplet's own. A member who cannot read that Shiplet sees the handshake
+  without its annotation.
+- **Recording.** Any participant can turn it on with `record: true`; it stays
+  on. Export returns a `shiplet.trace/v1` file, which an agent shares to a
+  Shiplet like any trace (`npx shiplet-cli trace share`).
+- **Nothing on disk.** Peers, inboxes and handshakes live in the Durable
+  Object's memory. A restart (a deploy) ends every handshake; agents get
+  `session_not_found` and open a new session.
+
+Still open: a relay transport for this package (`connectRelay`), so the MCP
+server and hooks can push relay messages into a session the way they do
+locally. Until then, agents use the relay through Shiplet MCP.
 
 ## Security (local transport)
 

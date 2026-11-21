@@ -160,6 +160,8 @@ import {
 } from "./self-owned/revisions";
 import { ensureTraceSchema } from "./traces/schema";
 import { registerTraceRoutes } from "./traces/routes";
+import { registerHandshakeRoutes } from "./handshakes/routes";
+import { executeHandshakeCodeModeRequest, isHandshakeCodeModePath } from "./handshakes/codemode";
 import { deleteProjectTraceObjects, sweepArchivedShipletTraces } from "./traces/store";
 import { sweepExpiredUploadLinks } from "./traces/uploads";
 import { executeTraceCodeModeRequest, isTraceCodeModePath } from "./traces/codemode";
@@ -570,6 +572,7 @@ import { ShipletRoot } from "./shiplet-root";
 
 export { SandboxSession } from "./sandbox";
 export { ShipletRoot } from "./shiplet-root";
+export { HandshakeRelay } from "./handshakes/relay";
 
 // Initialize Hono app with type-safe environment bindings
 type ShipletAppEnv = {
@@ -10056,6 +10059,10 @@ async function executeCodeModeRequest(
     return executeTraceCodeModeRequest(env, context, request, appBaseUrl(env, "https://shiplet.cc/"));
   }
 
+  if (isHandshakeCodeModePath(request.path)) {
+    return executeHandshakeCodeModeRequest(env, context, request);
+  }
+
   if (request.path === "/api/organizations" && request.method === "POST") {
     if (context.kind !== "user") {
       throw new Response("Organization creation requires a browser session.", {
@@ -17219,6 +17226,7 @@ app.post("/api/shiplets", async (c) => {
 });
 
 registerTraceRoutes(app);
+registerHandshakeRoutes(app);
 
 // Trace-only Shiplets (docs/traces-spec.md D19) are created through the same
 // publish path as every other Shiplet, with a page Shiplet writes as the
@@ -20269,6 +20277,7 @@ app.get("/handshakes", async (c) => {
             now: data.now,
             handshakes: data.handshakes.map(toHandshakeSummary),
             handshakeMode: data.handshakeMode,
+            organizations: data.organizations,
             traces: data.traces,
             tracesEnabled: data.tracesEnabled,
           },
