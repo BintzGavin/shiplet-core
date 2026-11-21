@@ -812,6 +812,277 @@ html:not(.js) .shiplet-brand-header [data-harbor-motion] { animation: none; tran
 
 .platform-nav-badge[hidden] { display: none; }
 
+/* The nav reads as the loop: Home | Annotations -> Handshakes -> Traces | places,
+   with Annotate, the way into the loop, as the one primary action. */
+.platform-nav-rule {
+  flex: 0 0 auto;
+  align-self: stretch;
+  width: 1px;
+  margin: 6px 2px;
+  background: var(--line);
+}
+.platform-nav-step {
+  flex: 0 0 auto;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: var(--type-small);
+}
+.platform-nav a.platform-nav-annotate {
+  margin-left: auto;
+  /* Where the nav scrolls sideways (narrow screens), the way in stays on screen. */
+  position: sticky;
+  right: 0;
+  z-index: 1;
+  box-shadow: -10px 0 10px -4px var(--surface);
+  color: var(--action-contrast);
+  background: var(--action);
+  border-color: color-mix(in oklch, var(--action), black 22%);
+  border-bottom-width: 2px;
+  font-weight: 600;
+}
+.platform-nav a.platform-nav-annotate:hover,
+.platform-nav a.platform-nav-annotate[data-current="true"] {
+  color: var(--action-contrast);
+  background: var(--action-hover);
+  border-color: color-mix(in oklch, var(--action-hover), black 22%);
+}
+
+/* The loop screens: Home, Annotations, Handshakes, Traces (src/platform/work-apps.tsx). */
+.work-meta-label,
+.work-kind {
+  font-family: var(--font-mono);
+  font-size: var(--type-micro);
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+.work-kind { display: inline-flex; align-items: center; gap: 6px; color: var(--accent-strong); }
+.work-meta { color: var(--text-muted); font-size: var(--type-small); }
+.work-front-door {
+  display: grid;
+  grid-template-columns: minmax(0, 1.7fr) minmax(0, 1fr);
+  gap: 20px 28px;
+  align-items: start;
+}
+.work-front-door h2 { font-size: var(--type-title); margin: 8px 0 6px; }
+.work-front-door p { color: var(--text-soft); max-width: 60ch; margin: 0; }
+.work-front-door-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 16px; }
+.work-front-door-recent { display: grid; gap: 8px; }
+.work-front-door-recent ul { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
+.work-front-door-recent a {
+  display: block;
+  padding: 9px 12px;
+  border: 1px solid var(--line-strong);
+  border-bottom-width: 2px;
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  color: var(--text);
+  font-weight: 600;
+  text-decoration: none;
+  overflow-wrap: anywhere;
+}
+.work-front-door-recent a:hover { background: var(--surface-sunken); }
+.work-loop {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 16px;
+  align-items: start;
+}
+.work-lane {
+  display: grid;
+  gap: 12px;
+  min-width: 0;
+  padding: 16px;
+  background: var(--surface);
+  border: 1px solid var(--line-strong);
+  border-bottom-width: 3px;
+  border-radius: var(--radius);
+}
+.work-lane-head h2 {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin: 8px 0 0;
+  font-size: var(--type-section);
+}
+.work-lane-count { font-family: var(--font-mono); font-size: var(--type-small); color: var(--text-muted); }
+.work-lane-body { display: grid; gap: 10px; min-width: 0; }
+.work-lane-empty { margin: 0; color: var(--text-muted); font-size: var(--type-small); }
+.work-lane-more { justify-self: start; font-family: var(--font-mono); font-size: var(--type-small); }
+.work-card {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+  padding: 12px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+}
+.work-card-head { display: flex; align-items: center; flex-wrap: wrap; gap: 6px 8px; min-width: 0; }
+.work-card-head .status-badge { margin-left: auto; }
+.work-card-place {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text-soft);
+  font-size: var(--type-small);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.work-card-text {
+  display: -webkit-box;
+  margin: 0;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+}
+.work-card-title { color: var(--text); font-weight: 650; overflow-wrap: anywhere; }
+a.feedback-ticket-id { text-decoration: none; }
+.work-context {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: var(--type-micro);
+}
+.work-context li { overflow-wrap: anywhere; }
+.work-card-links {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 12px;
+  padding-top: 8px;
+  border-top: 1px dashed var(--line);
+  font-size: var(--type-small);
+}
+.work-cell-links { display: inline-flex; flex-wrap: wrap; gap: 4px 10px; }
+.work-link { font-size: var(--type-small); overflow-wrap: anywhere; }
+.work-link-live { display: inline-flex; align-items: center; gap: 6px; }
+.work-live-dot {
+  display: inline-block;
+  flex: 0 0 auto;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--ok);
+  box-shadow: 0 0 0 3px color-mix(in oklch, var(--ok), transparent 75%);
+  animation: work-live-pulse 1.8s ease-in-out infinite;
+}
+@keyframes work-live-pulse {
+  50% { box-shadow: 0 0 0 5px color-mix(in oklch, var(--ok), transparent 90%); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .work-live-dot { animation: none; }
+}
+.status-badge.work-status-check { color: var(--info); background: var(--info-surface); }
+.work-request-chips { display: inline-flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.work-sample-note { margin: 0; }
+.work-sample-note-compact { padding: 6px 10px; font-size: var(--type-small); }
+.work-list-toolbar { display: flex; flex-wrap: wrap; align-items: flex-end; justify-content: space-between; gap: 12px; }
+.work-list-controls { display: flex; flex-wrap: wrap; gap: 10px; }
+.work-list-panel h2 { margin-top: 8px; }
+.work-rows { display: grid; margin: 14px 0 0; padding: 0; list-style: none; }
+.work-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px 16px;
+  padding: 14px 0;
+  border-top: 1px dashed var(--line);
+}
+.work-row-main { display: grid; gap: 6px; min-width: 0; }
+.work-row-side { display: flex; flex-wrap: wrap; align-items: flex-start; justify-content: flex-end; gap: 6px; }
+.work-row-links { grid-column: 1 / -1; padding-top: 0; border-top: 0; }
+.work-peer-state { color: var(--text-muted); }
+.work-detail {
+  display: grid;
+  grid-template-columns: minmax(0, 2fr) minmax(260px, 1fr);
+  gap: 16px;
+  align-items: start;
+}
+.work-detail-main,
+.work-detail-side { display: grid; gap: 16px; min-width: 0; }
+.work-origin-title { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 8px 0 6px; font-size: var(--type-section); }
+.work-origin .work-card-text { margin-bottom: 8px; }
+.handshake-messages { display: grid; gap: 10px; margin: 12px 0 0; padding: 0; list-style: none; }
+.handshake-message {
+  max-width: 88%;
+  padding: 10px 12px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+}
+/* The agent that opened the handshake on the left, everyone else on the right. */
+.handshake-message:not([data-peer-opened]) { justify-self: end; background: var(--surface-sunken); }
+.handshake-message-head { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; font-size: var(--type-small); }
+.handshake-message p { margin: 6px 0 0; overflow-wrap: anywhere; }
+.handshake-peers { display: grid; gap: 10px; margin: 10px 0 0; padding: 0; list-style: none; }
+.handshake-peers li { display: grid; gap: 2px; padding-bottom: 10px; border-bottom: 1px dashed var(--line); }
+.handshake-peers li span:not(.status-badge) { color: var(--text-soft); font-size: var(--type-small); }
+.handshake-peers .status-badge { justify-self: start; margin-top: 4px; }
+.work-prompt {
+  margin: 8px 0;
+  padding: 10px;
+  background: var(--surface-sunken);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  font-size: var(--type-small);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.trace-loop { display: grid; grid-template-columns: minmax(0, 2fr) minmax(0, 1fr); gap: 16px 28px; }
+.trace-loop-part { display: grid; align-content: start; gap: 8px; min-width: 0; }
+.trace-loop-part p { margin: 0; color: var(--text-soft); }
+.trace-loop-requests { display: grid; gap: 6px; margin: 0; padding: 0; list-style: none; }
+.trace-loop-requests li { display: flex; align-items: baseline; gap: 8px; min-width: 0; }
+.trace-loop-requests span { overflow-wrap: anywhere; }
+.trace-loop-part .btn,
+.trace-loop-part .work-link { justify-self: start; }
+.annotate-existing-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  gap: 8px;
+  margin: 12px 0 0;
+  padding: 0;
+  list-style: none;
+}
+.annotate-existing-list a {
+  display: grid;
+  gap: 2px;
+  padding: 10px 12px;
+  background: var(--surface);
+  border: 1px solid var(--line-strong);
+  border-bottom-width: 2px;
+  border-radius: var(--radius-sm);
+  color: var(--text);
+  text-decoration: none;
+  overflow-wrap: anywhere;
+}
+.annotate-existing-list a:hover { background: var(--surface-sunken); }
+.annotate-existing-list a span {
+  color: var(--accent-strong);
+  font-family: var(--font-mono);
+  font-size: var(--type-micro);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+.publish-primary-title { margin: 8px 0 12px; font-size: var(--type-title); }
+@media (max-width: 900px) {
+  .work-loop,
+  .work-detail,
+  .work-front-door,
+  .trace-loop { grid-template-columns: minmax(0, 1fr); }
+}
+@media (max-width: 640px) {
+  .handshake-message { max-width: 100%; }
+  .work-row { grid-template-columns: minmax(0, 1fr); }
+  .work-row-side { justify-content: flex-start; }
+}
+
 .shiplet-avatar {
   display: inline-grid;
   place-items: center;
@@ -4709,7 +4980,7 @@ export const DashboardRuntimeScript = (nonce: KernelDocumentNonce) => `
     if (!projects.length) {
       list.innerHTML = archived
         ? "<div class=\\"shiplet-list-empty\\"><span class=\\"success-card-label\\">Archive</span><strong>No archived shiplets</strong><p>Archived shiplets will appear here during their restore window.</p></div>"
-        : "<div class=\\"shiplet-list-empty\\"><span class=\\"success-card-label\\">Clean slate</span><strong>No review artifacts yet</strong><p>Prepare an artifact and it will appear here with its live URL and review bridge.</p><a class=\\"btn btn-primary btn-sm\\" href=\\"/\\">Prepare artifact</a></div>";
+        : "<div class=\\"shiplet-list-empty\\"><span class=\\"success-card-label\\">Clean slate</span><strong>No review artifacts yet</strong><p>Prepare an artifact and it will appear here with its live URL and review bridge.</p><a class=\\"btn btn-primary btn-sm\\" href=\\"/annotate\\">Prepare artifact</a></div>";
       return;
     }
     if (!filtered.length) {
@@ -5748,7 +6019,7 @@ export const BuildShipletsListPage = (nonce: KernelDocumentNonce) => `
       <p>Open live artifacts and review bridges for the active workspace.</p>
     </div>
     <div class="dashboard-actions">
-      <a class="btn btn-primary btn-sm" href="/">Prepare artifact</a>
+      <a class="btn btn-primary btn-sm" href="/annotate">Prepare artifact</a>
       <a class="btn btn-secondary btn-sm" href="/access">Access</a>
     </div>
   </header>
@@ -5795,7 +6066,7 @@ export const BuildSettingsPage = (nonce: KernelDocumentNonce) => `
       <p>Organizations, teams, sharing rules, and agent access — the ledger behind the pier.</p>
     </div>
     <div class="dashboard-actions">
-      <a class="btn btn-secondary btn-sm" href="/">Prepare</a>
+      <a class="btn btn-secondary btn-sm" href="/annotate">Prepare</a>
       <a class="btn btn-secondary btn-sm" href="/auth/logout">Sign out</a>
     </div>
   </header>
@@ -6305,7 +6576,7 @@ export function BuildShipletReviewPage(options: {
       </div>
       <div class="shiplet-detail-actions">
         ${traceOnly ? "" : `<a class="btn btn-primary btn-sm" href="${reviewUrl}" target="_blank" rel="noreferrer">${isArchived ? "View archived page" : "Open review page"}</a>`}
-        <a class="btn btn-secondary btn-sm" href="/">Create another shiplet</a>
+        <a class="btn btn-secondary btn-sm" href="/annotate">Create another shiplet</a>
       </div>
     </div>
     <div id="dashboardStatus" class="banner banner-info" style="margin-top: 16px;">Loading workspace...</div>

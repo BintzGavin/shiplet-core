@@ -281,11 +281,11 @@ function ShipletsPage(props: {
 				<div className="app-page-title">
 					<span className="success-card-label">Harbor ledger</span>
 					<h1>All shiplets</h1>
-					<p>Open live artifacts and review bridges for the active workspace.</p>
+					<p>Everything you can annotate: live sites, builds, files, and pages, each with its requests and traces.</p>
 				</div>
 				<div className="dashboard-actions">
-					<a className="btn btn-primary btn-sm" href="/">
-						Prepare artifact
+					<a className="btn btn-primary btn-sm" href="/annotate">
+						Add something to annotate
 					</a>
 				</div>
 			</header>
@@ -661,11 +661,11 @@ function ShipletsList(props: {
 				<p>
 					{props.archived
 						? "Archived shiplets will appear here during their restore window."
-						: "Prepare an artifact and it will appear here."}
+						: "Add something to annotate and it will appear here."}
 				</p>
 				{props.archived ? null : (
-					<a className="btn btn-primary btn-sm" href="/">
-						Prepare artifact
+					<a className="btn btn-primary btn-sm" href="/annotate">
+						Add something to annotate
 					</a>
 				)}
 			</div>

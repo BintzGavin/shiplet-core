@@ -127,11 +127,13 @@ function PublishPage(props: {
 		>
 			<header className="app-page-topbar">
 				<div className="app-page-title">
-					<span className="success-card-label">Shiplet</span>
-					<h1>Create a shiplet</h1>
+					<span className="success-card-label">Annotate</span>
+					<h1>Start with an annotation</h1>
 					<p>
-						Connect your website or upload a build or file. Leave feedback on
-						the work so teammates and AI agents can act on it.
+						Point at the exact thing on a live version and say what should
+						change. Your annotation carries the page, the element, a
+						screenshot and the version, so the agent that picks it up has
+						everything it needs.
 					</p>
 				</div>
 				<div className="url-tag" aria-hidden="true">
@@ -140,15 +142,21 @@ function PublishPage(props: {
 				</div>
 			</header>
 
-			<PlatformNav current="publish" />
+			<PlatformNav current="annotate" />
+
+			<AnnotateExisting projects={query.data.projects} />
+
 			<section className="success-card shiplet-panel">
-				<h2>Review your website where it runs</h2>
-				<p>Add Shiplet with two HTML tags. Keep your site's login, navigation, and interactions while your team comments in context.</p>
+				<span className="success-card-label">Your website</span>
+				<h2>Annotate your website where it runs</h2>
+				<p>Add Shiplet with two HTML tags. Keep your site's login, navigation, and interactions while your team annotates in context.</p>
 				<a className="btn btn-primary" href="/embed/install">Connect a website</a>
 				<p><a href="/docs/embed">Install with your coding agent</a> · <a href="/capture">Capture a page you can’t edit</a></p>
 			</section>
 
 			<section className="success-card shiplet-panel shiplet-focus-strip publish-primary-panel">
+				<span className="success-card-label">Something new</span>
+				<h2 className="publish-primary-title">Put up a build, file, or URL to annotate</h2>
 				<form id="projectForm" className="publish-layout voyage">
 					<SourceChoiceGrid sourceMode={props.sourceMode} />
 					<UploadStep sourceMode={props.sourceMode} />
@@ -166,11 +174,12 @@ function PublishPage(props: {
 			<section className="success-card shiplet-panel">
 				<div className="dashboard-section-header">
 					<div>
-						<span className="success-card-label">Review loop</span>
-						<h2>What reviewers get</h2>
+						<span className="success-card-label">After you annotate</span>
+						<h2>Where an annotation goes</h2>
 						<p>
-							Reviewers open the shared work, comment in context, and send
-							agent-ready tickets back to your queue.
+							An agent picks up each annotation over MCP or the CLI. Agents can
+							work it out together in a handshake, and the work comes back as a
+							trace and a new version for you to check and annotate again.
 						</p>
 					</div>
 				</div>
@@ -183,6 +192,30 @@ function PublishPage(props: {
 				</div>
 			</section>
 		</div>
+	);
+}
+
+function AnnotateExisting(props: { projects: Project[] }) {
+	const recent = props.projects.filter((project) => !project.archived_on).slice(0, 6);
+	if (!recent.length) return null;
+	return (
+		<section
+			className="success-card shiplet-panel annotate-existing"
+			aria-labelledby="annotateExistingTitle"
+		>
+			<span className="success-card-label">Already on Shiplet</span>
+			<h2 id="annotateExistingTitle">Annotate something you already have</h2>
+			<ul className="annotate-existing-list">
+				{recent.map((project) => (
+					<li key={project.id}>
+						<a href={`/shiplets/${encodeURIComponent(project.id)}`}>
+							<strong>{project.name}</strong>
+							<span>Open to annotate</span>
+						</a>
+					</li>
+				))}
+			</ul>
+		</section>
 	);
 }
 

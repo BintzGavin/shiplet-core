@@ -11,6 +11,7 @@ import {
 	type FeedbackFilters,
 } from "./feedback-state";
 import type { ReviewFeedbackRecord } from "../review";
+import type { FeedbackWork } from "./feedback-app";
 import {
 	kernelScriptNonceAttribute,
 	type KernelDocumentNonce,
@@ -20,6 +21,7 @@ type FeedbackPageOptions = {
 	nonce: KernelDocumentNonce;
 	feedback: ReviewFeedbackRecord[];
 	filters: FeedbackFilters;
+	work?: FeedbackWork;
 };
 
 const FEEDBACK_ENDPOINT = "/api/feedback";
@@ -37,6 +39,7 @@ export function BuildPlatformFeedbackPage(options: FeedbackPageOptions) {
 				initialFeedback={options.feedback}
 				initialFilters={filters}
 				initialUi={initialUi}
+				work={options.work}
 			/>
 		</div>,
 	);
@@ -50,6 +53,7 @@ export function BuildPlatformFeedbackPage(options: FeedbackPageOptions) {
 	initialFeedback: options.feedback,
 	initialUi,
 	queryKey: feedbackQueryKey(filters),
+	work: options.work,
 })}</script>
 <script data-shiplet-kernel-script="v1" ${kernelScriptNonceAttribute(options.nonce)} type="module" src="${FEEDBACK_CLIENT_ASSET}"></script>
 ${PlatformLiveUpdatesScript(options.nonce)}`;

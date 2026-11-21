@@ -32,6 +32,11 @@ const clientEntries = [
 		fileName: "traces.js",
 	},
 	{
+		assetPath: "/assets/platform/work.js",
+		entry: path.join(root, "src/platform/work-client.tsx"),
+		fileName: "work.js",
+	},
+	{
 		assetPath: "/assets/platform/invite-links.js",
 		entry: path.join(root, "src/platform/invite-links-client.tsx"),
 		fileName: "invite-links.js",

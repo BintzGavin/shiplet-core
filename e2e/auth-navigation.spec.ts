@@ -29,7 +29,7 @@ test.describe("authentication and dashboard navigation", () => {
 	test("keeps protected app routes behind login while docs stays public", async ({
 		request,
 	}) => {
-		for (const route of ["/shiplets", "/feedback", "/inbox", "/workspace"]) {
+		for (const route of ["/annotate", "/shiplets", "/feedback", "/handshakes", "/traces", "/inbox", "/workspace"]) {
 			const response = await request.get(route, { maxRedirects: 0 });
 			expect(response.status()).toBe(302);
 			expect(response.headers().location).toContain(
@@ -52,9 +52,12 @@ test.describe("authentication and dashboard navigation", () => {
 		await loginAs(page, user);
 
 		const routes = [
-			{ path: "/", heading: "Create a shiplet", nav: "Prepare" },
+			{ path: "/", heading: "Home", nav: "Home" },
+			{ path: "/annotate", heading: "Start with an annotation", nav: "Annotate" },
+			{ path: "/feedback", heading: "Annotations", nav: "Annotations" },
+			{ path: "/handshakes", heading: "Handshakes", nav: "Handshakes" },
+			{ path: "/traces", heading: "Traces", nav: "Traces" },
 			{ path: "/shiplets", heading: "All shiplets", nav: "Shiplets" },
-			{ path: "/feedback", heading: "All feedback", nav: "Feedback" },
 			{ path: "/inbox", heading: "Notifications", nav: "Inbox" },
 			{ path: "/workspace", heading: "Workspace", nav: "Workspace" },
 		];
@@ -83,7 +86,7 @@ test.describe("authentication and dashboard navigation", () => {
 		await createOrganization(request, user);
 		await loginAs(page, user);
 
-		await page.goto("/", { waitUntil: "networkidle" });
+		await page.goto("/annotate", { waitUntil: "networkidle" });
 		await expect(page.locator("#organizationSelectGroup")).toBeHidden();
 		await expect(page.locator("#visibility")).toBeVisible();
 
