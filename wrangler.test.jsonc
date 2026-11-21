@@ -27,14 +27,16 @@
 	"durable_objects": {
 		"bindings": [
 			{ "name": "SANDBOX_SESSION", "class_name": "SandboxSession" },
-			{ "name": "SHIPLET_ROOT", "class_name": "ShipletRoot" }
+			{ "name": "SHIPLET_ROOT", "class_name": "ShipletRoot" },
+			{ "name": "HANDSHAKE_RELAY", "class_name": "HandshakeRelay" }
 		]
 	},
 	"migrations": [
 		{ "tag": "v1_sandbox_session", "new_sqlite_classes": ["SandboxSession"] },
 		{ "tag": "v2_review_presence", "new_sqlite_classes": ["ReviewPresenceRoom"] },
 		{ "tag": "v3_shiplet_root", "new_sqlite_classes": ["ShipletRoot"] },
-		{ "tag": "v4_delete_review_presence", "deleted_classes": ["ReviewPresenceRoom"] }
+		{ "tag": "v4_delete_review_presence", "deleted_classes": ["ReviewPresenceRoom"] },
+		{ "tag": "v5_handshake_relay", "new_sqlite_classes": ["HandshakeRelay"] }
 	],
 	"vars": {
 		"SHIPLET_AUTH_MODE": "test",

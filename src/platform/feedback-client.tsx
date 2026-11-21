@@ -7,6 +7,7 @@ import {
 	FeedbackApp,
 	type FeedbackAppProps,
 	type FeedbackQueryResult,
+	type FeedbackWork,
 } from "./feedback-app";
 import {
 	normalizeFeedbackFilters,
@@ -19,6 +20,7 @@ type FeedbackClientState = {
 	filters?: FeedbackFilters;
 	initialFeedback?: FeedbackQueryResult["feedback"];
 	initialUi?: FeedbackStoreInitialState;
+	work?: FeedbackWork;
 };
 
 const root = document.getElementById("feedback-platform-root");
@@ -30,6 +32,7 @@ if (root && state.initialFeedback && state.filters) {
 		initialFeedback: state.initialFeedback,
 		initialFilters: normalizeFeedbackFilters(state.filters),
 		initialUi: state.initialUi || {},
+		work: state.work,
 	};
 	hydrateRoot(root, <FeedbackApp {...props} />);
 }

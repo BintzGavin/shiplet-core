@@ -84,6 +84,10 @@
 			{
 				"name": "SHIPLET_ROOT",
 				"class_name": "ShipletRoot"
+			},
+			{
+				"name": "HANDSHAKE_RELAY",
+				"class_name": "HandshakeRelay"
 			}
 		]
 	},
@@ -103,6 +107,10 @@
 		{
 			"tag": "v4_delete_review_presence",
 			"deleted_classes": ["ReviewPresenceRoom"]
+		},
+		{
+			"tag": "v5_handshake_relay",
+			"new_sqlite_classes": ["HandshakeRelay"]
 		}
 	],
 	"vars": {

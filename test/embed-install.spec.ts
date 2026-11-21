@@ -187,7 +187,7 @@ describe("framework-independent widget installation", () => {
     ).toBe("https://example.com/");
   });
   it("offers website connection and labels URL proxying experimental, with a complete public install guide", async () => {
-    const html = await (await request("/", { headers: owner })).text();
+    const html = await (await request("/annotate", { headers: owner })).text();
     expect(html).toContain('href="/embed/install"');
     expect(html).toContain("Connect a website");
     expect(html).toContain("Experimental URL preview");

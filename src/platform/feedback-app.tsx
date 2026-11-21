@@ -29,6 +29,26 @@ import {
 	usePlatformCounts,
 } from "./platform-counts";
 import type { ReviewFeedbackRecord } from "../review";
+import {
+	handshakeHref,
+	handshakesForRequest,
+	livePeers,
+	peerAgent,
+	type HandshakeSummary,
+} from "./handshake-model";
+import {
+	toLoopRequest,
+	traceHref,
+	tracesSinceRequest,
+	type LoopTrace,
+} from "./work-loop";
+
+// The agent work each request led to: live handshakes opened for it, and
+// traces on its Shiplet that finished after it was made.
+export type FeedbackWork = {
+	traces: LoopTrace[];
+	handshakes: HandshakeSummary[];
+};
 
 export type FeedbackQueryResult = {
 	feedback: ReviewFeedbackRecord[];
@@ -39,6 +59,7 @@ export type FeedbackAppProps = {
 	initialFeedback: ReviewFeedbackRecord[];
 	initialFilters: FeedbackFilters;
 	initialUi?: FeedbackStoreInitialState;
+	work?: FeedbackWork;
 };
 
 type StatusState = {
@@ -92,6 +113,7 @@ export function FeedbackApp(props: FeedbackAppProps) {
 					feedbackEndpoint={props.feedbackEndpoint}
 					initialFeedback={props.initialFeedback}
 					initialFilters={initialFilters}
+					work={props.work}
 				/>
 			</FeedbackStoreContext.Provider>
 		</QueryClientProvider>
@@ -102,6 +124,7 @@ function FeedbackPage(props: {
 	feedbackEndpoint: string;
 	initialFeedback: ReviewFeedbackRecord[];
 	initialFilters: FeedbackFilters;
+	work?: FeedbackWork;
 }) {
 	const queryClient = useQueryClient();
 	const filters = useFeedbackStore((state) => state.filters);
@@ -255,9 +278,13 @@ function FeedbackPage(props: {
 		>
 			<header className="app-page-topbar">
 				<div className="app-page-title">
-					<span className="success-card-label">Feedback</span>
-					<h1>All feedback</h1>
-					<p>A flat newest-first view across every shiplet you can access.</p>
+					<span className="success-card-label">You asked</span>
+					<h1>Annotations</h1>
+					<p>
+						Every annotation asks for a change and carries its page, element,
+						screenshot, and version. Follow each one to the agents working on
+						it and the traces that came back.
+					</p>
 				</div>
 			</header>
 
@@ -266,8 +293,8 @@ function FeedbackPage(props: {
 			<section className="success-card shiplet-panel">
 				<div className="dashboard-section-header">
 					<div>
-						<span className="success-card-label">Global ledger</span>
-						<h2>Review comments</h2>
+						<span className="success-card-label">Newest first</span>
+						<h2>Annotations across your Shiplets</h2>
 						<span
 							className={`live-status live-status-${status.kind}`}
 							id="feedbackLiveStatus"
@@ -286,6 +313,7 @@ function FeedbackPage(props: {
 						feedback={feedback}
 						onSelectTicket={setSelectedTicketId}
 						selectedTicketId={selectedTicketId}
+						work={props.work}
 					/>
 				</div>
 			</section>
@@ -381,6 +409,7 @@ function FeedbackTable(props: {
 	feedback: ReviewFeedbackRecord[];
 	onSelectTicket: (ticketId: string | null) => void;
 	selectedTicketId: string | null;
+	work?: FeedbackWork;
 }) {
 	const columns = React.useMemo<ColumnDef<ReviewFeedbackRecord>[]>(
 		() => [
@@ -411,8 +440,14 @@ function FeedbackTable(props: {
 				accessorKey: "status",
 			},
 			{
-				header: "Comment",
+				header: "Annotation",
 				accessorKey: "comment",
+			},
+			{
+				header: "Agent work",
+				cell: ({ row }) => (
+					<RequestWorkCell item={row.original} work={props.work} />
+				),
 			},
 			{
 				header: "Mentions",
@@ -445,7 +480,7 @@ function FeedbackTable(props: {
 				},
 			},
 			{
-				header: "Submitted by",
+				header: "Asked by",
 				cell: ({ row }) => row.original.submitted_by_email || "Reviewer",
 			},
 			{
@@ -453,7 +488,7 @@ function FeedbackTable(props: {
 				cell: ({ row }) => formatDateLabel(row.original.created_on),
 			},
 		],
-		[props.onSelectTicket],
+		[props.onSelectTicket, props.work],
 	);
 
 	const table = useReactTable({
@@ -500,11 +535,48 @@ function FeedbackTable(props: {
 					))
 				) : (
 					<tr>
-						<td colSpan={columns.length}>No feedback matched these filters.</td>
+						<td colSpan={columns.length}>No annotations matched these filters.</td>
 					</tr>
 				)}
 			</tbody>
 		</table>
+	);
+}
+
+function RequestWorkCell(props: {
+	item: ReviewFeedbackRecord;
+	work?: FeedbackWork;
+}) {
+	if (!props.work) return <>-</>;
+	const request = toLoopRequest(props.item);
+	const live = handshakesForRequest(props.work.handshakes, props.item.id);
+	const traces = tracesSinceRequest(request, props.work.traces);
+	if (!live.length && !traces.length) return <>-</>;
+	return (
+		<span className="work-cell-links">
+			{live.map((handshake) => (
+				<a
+					className="work-link work-link-live"
+					href={handshakeHref(handshake.id)}
+					key={handshake.id}
+					title={handshake.topic}
+				>
+					<span className="work-live-dot" aria-hidden="true" />
+					{livePeers(handshake)
+						.map((peer) => peerAgent(peer))
+						.join(" + ")}
+				</a>
+			))}
+			{traces.length ? (
+				<a
+					className="work-link"
+					href={traceHref(traces[0].projectId, traces[0].id)}
+					title={traces[0].title}
+				>
+					{traces.length === 1 ? "1 trace since" : `${traces.length} traces since`}
+				</a>
+			) : null}
+		</span>
 	);
 }
 

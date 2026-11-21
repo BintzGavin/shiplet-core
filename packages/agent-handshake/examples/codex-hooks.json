@@ -1,0 +1,16 @@
+{
+  "hooks": {
+    "SessionStart": [
+      { "matcher": "startup|resume|clear|compact", "hooks": [ { "type": "command", "command": "/ABSOLUTE/PATH/TO/node /ABSOLUTE/PATH/TO/shiplet-core/packages/agent-handshake/bin/shiplet-handshake.js hook session-start --kind codex", "timeout": 10 } ] }
+    ],
+    "UserPromptSubmit": [
+      { "hooks": [ { "type": "command", "command": "/ABSOLUTE/PATH/TO/node /ABSOLUTE/PATH/TO/shiplet-core/packages/agent-handshake/bin/shiplet-handshake.js hook prompt --kind codex", "timeout": 10 } ] }
+    ],
+    "PostToolUse": [
+      { "hooks": [ { "type": "command", "command": "/ABSOLUTE/PATH/TO/node /ABSOLUTE/PATH/TO/shiplet-core/packages/agent-handshake/bin/shiplet-handshake.js hook post-tool --kind codex", "timeout": 10 } ] }
+    ],
+    "Stop": [
+      { "hooks": [ { "type": "command", "command": "/ABSOLUTE/PATH/TO/node /ABSOLUTE/PATH/TO/shiplet-core/packages/agent-handshake/bin/shiplet-handshake.js hook stop --kind codex", "timeout": 10 } ] }
+    ]
+  }
+}

@@ -101,6 +101,13 @@ describe("focused public OpenAPI contract", () => {
       "put /api/shiplets/{projectId}/traces/{traceId}/audiences",
       "post /api/shiplets/{projectId}/traces/{traceId}/preview",
       "post /api/shiplets/{projectId}/trace-uploads",
+      "get /api/organizations/{organizationId}/handshakes",
+      "post /api/organizations/{organizationId}/handshake-sessions",
+      "delete /api/organizations/{organizationId}/handshake-sessions/{sessionId}",
+      "get /api/organizations/{organizationId}/handshake-sessions/{sessionId}/peers",
+      "post /api/organizations/{organizationId}/handshake-sessions/{sessionId}/messages",
+      "get /api/organizations/{organizationId}/handshake-sessions/{sessionId}/inbox",
+      "post /api/organizations/{organizationId}/handshake-sessions/{sessionId}/handshakes/{handshakeId}/export",
     ]);
 
     for (const [path, pathItem] of Object.entries(paths)) {

@@ -1,0 +1,6 @@
+# Append to ~/.codex/config.toml
+[mcp_servers.shiplet-handshake]
+command = "/ABSOLUTE/PATH/TO/node"
+args = ["/ABSOLUTE/PATH/TO/shiplet-core/packages/agent-handshake/bin/shiplet-handshake.js", "mcp", "--kind", "codex"]
+# read_inbox may long-poll for up to 10 minutes
+tool_timeout_sec = 660

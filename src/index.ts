@@ -67,6 +67,8 @@ import { BuildPlatformFeedbackPage } from "./platform/feedback-page";
 import { timingSafeSecretMatches } from "./timing-safe-secret";
 import { BuildPlatformInboxPage } from "./platform/inbox-page";
 import { BuildPlatformPublishPage } from "./platform/publish-page";
+import { BuildWorkPage } from "./platform/work-pages";
+import { loadWorkData } from "./platform/work-data";
 import {
   BuildPlatformSettingsPage,
   type SettingsRoute,
@@ -158,12 +160,16 @@ import {
 } from "./self-owned/revisions";
 import { ensureTraceSchema } from "./traces/schema";
 import { registerTraceRoutes } from "./traces/routes";
+import { registerHandshakeRoutes } from "./handshakes/routes";
+import { executeHandshakeCodeModeRequest, isHandshakeCodeModePath } from "./handshakes/codemode";
 import { deleteProjectTraceObjects, sweepArchivedShipletTraces } from "./traces/store";
 import { sweepExpiredUploadLinks } from "./traces/uploads";
 import { executeTraceCodeModeRequest, isTraceCodeModePath } from "./traces/codemode";
-import { BuildTraceOnlyViewerMount, BuildTraceViewerPage, TracesPanelMount } from "./platform/traces-page";
+import { BuildTraceOnlyViewerMount, BuildTraceViewerPage, TracesPanelMount, type TraceLoopContext } from "./platform/traces-page";
+import { requestStage, toLoopRequest } from "./platform/work-loop";
+import { handshakesForShiplet, toHandshakeSummary } from "./platform/handshake-model";
 import { isTraceOnlyShiplet, setTraceShipletCreator } from "./traces/trace-shiplets";
-import { TRACES_FLAG } from "./feature-flags";
+import { AGENT_HANDSHAKES_FLAG, TRACES_FLAG } from "./feature-flags";
 import {
   legacyStaticPackageEnvelopeBytes,
   migrateLegacyShipletRevision,
@@ -566,6 +572,7 @@ import { ShipletRoot } from "./shiplet-root";
 
 export { SandboxSession } from "./sandbox";
 export { ShipletRoot } from "./shiplet-root";
+export { HandshakeRelay } from "./handshakes/relay";
 
 // Initialize Hono app with type-safe environment bindings
 type ShipletAppEnv = {
@@ -10052,6 +10059,10 @@ async function executeCodeModeRequest(
     return executeTraceCodeModeRequest(env, context, request, appBaseUrl(env, "https://shiplet.cc/"));
   }
 
+  if (isHandshakeCodeModePath(request.path)) {
+    return executeHandshakeCodeModeRequest(env, context, request);
+  }
+
   if (request.path === "/api/organizations" && request.method === "POST") {
     if (context.kind !== "user") {
       throw new Response("Organization creation requires a browser session.", {
@@ -17215,6 +17226,7 @@ app.post("/api/shiplets", async (c) => {
 });
 
 registerTraceRoutes(app);
+registerHandshakeRoutes(app);
 
 // Trace-only Shiplets (docs/traces-spec.md D19) are created through the same
 // publish path as every other Shiplet, with a page Shiplet writes as the
@@ -20151,7 +20163,49 @@ app.get("/", async (c) => {
     );
   }
 
+  // Signed in, home is the loop: what you asked for, what agents are on now,
+  // and what came back for you to check. Annotating starts at /annotate.
+  const data = await loadWorkData(c.env, user);
+  c.header("Cache-Control", "private, no-store");
+  return withNoIndexResponse(
+    c.html(
+      renderPage(
+        BuildWorkPage({
+          nonce: kernelDocumentNonce(c),
+          screen: {
+            screen: "home",
+            props: {
+              now: data.now,
+              requests: data.requests,
+              traces: data.traces,
+              handshakes: data.handshakes.map(toHandshakeSummary),
+              handshakeMode: data.handshakeMode,
+              tracesEnabled: data.tracesEnabled,
+              shiplets: data.shiplets,
+            },
+          },
+        }),
+        {
+          nonce: kernelDocumentNonce(c),
+          customDomain: c.env.CUSTOM_DOMAIN,
+          appUrl: appBaseUrl(c.env, c.req.url),
+          user,
+          title: "Home · Shiplet",
+        },
+      ),
+    ),
+  );
+});
+
+// Starting new work: annotate something already on Shiplet, connect a
+// website, or put up a build, file, or URL to annotate.
+app.get("/annotate", async (c) => {
+  const user = await getCurrentUser(c.req.raw, c.env);
+  if (!user) {
+    return c.redirect(`/auth/login?return_to=${encodeURIComponent("/annotate")}`);
+  }
   const customDomain = c.env.CUSTOM_DOMAIN;
+  const projects = await listProjectsForUser(c.env.DB, user.id);
   return withNoIndexResponse(
     c.html(
       renderPage(
@@ -20159,14 +20213,114 @@ app.get("/", async (c) => {
           nonce: kernelDocumentNonce(c),
           user,
           customDomain,
+          projects,
         }),
         {
           nonce: kernelDocumentNonce(c),
           customDomain,
           appUrl: appBaseUrl(c.env, c.req.url),
           user,
+          title: "Annotate · Shiplet",
         },
       ),
+    ),
+  );
+});
+
+app.get("/traces", async (c) => {
+  const user = await getCurrentUser(c.req.raw, c.env);
+  if (!user) {
+    return c.redirect(`/auth/login?return_to=${encodeURIComponent("/traces")}`);
+  }
+  const data = await loadWorkData(c.env, user, { traceLimit: 100 });
+  c.header("Cache-Control", "private, no-store");
+  return c.html(
+    renderPage(
+      BuildWorkPage({
+        nonce: kernelDocumentNonce(c),
+        screen: {
+          screen: "traces",
+          props: {
+            now: data.now,
+            requests: data.requests,
+            traces: data.traces,
+            handshakes: data.handshakes.map(toHandshakeSummary),
+            tracesEnabled: data.tracesEnabled,
+          },
+        },
+      }),
+      {
+        nonce: kernelDocumentNonce(c),
+        customDomain: c.env.CUSTOM_DOMAIN,
+        appUrl: appBaseUrl(c.env, c.req.url),
+        user,
+        title: "Traces · Shiplet",
+      },
+    ),
+  );
+});
+
+app.get("/handshakes", async (c) => {
+  const user = await getCurrentUser(c.req.raw, c.env);
+  if (!user) {
+    return c.redirect(`/auth/login?return_to=${encodeURIComponent("/handshakes")}`);
+  }
+  const data = await loadWorkData(c.env, user, { traceLimit: 100 });
+  c.header("Cache-Control", "private, no-store");
+  return c.html(
+    renderPage(
+      BuildWorkPage({
+        nonce: kernelDocumentNonce(c),
+        screen: {
+          screen: "handshakes",
+          props: {
+            now: data.now,
+            handshakes: data.handshakes.map(toHandshakeSummary),
+            handshakeMode: data.handshakeMode,
+            organizations: data.organizations,
+            traces: data.traces,
+            tracesEnabled: data.tracesEnabled,
+          },
+        },
+      }),
+      {
+        nonce: kernelDocumentNonce(c),
+        customDomain: c.env.CUSTOM_DOMAIN,
+        appUrl: appBaseUrl(c.env, c.req.url),
+        user,
+        title: "Handshakes · Shiplet",
+      },
+    ),
+  );
+});
+
+app.get("/handshakes/:handshakeId", async (c) => {
+  const user = await getCurrentUser(c.req.raw, c.env);
+  if (!user) {
+    const url = new URL(c.req.url);
+    return c.redirect(`/auth/login?return_to=${encodeURIComponent(url.pathname)}`);
+  }
+  const handshakeId = c.req.param("handshakeId");
+  const data = await loadWorkData(c.env, user);
+  // A handshake that has ended is gone; say so instead of a bare 404.
+  const handshake = data.handshakes.find((item) => item.id === handshakeId) ?? null;
+  c.header("Cache-Control", "private, no-store");
+  return c.html(
+    renderPage(
+      BuildWorkPage({
+        nonce: kernelDocumentNonce(c),
+        screen: {
+          screen: "handshake",
+          props: { now: data.now, handshakeId, handshake, handshakeMode: data.handshakeMode },
+        },
+      }),
+      {
+        nonce: kernelDocumentNonce(c),
+        customDomain: c.env.CUSTOM_DOMAIN,
+        appUrl: appBaseUrl(c.env, c.req.url),
+        user,
+        title: "Handshake · Shiplet",
+      },
     ),
   );
 });
@@ -20317,11 +20471,14 @@ app.get("/feedback", async (c) => {
     submittedByMe: url.searchParams.get("submittedByMe") === "true",
     limit: Number(url.searchParams.get("limit") || 100),
   });
+  // The agent work each request led to: live handshakes and traces since.
+  const work = await loadWorkData(c.env, user);
   return c.html(
     renderPage(
       BuildPlatformFeedbackPage({
         nonce: kernelDocumentNonce(c),
         feedback,
+        work: { traces: work.traces, handshakes: work.handshakes.map(toHandshakeSummary) },
         filters: {
           projectId: url.searchParams.get("projectId"),
           status: url.searchParams.get("status"),
@@ -20696,6 +20853,28 @@ app.get("/shiplets/:projectId/review-layer/preview/:previewId", async (c) => {
 
 // The trace viewer (docs/traces-spec.md D15). The API decides what the
 // viewer may see; this page is only the shell.
+// The annotations on a trace's Shiplet and the live handshakes about it, for
+// the strip above the viewer. Only for signed-in people who can view the
+// Shiplet; it never reads the trace itself, so it cannot widen trace access.
+async function traceLoopContext(env: Env, user: ShipletUser, project: Project): Promise<TraceLoopContext | null> {
+  try {
+    const feedback = await listAccessibleReviewFeedback(env.DB, user, { projectId: project.id, limit: 100 });
+    const requests = feedback.map(toLoopRequest);
+    const open = requests.filter((request) => requestStage(request.status) !== "closed");
+    const handshakes = useFeatureFlag(env, AGENT_HANDSHAKES_FLAG)
+      ? handshakesForShiplet((await loadWorkData(env, user)).handshakes, project.id)
+      : [];
+    return {
+      shipletName: project.name,
+      openRequests: open.map((request) => ({ ticketLabel: request.ticketLabel, comment: request.comment, href: request.href })),
+      requestCount: requests.length,
+      handshakes: handshakes.map((item) => ({ id: item.id, topic: item.topic, sample: item.sample })),
+    };
+  } catch {
+    return null;
+  }
+}
+
 app.get("/shiplets/:projectId/traces/:traceId", async (c) => {
   if (!useFeatureFlag(c.env, TRACES_FLAG)) return c.text("Not found", 404);
   const user = await getCurrentUser(c.req.raw, c.env);
@@ -20705,9 +20884,12 @@ app.get("/shiplets/:projectId/traces/:traceId", async (c) => {
     const url = new URL(c.req.url);
     return c.redirect(`/auth/login?return_to=${encodeURIComponent(url.pathname)}`);
   }
+  const loop = user && project && (await canViewProject(c.env.DB, project, user.id))
+    ? await traceLoopContext(c.env, user, project)
+    : null;
   return c.html(
     renderPage(
-      BuildTraceViewerPage({ nonce: kernelDocumentNonce(c), projectId: c.req.param("projectId"), traceId: c.req.param("traceId") }),
+      BuildTraceViewerPage({ nonce: kernelDocumentNonce(c), projectId: c.req.param("projectId"), traceId: c.req.param("traceId"), loop }),
       {
         nonce: kernelDocumentNonce(c),
         customDomain: c.env.CUSTOM_DOMAIN,

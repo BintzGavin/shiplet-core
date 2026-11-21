@@ -1,0 +1,13 @@
+{
+  "hooks": {
+    "Stop": [
+      { "hooks": [ { "type": "command", "command": "/ABSOLUTE/PATH/TO/node /ABSOLUTE/PATH/TO/shiplet-core/packages/agent-handshake/bin/shiplet-handshake.js hook stop --kind claude --wait 3540", "asyncRewake": true, "timeout": 3600 } ] }
+    ],
+    "UserPromptSubmit": [
+      { "hooks": [ { "type": "command", "command": "/ABSOLUTE/PATH/TO/node /ABSOLUTE/PATH/TO/shiplet-core/packages/agent-handshake/bin/shiplet-handshake.js hook prompt --kind claude", "timeout": 10 } ] }
+    ],
+    "PostToolUse": [
+      { "hooks": [ { "type": "command", "command": "/ABSOLUTE/PATH/TO/node /ABSOLUTE/PATH/TO/shiplet-core/packages/agent-handshake/bin/shiplet-handshake.js hook post-tool --kind claude", "timeout": 10 } ] }
+    ]
+  }
+}

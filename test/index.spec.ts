@@ -2473,8 +2473,8 @@ describe("Shiplet", () => {
           });
           expect(response.status).toBe(200);
           const html = await response.text();
-          expect(html).toContain("Create a shiplet");
-          expect(html).toContain("Connect your website or upload a build or file.");
+          expect(html).toContain('data-platform-route="home"');
+          expect(html).toContain('href="/annotate"');
           expect(html).toContain("shiplet-header-avatar");
           expect(html).not.toContain(">Settings</a>");
         });
@@ -2776,16 +2776,33 @@ describe("Shiplet", () => {
       });
     });
 
-    it("should return the Shiplet publishing UI on the root path", async () => {
+    it("should make Home the signed-in root, with annotating as the way in", async () => {
       const response = await makeRequest("/");
+      expect(response.status).toBe(200);
+      const html = await response.text();
+      expect(html).toContain('data-platform-route="home"');
+      expect(html).toContain("<h1>Home</h1>");
+      expect(html).toContain("Ask for a change by pointing at it");
+      expect(html).toContain('href="/annotate"');
+      for (const lane of ["laneAsked", "laneWorking", "laneCheck"]) expect(html).toContain(`id="${lane}"`);
+      expect(html).toContain('id="shiplet-platform-work-state"');
+      expect(html).toContain('src="/assets/platform/work.js"');
+      // Server rendered with its data: the island never shows a loading state.
+      const island = html.slice(html.indexOf('id="work-platform-root"'), html.indexOf('id="shiplet-platform-work-state"'));
+      expect(island.length).toBeGreaterThan(0);
+      expect(island).not.toContain("Loading");
+    });
+
+    it("should return the Shiplet publishing UI on /annotate", async () => {
+      const response = await makeRequest("/annotate");
 
       expect(response.status).toBe(200);
       expect(response.headers.get("content-type")).toContain("text/html");
 
       const html = await response.text();
       expect(html).toContain("Shiplet");
-      expect(html).toContain("Create a shiplet");
-      expect(html).toContain("Connect your website or upload a build or file.");
+      expect(html).toContain("Start with an annotation");
+      expect(html).toContain("Point at the exact thing on a live version");
       expect(html).toContain(">Create shiplet</button>");
       expect(html).toContain("Choose the source");
       expect(html).toContain("Upload a build or file");
@@ -2798,7 +2815,7 @@ describe("Shiplet", () => {
         "Your shiplet includes comments, invites, and agent handoff.",
       );
       expect(html).toContain(
-        "Reviewers open the shared work, comment in context, and send agent-ready tickets back to your queue.",
+        "An agent picks up each annotation over MCP or the CLI.",
       );
       expect(html).toContain("Create your first shiplet to get started.");
       expect(html).not.toContain("Create a live review link");
@@ -2814,7 +2831,7 @@ describe("Shiplet", () => {
       expect(html).toContain("shiplet-publish-page");
       expect(html).toContain('class="shiplet-upload-dropzone"');
       expect(html).toContain("projectForm");
-      expect(html).toContain("What reviewers get");
+      expect(html).toContain("Where an annotation goes");
       expect(html).not.toContain("review cockpit");
       expect(html).toContain('href="/workspace"');
       expect(html).not.toContain(">Settings</a>");
@@ -2887,7 +2904,7 @@ describe("Shiplet", () => {
     });
 
     it("should present simple source choices for creating a shiplet", async () => {
-      const response = await makeRequest("/");
+      const response = await makeRequest("/annotate");
       const html = await response.text();
       const publishPanelRule = extractCssRule(html, ".publish-primary-panel");
       const hiddenRule = extractCssRule(html, "[hidden]");
@@ -2914,7 +2931,7 @@ describe("Shiplet", () => {
       expect(html).toContain('href="/openapi.json"');
       expect(html).toContain(">View REST/OpenAPI</a>");
       expect(html).toContain(
-        "Reviewers open the shared work, comment in context, and send agent-ready tickets back to your queue.",
+        "An agent picks up each annotation over MCP or the CLI.",
       );
       expect(html).toContain('id="externalUrl"');
       expect(publishPanelRule).toContain("data:image/svg+xml");
@@ -3064,7 +3081,7 @@ describe("Shiplet", () => {
         shipletsHtml.match(
           /<header class="app-page-topbar">[\s\S]*?<\/header>/,
         )?.[0] || "";
-      expect(shipletsTopbar).toContain("Prepare artifact");
+      expect(shipletsTopbar).toContain("Add something to annotate");
       expect(shipletsTopbar).not.toContain('href="/access"');
 
       const feedback = await makeRequest("/feedback");
@@ -3094,6 +3111,9 @@ describe("Shiplet", () => {
     it("should replace manual refresh controls with platform live updates", async () => {
       for (const path of [
         "/",
+        "/annotate",
+        "/handshakes",
+        "/traces",
         "/workspace",
         "/shiplets",
         "/inbox",
@@ -4474,7 +4494,7 @@ describe("Shiplet", () => {
 
         const rootResponse = await makeRequest("https://shiplet.cc/");
         expect(rootResponse.status).toBe(200);
-        expect(await rootResponse.text()).toContain("Create a shiplet");
+        expect(await rootResponse.text()).toContain('data-platform-route="home"');
       });
     });
 
@@ -4483,7 +4503,7 @@ describe("Shiplet", () => {
         await withAppUrl("https://shiplet.cc", async () => {
           const root = await makeRequest("https://shiplet.cc/");
           expect(root.status).toBe(200);
-          expect(await root.text()).toContain('data-platform-route="publish"');
+          expect(await root.text()).toContain('data-platform-route="home"');
 
           const workspace = await makeRequest("https://shiplet.cc/workspace");
           expect(workspace.status).toBe(200);
@@ -4495,7 +4515,7 @@ describe("Shiplet", () => {
     });
 
     it("should expose the Shiplet brand system in the dashboard", async () => {
-      const response = await makeRequest("/");
+      const response = await makeRequest("/annotate");
       const html = await response.text();
       const header =
         html.match(
@@ -4947,7 +4967,7 @@ describe("Shiplet", () => {
     });
 
     it("should hide Worker Code controls on deployments without Workers for Platforms", async () => {
-      const response = await makeRequest("/");
+      const response = await makeRequest("/annotate");
       const html = await response.text();
 
       expect(html).toContain("Upload a build or file");
@@ -12406,9 +12426,8 @@ describe("Shiplet", () => {
       const feedbackResponse = await makeRequest("/feedback");
       expect(feedbackResponse.status).toBe(200);
       const feedbackHtml = await feedbackResponse.text();
-      expect(feedbackHtml).toContain("All feedback");
-      expect(feedbackHtml).toContain("Global ledger");
-      expect(feedbackHtml).toContain("Review comments");
+      expect(feedbackHtml).toContain("<h1>Annotations</h1>");
+      expect(feedbackHtml).toContain("Annotations across your Shiplets");
       expect(feedbackHtml).not.toContain("Review tickets");
       expect(feedbackHtml).toContain("mentionedMe");
       expect(feedbackHtml).toContain('data-platform-app="react-tanstack"');

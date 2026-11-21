@@ -8,7 +8,9 @@ const envLines = [
 	"CUSTOM_DOMAIN=",
 	`SHIPLET_APP_URL=${baseURL}`,
 	`WORKOS_REDIRECT_URI=${baseURL}/auth/callback`,
-	"SHIPLET_ENABLED_FEATURE_FLAGS=account-email-switching",
+	// traces and the sample agent-handshakes source, so e2e can walk the whole
+	// annotation -> handshake -> trace loop (e2e/work-loop.spec.ts).
+	"SHIPLET_ENABLED_FEATURE_FLAGS=account-email-switching,traces,agent-handshakes",
 ];
 
 export default defineConfig({

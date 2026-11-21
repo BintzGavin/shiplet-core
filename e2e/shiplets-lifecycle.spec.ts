@@ -28,7 +28,7 @@ test.describe("publish and shiplets lifecycle", () => {
 
 		const name = `E2E Uploaded ${Date.now()}`;
 		const subdomain = `e2e-uploaded-${Math.random().toString(16).slice(2, 8)}`;
-		await page.goto("/", { waitUntil: "networkidle" });
+		await page.goto("/annotate", { waitUntil: "networkidle" });
 		await page.setInputFiles("#fileInput", {
 			name: "uploaded-audit.html",
 			mimeType: "text/html",

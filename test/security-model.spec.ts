@@ -479,7 +479,7 @@ describe("artifact and app security model", () => {
         const html = await response.text();
 
         expect(response.status).toBe(200);
-        expect(html).toContain("Create a shiplet");
+        expect(html).toContain('data-platform-route="home"');
       });
     });
   });
