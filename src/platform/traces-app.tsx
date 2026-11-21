@@ -13,6 +13,7 @@ import {
 	type TraceEvent,
 	type TraceManifest,
 } from "../cli/trace-core.mjs";
+import { TraceTranscript } from "./trace-transcript";
 
 export const TRACE_DEFINITION =
 	"A trace is the full log of an agent session: your prompts, the agent's replies, and every tool call and result.";
@@ -61,31 +62,6 @@ async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
 
 const tracePath = (projectId: string, traceId?: string) =>
 	`/api/shiplets/${encodeURIComponent(projectId)}/traces${traceId ? `/${encodeURIComponent(traceId)}` : ""}`;
-
-// Redaction rules write reasons such as "tool output hidden"; anything else is
-// the agent's own reason for leaving something out (open format, D20).
-function omittedText(reason: string | undefined) {
-	if (!reason) return "Hidden at your level.";
-	if (/\bhidden$/.test(reason)) return `${reason[0].toUpperCase()}${reason.slice(1)} at your level.`;
-	return `Left out by the agent: ${reason}`;
-}
-
-function countLabel(count: number, noun: string) {
-	return `${count} ${noun}${count === 1 ? "" : "s"}`;
-}
-
-function formatDuration(seconds: number | null | undefined) {
-	if (seconds === null || seconds === undefined) return "unknown length";
-	if (seconds < 90) return `${seconds}s`;
-	const minutes = Math.round(seconds / 60);
-	return minutes < 90 ? `${minutes} min` : `${Math.floor(minutes / 60)} h ${minutes % 60} min`;
-}
-
-function formatBytes(bytes: number) {
-	if (bytes >= 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
-	if (bytes >= 1024) return `${Math.round(bytes / 1024)} KB`;
-	return `${bytes} B`;
-}
 
 function LevelStamp({ level }: { level: Level }) {
 	return <span className={`status-badge trace-level trace-level-${level}`}>{LEVEL_TEXT[level].label}</span>;
@@ -195,6 +171,12 @@ export function TraceViewerApp({ projectId, traceId, origin, embedded = false }:
 		};
 	}, [projectId, traceId, loadSegment]);
 
+	// The transcript groups the session by prompt, so it reads every page; they
+	// load one after another and the transcript fills in as they arrive.
+	React.useEffect(() => {
+		if (detail && !loadingMore && !error && nextSegment > 0 && nextSegment < detail.manifest.segments.length) void loadSegment(nextSegment);
+	}, [detail, loadingMore, error, nextSegment, loadSegment]);
+
 	if (error && !detail) {
 		return (
 			<section className="success-card shiplet-panel">
@@ -210,271 +192,35 @@ export function TraceViewerApp({ projectId, traceId, origin, embedded = false }:
 	if (!detail) return <div className="banner banner-info">Loading trace…</div>;
 
 	const { manifest, access } = detail;
-	const summary = manifest.summary;
-	const totalSegments = manifest.segments.length;
-	const attachments = manifest.attachments || [];
-	const attachmentUrl = (sha256: string) => `${tracePath(projectId, traceId)}/attachments/${sha256}`;
 	const agentPrompt = `Load Shiplet trace ${traceId} from Shiplet ${projectId} into context and summarize where it left off.`;
 	const cliCommand = `npx shiplet-cli trace pull ${traceId} --shiplet ${projectId} --as context`;
+	const complete = access.level === "summary" || !manifest.segments.length || nextSegment >= manifest.segments.length;
 
 	return (
 		<div className="trace-viewer" data-trace-id={traceId}>
-			<section className="success-card shiplet-panel shiplet-focus-strip trace-header">
-				<span className="success-card-label">Trace · {harnessLabel(manifest.source?.harness)} session</span>
-				{embedded ? <h2>{manifest.title}</h2> : <h1>{manifest.title}</h1>}
-				<p className="trace-definition">{TRACE_DEFINITION}</p>
-				<div className="trace-meta">
-					<span>You're seeing</span> <LevelStamp level={access.level} />
-					<span className="trace-harness" title={manifest.source?.harness}>
-						{harnessLabel(manifest.source?.harness)}
-						{manifest.source?.harnessVersion ? ` ${manifest.source.harnessVersion}` : ""}
-					</span>
-					<span>{formatDuration(summary?.durationSeconds)}</span>
-					<span>{(manifest.models || []).join(", ") || "unknown model"}</span>
-					<span className={`status-badge trace-outcome trace-outcome-${summary?.outcome}`}>
-						{summary?.outcome === "last-check-passed" ? "Checks passed" : summary?.outcome === "last-check-failed" ? "Checks failed" : "No checks run"}
-					</span>
-					<span className={`status-badge trace-sharing-${detail.trace.sharing}`}>{detail.trace.sharing === "shared" ? "Shared" : "Private"}</span>
-				</div>
-				<div className="trace-actions">
-					<CopyButton text={agentPrompt} label="Copy prompt for your agent" />
-					<CopyButton text={cliCommand} label="Copy CLI command" />
-					{embedded ? (
-						<a className="btn btn-secondary btn-sm" href={`/shiplets/${encodeURIComponent(projectId)}/traces/${encodeURIComponent(traceId)}`}>
-							Open full page
+			<TraceTranscript
+				manifest={manifest}
+				level={access.level}
+				events={events}
+				complete={complete}
+				embedded={embedded}
+				share={access.canManage ? <TraceSharePanel projectId={projectId} traceId={traceId} /> : null}
+				attachmentUrl={(sha256) => `${tracePath(projectId, traceId)}/attachments/${sha256}`}
+				actions={
+					<>
+						<CopyButton text={agentPrompt} label="Copy prompt for your agent" />
+						<CopyButton text={cliCommand} label="Copy CLI command" />
+						<a
+							className="btn btn-secondary btn-sm"
+							href={embedded ? `/shiplets/${encodeURIComponent(projectId)}/traces/${encodeURIComponent(traceId)}` : `/shiplets/${encodeURIComponent(projectId)}`}
+						>
+							{embedded ? "Open full page" : "Back to the Shiplet"}
 						</a>
-					) : (
-						<a className="btn btn-secondary btn-sm" href={`/shiplets/${encodeURIComponent(projectId)}`}>
-							Back to the Shiplet
-						</a>
-					)}
-				</div>
-				<p className="trace-hint">
-					Your browser cannot write into your agent. To continue this work, give your agent the prompt (it loads the trace over Shiplet MCP), or run the
-					command to print an agent-ready handoff.
-				</p>
-			</section>
-
-			<div className="trace-layout">
-				<section className="success-card shiplet-panel trace-timeline-card" aria-labelledby="traceTimelineTitle">
-					<div className="dashboard-section-header">
-						<div>
-							<span className="success-card-label">Session</span>
-							<h2 id="traceTimelineTitle">Timeline</h2>
-							<p>
-								{countLabel(manifest.counts.events, "event")} · {countLabel(manifest.counts.toolCalls, "tool call")} · {countLabel(manifest.counts.errors, "error")}
-							</p>
-						</div>
-					</div>
-					{access.level === "summary" ? (
-						<p className="trace-empty">You can see this trace's summary only. Ask its owner for a higher level to read the session.</p>
-					) : (
-						<TraceTimeline events={events} attachmentUrl={attachmentUrl} attachments={attachments} />
-					)}
-					{nextSegment < totalSegments && access.level !== "summary" ? (
-						<button type="button" className="btn btn-secondary btn-sm trace-load-more" disabled={loadingMore} onClick={() => loadSegment(nextSegment)}>
-							{loadingMore ? "Loading…" : `Load more (${nextSegment} of ${totalSegments} pages)`}
-						</button>
-					) : null}
-					{error ? <div className="banner banner-error">{error}</div> : null}
-				</section>
-
-				<aside className="trace-side">
-					<section className="success-card shiplet-panel">
-						<span className="success-card-label">Summary</span>
-						<h2>What happened</h2>
-						<dl className="trace-facts">
-							<dt>Prompts</dt>
-							<dd>{summary?.promptCount ?? 0}</dd>
-							<dt>Errors</dt>
-							<dd>{summary?.errorCount ?? 0}</dd>
-							<dt>Subagents</dt>
-							<dd>{(manifest.agents || []).length}</dd>
-						</dl>
-						{summary?.checks?.length ? (
-							<>
-								<h3>Checks</h3>
-								<ul className="trace-checks">
-									{summary.checks.slice(-8).map((check, index) => (
-										<li key={`${check.command}-${index}`}>
-											<span className={`status-badge ${check.ok ? "trace-check-ok" : "trace-check-failed"}`}>{check.ok ? "Passed" : "Failed"}</span>
-											<code>{check.command}</code>
-										</li>
-									))}
-								</ul>
-							</>
-						) : null}
-						{summary?.filesTouched?.length ? (
-							<>
-								<h3>Files touched</h3>
-								<ul className="trace-files-touched">
-									{summary.filesTouched.slice(0, 40).map((file) => (
-										<li key={file}>
-											<code>{file}</code>
-										</li>
-									))}
-								</ul>
-							</>
-						) : null}
-					</section>
-					{attachments.length ? (
-						<section className="success-card shiplet-panel" aria-labelledby="traceFilesTitle">
-							<span className="success-card-label">Files</span>
-							<h2 id="traceFilesTitle">Images, video, and files</h2>
-							<ul className="trace-attachment-list">
-								{attachments.map((attachment, index) => (
-									<li key={attachment.sha256}>
-										<a href={attachmentUrl(attachment.sha256)} target="_blank" rel="noreferrer">
-											{attachment.name || `${attachment.mediaType.startsWith("image/") ? "Image" : "File"} ${index + 1}`}
-										</a>
-										<span className="trace-attachment-meta">
-											{attachment.mediaType} · {formatBytes(attachment.bytes)} · {attachment.source === "file" ? "made in the session" : "pasted or returned by a tool"}
-										</span>
-									</li>
-								))}
-							</ul>
-						</section>
-					) : null}
-					{access.canManage ? <TraceSharePanel projectId={projectId} traceId={traceId} /> : null}
-				</aside>
-			</div>
+					</>
+				}
+			/>
+			{error ? <div className="banner banner-error">{error}</div> : null}
 		</div>
-	);
-}
-
-function TraceText({ text }: { text: string }) {
-	return <pre className="trace-text">{text}</pre>;
-}
-
-function AttachmentPreview({ url, mediaType, name }: { url: string; mediaType: string; name: string }) {
-	if (mediaType.startsWith("image/")) {
-		return (
-			<a href={url} target="_blank" rel="noreferrer" className="trace-inline-media">
-				<img src={url} alt={name} loading="lazy" />
-			</a>
-		);
-	}
-	if (mediaType.startsWith("video/")) {
-		return (
-			<video className="trace-inline-media" src={url} controls preload="metadata">
-				<a href={url}>{name}</a>
-			</video>
-		);
-	}
-	return (
-		<a href={url} target="_blank" rel="noreferrer" className="trace-file-link">
-			{name}
-		</a>
-	);
-}
-
-function TraceTimeline({
-	events,
-	attachmentUrl,
-	attachments,
-}: {
-	events: TraceEvent[];
-	attachmentUrl: (sha256: string) => string;
-	attachments: TraceManifest["attachments"];
-}) {
-	const byId = new Map((attachments || []).map((attachment) => [attachment.sha256, attachment]));
-	const results = new Map<string, TraceEvent>();
-	for (const event of events) if (event.kind === "tool_result" && event.result) results.set(event.result.callId, event);
-	if (!events.length) return <p className="trace-empty">Loading the session…</p>;
-	return (
-		<ol className="trace-timeline">
-			{events.map((event) => {
-				if (event.kind === "tool_result" && event.result && events.some((candidate) => candidate.kind === "tool_call" && candidate.tool?.callId === event.result?.callId)) {
-					return null;
-				}
-				const media = (event.attachmentIds || [])
-					.map((id) => byId.get(id))
-					.filter(Boolean)
-					.map((attachment) => (
-						<AttachmentPreview key={attachment!.sha256} url={attachmentUrl(attachment!.sha256)} mediaType={attachment!.mediaType} name={attachment!.name || attachment!.mediaType} />
-					));
-				const nested = event.agent !== "main" ? " trace-event-subagent" : "";
-				switch (event.kind) {
-					case "user_message":
-						return (
-							<li key={event.id} className={`trace-event trace-event-user${nested}`}>
-								<span className="trace-role">{event.agent === "main" ? "You" : "Task"}</span>
-								{event.text ? <TraceText text={event.text} /> : null}
-								{media}
-							</li>
-						);
-					case "assistant_message":
-						return (
-							<li key={event.id} className={`trace-event trace-event-agent${nested}`}>
-								<span className="trace-role">Agent</span>
-								<TraceText text={event.text || ""} />
-								{media}
-							</li>
-						);
-					case "reasoning":
-						return (
-							<li key={event.id} className={`trace-event trace-event-reasoning${nested}`}>
-								<details>
-									<summary>Reasoning</summary>
-									<TraceText text={event.text || ""} />
-								</details>
-							</li>
-						);
-					case "tool_call": {
-						const result = results.get(event.tool?.callId || "");
-						const failed = result?.result?.isError;
-						return (
-							<li key={event.id} className={`trace-event trace-event-tool${failed ? " trace-event-failed" : ""}${nested}`}>
-								<details>
-									<summary>
-										<span className="trace-tool-name">{event.tool?.name}</span>
-										<code className="trace-tool-summary">{event.tool?.inputSummary}</code>
-										{failed ? <span className="status-badge trace-check-failed">Error</span> : null}
-									</summary>
-									{event.tool?.input ? <TraceText text={JSON.stringify(event.tool.input, null, 2)} /> : null}
-									{result?.result ? (
-										<div className="trace-tool-result">
-											<span className="trace-role">{failed ? "Error" : "Result"}</span>
-											<TraceText text={result.result.text} />
-										</div>
-									) : null}
-								</details>
-								{[...media, ...((result?.attachmentIds || []).map((id) => byId.get(id)).filter(Boolean).map((attachment) => (
-									<AttachmentPreview key={attachment!.sha256} url={attachmentUrl(attachment!.sha256)} mediaType={attachment!.mediaType} name={attachment!.name || attachment!.mediaType} />
-								)))]}
-							</li>
-						);
-					}
-					case "tool_result":
-						return (
-							<li key={event.id} className={`trace-event trace-event-tool${nested}`}>
-								<TraceText text={event.result?.text || ""} />
-								{media}
-							</li>
-						);
-					case "subagent_start":
-						return (
-							<li key={event.id} className="trace-event trace-event-marker">
-								<span className="status-badge">Subagent</span> {event.text}
-							</li>
-						);
-					case "subagent_end":
-						return null;
-					case "omitted":
-						return (
-							<li key={event.id} className={`trace-event trace-event-omitted${nested}`}>
-								{omittedText(event.reason)}
-							</li>
-						);
-					default:
-						return (
-							<li key={event.id} className={`trace-event trace-event-note${nested}`}>
-								<TraceText text={event.text || ""} />
-							</li>
-						);
-				}
-			})}
-		</ol>
 	);
 }
 

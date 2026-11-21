@@ -408,8 +408,9 @@ rendered videos, generated images, and PDFs. These are kept with the trace.
   already in the trace as tool inputs, and follow the level like any other text.
 - **The Shiplet's main artifact** is already stored as the pinned revision, so a
   trace does not duplicate it.
-- **The viewer** shows attachments in a Files panel beside the timeline, and
-  inline at the event that produced or referenced them.
+- **The viewer** shows attachments inline at the event that produced or
+  referenced them, and lists any that no event references after the
+  conversation.
 
 Allowed attachment types: `image/png`, `image/jpeg`, `image/gif`,
 `image/webp`, `video/mp4`, `video/webm`, `application/pdf`, `text/plain`. The
@@ -536,15 +537,27 @@ it starts working if they add that.
 
 The dashboard page `/shiplets/:projectId/traces/:traceId` shows:
 
-- A header with title, source, models, duration, outcome, and the reader's level.
-- The timeline, one segment per page: messages; tool calls collapsed to their
-  input summary; results expandable; subagents as nested threads.
+- A header with the title, the source, and one line of facts: duration, prompts,
+  files changed, and the outcome. Below Full it adds "Shared as <level>" with an
+  info button that lists what the level keeps and leaves out. No model names or
+  version numbers.
+- A chat transcript: each prompt, then the agent's final reply. The reply has
+  Answer, Steps, Changes, and Checks tabs. Steps lists every step (subagents
+  fold under the call that started them, with their own steps inside) under a
+  sticky activity bar, one segment per step sized by the time it took. Changes
+  shows the diffs, and Checks shows each test, lint, or build run.
 - Attachments inline (images and video) or as downloads.
 - "Copy prompt for your agent" and "Copy CLI command" buttons (see
   [traces-user-flows.md](./traces-user-flows.md)).
 
-All trace text renders as escaped text. Markdown is limited to code fences and
-line breaks; no HTML is ever rendered.
+The viewer reads every segment of the session, one after another, and fills in
+as they arrive. Check results come from the manifest summary, which every level
+keeps, so a Conversation reader sees which checks passed or failed without their
+output. The layout and the decisions behind it are in
+[trace-viewer-design.md](./trace-viewer-design.md).
+
+All trace text renders as escaped text. Agent text supports paragraphs, lists,
+bold, and inline code, built as React nodes; no HTML is ever rendered.
 
 ### D16. Scopes, CLI sessions, and the feature flag (agent)
 
@@ -1215,11 +1228,13 @@ prefix; no other table references them.
    **Built.** What shipped:
    - **Viewer.** `/shiplets/<id>/traces/<trace>` is a server shell
      (`src/platform/traces-page.ts`) and a React app
-     (`src/platform/traces-app.tsx`, bundled as `/assets/platform/traces.js`).
-     It reads only the trace API, so it shows exactly the reader's level, says
-     which level that is, and pages the timeline by segment. Images, video, and
-     PDFs render inline; produced files are listed with links; subagents nest
-     under the call that started them; omitted parts say so.
+     (`src/platform/traces-app.tsx` and `src/platform/trace-transcript.tsx`,
+     bundled as `/assets/platform/traces.js`). It reads only the trace API, so
+     it shows exactly the reader's level and says which level that is. It reads
+     the session as a chat: each prompt and the final reply, with Steps,
+     Changes, and Checks tabs on the reply. Images, video, and PDFs render
+     inline; files no event references are listed after the conversation;
+     subagents nest under the call that started them; omitted parts say so.
    - **Continue.** "Copy prompt for your agent" (loads the trace over MCP) and
      "Copy CLI command" (`trace pull --as context`), since a browser cannot
      write into Claude Code or Codex.
