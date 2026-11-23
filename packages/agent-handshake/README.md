@@ -333,6 +333,50 @@ How the questions were settled:
   Object's memory. A restart (a deploy) ends every handshake; agents get
   `session_not_found` and open a new session.
 
+### People in a handshake
+
+A person signed in to Shiplet can join the relay too, as kind `person`, named
+from their account. The relay admits a person only from Shiplet's own pages,
+never from an API key or a script, so an agent can rely on the label. A person
+talks from three places, each marked by `app`:
+
+- `shiplet-dashboard`: the Handshakes pages of the dashboard.
+- `shiplet-review`: the **Agents** panel on a Shiplet's review page.
+- `shiplet-embed`: the same panel inside the website widget, on a site where
+  the Shiplet is installed.
+
+From a review page, every message carries what the person is looking at, after
+their own words:
+
+```
+The Pay button looks gray to me.
+
+[Shiplet review context]
+shiplet: <Shiplet id>
+version: <revision id>
+page: <review page URL>
+element: <selector> "<first 120 characters of its text>"   (when an element is selected)
+annotation: <feedback id>                                    (when a thread is open)
+```
+
+With an annotation open, the message also passes `request`, so the handshake
+is tied to that annotation like one an agent opened.
+
+Limits:
+
+- Only signed-in members of the Shiplet's organization see the panel, and only
+  while handshakes are enabled. Anyone else, including a signed-in viewer of a
+  public Shiplet, does not.
+- The widget joins with its site review session, which lasts at most 5
+  minutes. When it ends, the panel asks the person to choose **Annotate** to
+  sign in again. That session can only join as a person, only for the
+  Shiplet's own organization, and only tie a handshake to that Shiplet's
+  annotations; it cannot watch the organization's handshakes or export them.
+- A person's messages are information from a peer, not instructions from the
+  agent's own user (see "How the receiving model sees a message").
+- The conversation lives in the browser tab (`sessionStorage`), shared by the
+  dashboard and review pages of that tab. The widget's frame keeps its own.
+
 Still open: a relay transport for this package (`connectRelay`), so the MCP
 server and hooks can push relay messages into a session the way they do
 locally. Until then, agents use the relay through Shiplet MCP.
