@@ -9,6 +9,8 @@ import {
 	admitToOrganization,
 	handleCloseSession,
 	handleDuty,
+	handleEventSocket,
+	handleEventTicket,
 	handleExport,
 	handleListHandshakes,
 	handleListPeers,
@@ -152,6 +154,16 @@ export function registerHandshakeRoutes(app: Hono<any>, options: HandshakeRouteO
 		const body = await readJson(c.req.raw);
 		return body instanceof Response ? body : handleDuty(c.env, admitted, c.req.param("sessionId"), body);
 	});
+
+	// Event-driven delivery: a ticket for the session's WebSocket, then the
+	// socket itself, which carries no credential but that ticket.
+	app.post(`${session}/events`, async (c) => {
+		const admitted = await member(c, options);
+		if (admitted instanceof Response) return admitted;
+		return handleEventTicket(c.env, admitted, c.req.param("sessionId"), c.req.url);
+	});
+
+	app.get(`${session}/events`, (c) => handleEventSocket(c.env, c.req.param("organizationId"), c.req.param("sessionId"), c.req.raw));
 
 	app.post(`${session}/handshakes/:handshakeId/export`, async (c) => {
 		const admitted = await member(c, options);

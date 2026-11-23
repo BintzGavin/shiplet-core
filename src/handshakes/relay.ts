@@ -5,11 +5,15 @@
 // who the caller is and that they belong to the organization; the relay only
 // checks that each session is used by the actor that opened it.
 //
-// State is in memory, like the local broker: a handshake lasts while at least
-// one of its agents is connected, and a recorded one is kept by exporting it as
-// a trace. A session that has not called for IDLE_MS has left. A restart (a
-// deploy) ends every handshake; agents see session_not_found and open a new
-// session.
+// State is saved in the object's own storage after every call, so eviction,
+// hibernation and deploys keep sessions, queued messages, handshakes and duty.
+// A handshake lasts while at least one of its agents is connected, and a
+// recorded one is kept by exporting it as a trace. A session that has not
+// called for IDLE_MS has left, unless it holds an open events WebSocket.
+//
+// Event-driven delivery: an agent asks for a single-use ticket and opens a
+// hibernatable WebSocket with it. Each message sent to it is pushed over the
+// socket the moment it is sent instead of waiting in its inbox.
 import { DurableObject } from "cloudflare:workers";
 import type { Env } from "../env";
 import { Hub } from "../../packages/agent-handshake/src/core/hub.js";
@@ -20,8 +24,13 @@ import { toShipletTrace, type HandshakeExport } from "../../packages/agent-hands
 export const RELAY_IDLE_MS = 10 * 60_000;
 // Code Mode calls time out at 30 seconds, so one inbox wait stays well under it.
 export const RELAY_MAX_WAIT_MS = 20_000;
-const TICK_MS = 30_000;
 const MAX_SESSIONS = 200;
+export const EVENT_TICKET_MS = 60_000;
+// Stored values stay well under the 2 MB limit; longer records are split.
+const CHUNK_CHARS = 512 * 1024;
+// One pushed frame stays well under the WebSocket message limit.
+const FRAME_CHARS = 512 * 1024;
+const SOCKET_OPEN = 1;
 
 // Who opened a session: a stable actor key (never shown) and the account it
 // acts for (shown next to the agent, so people can tell whose agent it is).
@@ -82,6 +91,32 @@ function sessionId() {
 	return `hss_${[...bytes].map((byte) => byte.toString(16).padStart(2, "0")).join("")}`;
 }
 
+type StoredSession = Omit<Session, "conn"> & { connId: string };
+
+type StoredMeta = {
+	version: 1;
+	conns: Array<{ id: string; peerId: string }>;
+	sessions: StoredSession[];
+	accounts: Array<[string, string]>;
+	duty: Array<[string, string]>;
+	contacts: Array<[string, string[]]>;
+	shipletVisitorSends: Array<[string, number[]]>;
+	// Stored record key -> how many chunks it is split into.
+	records: Array<[string, number]>;
+};
+
+function chunks(value: string) {
+	const parts: string[] = [];
+	for (let start = 0; start < value.length || !parts.length; start += CHUNK_CHARS) parts.push(value.slice(start, start + CHUNK_CHARS));
+	return parts;
+}
+
+function batches<T>(items: T[], size = 128) {
+	const out: T[][] = [];
+	for (let start = 0; start < items.length; start += size) out.push(items.slice(start, start + size));
+	return out;
+}
+
 export class HandshakeRelay extends DurableObject<Env> {
 	// The relay admits people (kind "person"); handlers.ts lets only a browser
 	// signed in to Shiplet open one.
@@ -95,6 +130,19 @@ export class HandshakeRelay extends DurableObject<Env> {
 	private contacts = new Map<string, Set<string>>();
 	// Shiplet id -> visitor message times in the last hour.
 	private shipletVisitorSends = new Map<string, number[]>();
+	// Single-use events tickets. In memory only: a ticket outlives a restart by
+	// at most a minute, and the agent asks for another.
+	private tickets = new Map<string, { session: string; expires: number }>();
+	// What storage holds, to write only what changed.
+	private stored = new Map<string, { chunks: number; json: string }>();
+	private storedMeta = "";
+
+	constructor(ctx: DurableObjectState, env: Env) {
+		super(ctx, env);
+		// Keep-alive pings are answered without waking a hibernating relay.
+		ctx.setWebSocketAutoResponse(new WebSocketRequestResponsePair("ping", "pong"));
+		void ctx.blockConcurrencyWhile(() => this.load());
+	}
 
 	async openSession(owner: RelayOwner, input: RelayPeerInput): Promise<RelayResult<{ session: string; peer: RelayPeer }>> {
 		if (this.sessions.size >= MAX_SESSIONS) {
@@ -193,6 +241,7 @@ export class HandshakeRelay extends DurableObject<Env> {
 		scope.sent.push(now);
 		shipletSent.push(now);
 		this.shipletVisitorSends.set(scope.shiplet, shipletSent);
+		await this.push(agent.peerId);
 		return { ok: true, handshake: sent.room, at: sent.at };
 	}
 
@@ -238,6 +287,7 @@ export class HandshakeRelay extends DurableObject<Env> {
 				topic: input.topic,
 				request: input.request ?? null,
 			});
+			await this.push(sent.to.id);
 			return { ok: true as const, ...sent, handshake: sent.room };
 		} catch (error) {
 			return fromError(error);
@@ -289,7 +339,172 @@ export class HandshakeRelay extends DurableObject<Env> {
 
 	async alarm() {
 		this.expire();
+		await this.persist();
 		await this.keepTime();
+	}
+
+	// A single-use ticket that opens this session's events WebSocket.
+	async createEventTicket(owner: RelayOwner, id: string): Promise<RelayResult<{ ticket: string; expiresAt: string }>> {
+		const session = this.use(owner, id);
+		if (!("conn" in session)) return session;
+		if (session.visitor) return failure(403, "forbidden", "Visitors read through the website widget.");
+		const now = Date.now();
+		for (const [ticket, entry] of [...this.tickets]) if (entry.expires < now) this.tickets.delete(ticket);
+		const ticket = `hset_${[...crypto.getRandomValues(new Uint8Array(24))].map((byte) => byte.toString(16).padStart(2, "0")).join("")}`;
+		this.tickets.set(ticket, { session: id, expires: now + EVENT_TICKET_MS });
+		return { ok: true, ticket, expiresAt: new Date(now + EVENT_TICKET_MS).toISOString() };
+	}
+
+	// The events WebSocket. The Worker forwards the upgrade with the session id
+	// and ticket from the URL; the ticket is the only credential.
+	async fetch(request: Request): Promise<Response> {
+		if (request.headers.get("upgrade")?.toLowerCase() !== "websocket") {
+			return Response.json({ error: "upgrade_required", message: "Open this path as a WebSocket." }, { status: 426 });
+		}
+		const url = new URL(request.url);
+		const id = url.searchParams.get("session") ?? "";
+		const ticket = url.searchParams.get("ticket") ?? "";
+		const entry = this.tickets.get(ticket);
+		const session = this.sessions.get(id);
+		if (!entry || entry.session !== id || entry.expires < Date.now() || !session) {
+			return Response.json({ error: "invalid_ticket", message: "That events ticket is not valid. Ask for a new one." }, { status: 403 });
+		}
+		this.tickets.delete(ticket);
+		// One socket per session: a newer one replaces the older.
+		for (const older of this.ctx.getWebSockets(id)) older.close(4000, "replaced by a newer connection");
+		const [client, server] = Object.values(new WebSocketPair());
+		this.ctx.acceptWebSocket(server, [id]);
+		session.lastSeen = Date.now();
+		server.send(JSON.stringify({ type: "ready", session: id, peer: this.peer(this.hub.findPeer(session.peerId) as Sender) }));
+		await this.push(session.peerId);
+		await this.persist();
+		return new Response(null, { status: 101, webSocket: client });
+	}
+
+	async webSocketMessage() {
+		// Agents send nothing but "ping", which is answered automatically.
+	}
+
+	async webSocketClose(socket: WebSocket) {
+		await this.socketGone(socket);
+	}
+
+	async webSocketError(socket: WebSocket) {
+		await this.socketGone(socket);
+	}
+
+	// Without its socket, a session idles out like any other, from now.
+	private async socketGone(socket: WebSocket) {
+		const [id] = this.ctx.getTags(socket);
+		const session = id ? this.sessions.get(id) : undefined;
+		if (session) session.lastSeen = Date.now();
+		await this.persist();
+		await this.keepTime();
+	}
+
+	private sockets(sessionId: string) {
+		return this.ctx.getWebSockets(sessionId).filter((socket) => socket.readyState === SOCKET_OPEN);
+	}
+
+	// Whether a session still counts as connected.
+	private alive(session: Session) {
+		return this.sockets(session.id).length > 0 || Date.now() - session.lastSeen <= RELAY_IDLE_MS;
+	}
+
+	// Hands everything queued for a peer to its open socket, if it has one.
+	private async push(peerId: string) {
+		const session = [...this.sessions.values()].find((candidate) => candidate.peerId === peerId);
+		const [socket] = session ? this.sockets(session.id) : [];
+		if (!session || !socket) return;
+		for (;;) {
+			const read = (await session.conn.handle("read", { wait_ms: 0, max: 50, via: "tool" })) as { messages: Message[] };
+			if (!read.messages.length) return;
+			let frame: Message[] = [];
+			let size = 0;
+			const flush = () => {
+				if (frame.length) socket.send(JSON.stringify({ type: "messages", messages: frame }));
+				frame = [];
+				size = 0;
+			};
+			for (const message of read.messages.map((each) => this.message(each))) {
+				const length = JSON.stringify(message).length;
+				if (size + length > FRAME_CHARS) flush();
+				frame.push(message);
+				size += length;
+			}
+			flush();
+		}
+	}
+
+	private async load() {
+		const raw = await this.ctx.storage.get<string>("meta");
+		if (!raw) return;
+		const meta = JSON.parse(raw) as StoredMeta;
+		const keys = meta.records.flatMap(([key, count]) => Array.from({ length: count }, (_, index) => `rec:${key}:${index}`));
+		const values = new Map<string, string>();
+		for (const batch of batches(keys)) for (const [key, value] of await this.ctx.storage.get<string>(batch)) values.set(key, value);
+		const peers: unknown[] = [];
+		const rooms: unknown[] = [];
+		for (const [key, count] of meta.records) {
+			const parts = Array.from({ length: count }, (_, index) => values.get(`rec:${key}:${index}`));
+			if (parts.some((part) => part === undefined)) continue;
+			const json = parts.join("");
+			this.stored.set(key, { chunks: count, json });
+			(key.startsWith("peer:") ? peers : rooms).push(JSON.parse(json));
+		}
+		this.hub.restore({ peers, rooms, conns: meta.conns } as Parameters<Hub["restore"]>[0]);
+		for (const { connId, ...stored } of meta.sessions) {
+			const conn = this.hub.reopen(connId);
+			if (conn) this.sessions.set(stored.id, { ...stored, conn });
+		}
+		this.accounts = new Map(meta.accounts);
+		this.duty = new Map(meta.duty);
+		this.contacts = new Map(meta.contacts.map(([peer, agents]) => [peer, new Set(agents)]));
+		this.shipletVisitorSends = new Map(meta.shipletVisitorSends);
+		this.storedMeta = raw;
+	}
+
+	// Writes what changed since the last save. Every write is issued before the
+	// first await, so a save lands as one batch and saves land in order.
+	private async persist() {
+		const snapshot = this.hub.snapshot();
+		const records = new Map<string, string>();
+		for (const peer of snapshot.peers) records.set(`peer:${peer.id}`, JSON.stringify(peer));
+		for (const room of snapshot.rooms) records.set(`room:${room.id}`, JSON.stringify(room));
+		const puts: Record<string, string> = {};
+		const deletes: string[] = [];
+		for (const [key, json] of records) {
+			const before = this.stored.get(key);
+			if (before?.json === json) continue;
+			const parts = chunks(json);
+			parts.forEach((part, index) => (puts[`rec:${key}:${index}`] = part));
+			for (let index = parts.length; index < (before?.chunks ?? 0); index++) deletes.push(`rec:${key}:${index}`);
+			this.stored.set(key, { chunks: parts.length, json });
+		}
+		for (const [key, before] of [...this.stored]) {
+			if (records.has(key)) continue;
+			for (let index = 0; index < before.chunks; index++) deletes.push(`rec:${key}:${index}`);
+			this.stored.delete(key);
+		}
+		const meta: StoredMeta = {
+			version: 1,
+			conns: snapshot.conns,
+			sessions: [...this.sessions.values()].map(({ conn, ...session }) => ({ ...session, connId: conn.id })),
+			accounts: [...this.accounts],
+			duty: [...this.duty],
+			contacts: [...this.contacts].map(([peer, agents]) => [peer, [...agents]]),
+			shipletVisitorSends: [...this.shipletVisitorSends],
+			records: [...this.stored].map(([key, value]) => [key, value.chunks]),
+		};
+		const json = JSON.stringify(meta);
+		if (json !== this.storedMeta) {
+			puts.meta = json;
+			this.storedMeta = json;
+		}
+		const writes: Promise<unknown>[] = [];
+		for (const batch of batches(Object.entries(puts))) writes.push(this.ctx.storage.put(Object.fromEntries(batch)));
+		for (const batch of batches(deletes)) writes.push(this.ctx.storage.delete(batch));
+		await Promise.all(writes);
 	}
 
 	private use(owner: RelayOwner, id: string): Session | RelayFailure {
@@ -298,7 +513,7 @@ export class HandshakeRelay extends DurableObject<Env> {
 		if (!session || session.owner.actor !== owner.actor) {
 			return failure(404, "session_not_found", "No open handshake session with that id. Open a new one.");
 		}
-		if (Date.now() - session.lastSeen > RELAY_IDLE_MS) {
+		if (!this.alive(session)) {
 			this.end(session);
 			return failure(404, "session_not_found", "That handshake session timed out. Open a new one.");
 		}
@@ -327,14 +542,22 @@ export class HandshakeRelay extends DurableObject<Env> {
 	private onDuty(shiplet: string): Session | null {
 		const id = this.duty.get(shiplet);
 		const session = id ? this.sessions.get(id) : undefined;
-		if (!session || Date.now() - session.lastSeen > RELAY_IDLE_MS) {
+		if (!session || !this.alive(session)) {
 			if (id) this.duty.delete(shiplet);
 			return null;
 		}
 		return session;
 	}
 
-	private end(session: Session) {
+	private end(session: Session, code: "session_closed" | "session_not_found" = "session_closed") {
+		for (const socket of this.ctx.getWebSockets(session.id)) {
+			try {
+				socket.send(JSON.stringify({ type: "closed", code, message: code === "session_closed" ? "The session was closed." : "The session timed out. Open a new one." }));
+				socket.close(1000, code);
+			} catch {
+				// Already closing.
+			}
+		}
 		this.sessions.delete(session.id);
 		for (const [key, holder] of [...this.duty]) if (holder === session.id) this.duty.delete(key);
 		this.contacts.delete(session.peerId);
@@ -343,8 +566,7 @@ export class HandshakeRelay extends DurableObject<Env> {
 	}
 
 	private expire() {
-		const cutoff = Date.now() - RELAY_IDLE_MS;
-		for (const session of [...this.sessions.values()]) if (session.lastSeen < cutoff) this.end(session);
+		for (const session of [...this.sessions.values()]) if (!this.alive(session)) this.end(session, "session_not_found");
 	}
 
 	private forgetAccounts() {
@@ -354,12 +576,14 @@ export class HandshakeRelay extends DurableObject<Env> {
 		for (const peerId of [...this.accounts.keys()]) if (!named.has(peerId)) this.accounts.delete(peerId);
 	}
 
-	// While anyone is connected, a tick every 30 seconds expires idle sessions
-	// (and keeps this object from being evicted with live handshakes in memory).
+	// Wakes the relay when the next session without a socket could have idled
+	// out. Sessions holding a socket never idle out, so they need no alarm.
 	private async keepTime() {
-		if (!this.sessions.size) return;
+		const idle = [...this.sessions.values()].filter((session) => !this.sockets(session.id).length);
+		if (!idle.length) return;
+		const due = Math.min(...idle.map((session) => session.lastSeen)) + RELAY_IDLE_MS + 1_000;
 		const current = await this.ctx.storage.getAlarm();
-		if (current === null) await this.ctx.storage.setAlarm(Date.now() + TICK_MS);
+		if (current === null || current > due) await this.ctx.storage.setAlarm(due);
 	}
 
 	// Local-only fields (session, cwd) never leave the relay.
@@ -392,4 +616,36 @@ function visitorPath(page: string) {
 	} catch {
 		return "/";
 	}
+}
+
+// Every call that can change state saves it before it returns.
+const SAVED_AFTER = [
+	"openSession",
+	"setDuty",
+	"openVisitor",
+	"visitorStatus",
+	"visitorSend",
+	"visitorRead",
+	"closeSession",
+	"peers",
+	"send",
+	"read",
+	"exportHandshake",
+	"list",
+	"createEventTicket",
+] as const;
+for (const name of SAVED_AFTER) {
+	const original = HandshakeRelay.prototype[name] as (...args: unknown[]) => Promise<unknown>;
+	Object.defineProperty(HandshakeRelay.prototype, name, {
+		configurable: true,
+		writable: true,
+		value: async function (this: HandshakeRelay, ...args: unknown[]) {
+			try {
+				return await original.apply(this, args);
+			} finally {
+				await (this as unknown as { persist(): Promise<void> }).persist();
+				await (this as unknown as { keepTime(): Promise<void> }).keepTime();
+			}
+		},
+	});
 }

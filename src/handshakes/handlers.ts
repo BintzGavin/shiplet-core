@@ -114,7 +114,7 @@ async function verifyRequest(env: Env, member: HandshakeMember, request: unknown
 // for the compiler on these result shapes.
 type RelayApi = Pick<
 	HandshakeRelay,
-	"openSession" | "closeSession" | "peers" | "send" | "read" | "exportHandshake" | "list" | "setDuty" | "dutyStatus" | "openVisitor" | "visitorStatus" | "visitorSend" | "visitorRead"
+	"openSession" | "closeSession" | "createEventTicket" | "peers" | "send" | "read" | "exportHandshake" | "list" | "setDuty" | "dutyStatus" | "openVisitor" | "visitorStatus" | "visitorSend" | "visitorRead"
 >;
 
 export function relay(env: Env, organizationId: string): RelayApi {
@@ -171,6 +171,33 @@ function personPeer(member: HandshakeMember, app: unknown) {
 export function peerName(value: string) {
 	const name = value.replace(/[^A-Za-z0-9._-]+/g, "-").replace(/^[^A-Za-z0-9]+/, "").slice(0, 64).replace(/-+$/, "");
 	return name || "person";
+}
+
+// A single-use ticket for the session's events WebSocket, and the URL to open
+// with it. The ticket is the socket's only credential, so it never goes in a
+// log line or a page; it lasts a minute and opens one connection.
+export async function handleEventTicket(env: Env, member: HandshakeMember, sessionId: string, requestUrl: string) {
+	const result = await relay(env, member.organizationId).createEventTicket(member.owner, sessionId);
+	if (!result.ok) return respond(result);
+	const url = new URL(requestUrl);
+	url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
+	url.search = new URLSearchParams({ ticket: result.ticket }).toString();
+	return Response.json({ url: url.toString(), expiresAt: result.expiresAt }, { status: 201, headers: { "cache-control": "no-store" } });
+}
+
+// Opens the events WebSocket. The relay checks the ticket against the session.
+export async function handleEventSocket(env: Env, organizationId: string, sessionId: string, request: Request) {
+	const unavailable = handshakesAvailable(env);
+	if (unavailable) return unavailable;
+	const ticket = new URL(request.url).searchParams.get("ticket") ?? "";
+	if (!/^hset_[a-f0-9]{48}$/.test(ticket) || !/^hss_[a-f0-9]{36}$/.test(sessionId)) {
+		return handshakeError(403, "invalid_ticket", "That events ticket is not valid. Ask for a new one.");
+	}
+	const namespace = env.HANDSHAKE_RELAY;
+	const target = new URL("https://relay.internal/events");
+	target.search = new URLSearchParams({ session: sessionId, ticket }).toString();
+	const upgrade = request.headers.get("upgrade") ?? "";
+	return namespace.get(namespace.idFromName(`organization:${organizationId}`)).fetch(target.toString(), { headers: upgrade ? { upgrade } : {} });
 }
 
 export async function handleCloseSession(env: Env, member: HandshakeMember, sessionId: string) {
