@@ -88,9 +88,22 @@ window.addEventListener("message", (event) => {
 
     const widgetFrame = page.locator("[data-shiplet-widget-frame]");
     const originalWidgetUrl = await widgetFrame.getAttribute("src");
-    expect(originalWidgetUrl).toMatch(
+    // The trusted host versions the widget document URL by the active review
+    // layer (`?layer=`), because the widget path is keyed only by the artifact
+    // revision and the layer can change under the same revision. Retry must
+    // reassign this exact validated URL, query included.
+    const originalWidget = new URL(originalWidgetUrl ?? "");
+    expect(originalWidget.pathname).toMatch(
       /\/__shiplet\/review\/widget\/[^/]+\/$/,
     );
+    expect(originalWidget.searchParams.get("layer")).toBeTruthy();
+    expect([...originalWidget.searchParams.keys()]).toEqual(["layer"]);
+
+    // The widget and its recovery alert live in the review panel, which the
+    // annotation-first dock keeps closed until the reviewer opens Comments.
+    await expect(page.locator("#shiplet-kernel-review-panel")).toBeHidden();
+    await page.locator(".shiplet-review-comments-launcher").click();
+    await expect(page.locator("#shiplet-kernel-review-panel")).toBeVisible();
 
     const recovery = page.locator("[data-shiplet-widget-recovery='v1']");
     await expect(recovery).toBeVisible({ timeout: 12_000 });
