@@ -90,12 +90,12 @@ test("a reviewer asks an agent from the review page, with the review context, an
 	// The agent answers; the reply shows up live.
 	await relay(request, agent.key, "POST", agent.messages, { to: messages[0].from.id, handshake: messages[0].room, text: "Darkening it to 4.8:1 now." });
 	await expect(panel.locator(".shiplet-review-agents-line").filter({ hasText: "Darkening it to 4.8:1 now." })).toBeVisible({ timeout: 25_000 });
+	if (process.env.SHIPLET_E2E_SCREENSHOTS) await page.screenshot({ path: `${process.env.SHIPLET_E2E_SCREENSHOTS}/handshake-review.png`, fullPage: true });
 
 	// Escape closes the panel and returns focus to the launcher.
 	await panel.getByLabel("Message", { exact: true }).press("Escape");
 	await expect(panel).toBeHidden();
 	await expect(host.getByRole("button", { name: "Agents", exact: true })).toBeFocused();
-	if (process.env.SHIPLET_E2E_SCREENSHOTS) await page.screenshot({ path: `${process.env.SHIPLET_E2E_SCREENSHOTS}/handshake-review.png`, fullPage: true });
 	await expectNoPageErrors(errors);
 });
 
