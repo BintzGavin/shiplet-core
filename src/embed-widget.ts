@@ -23,6 +23,8 @@ export function embedWidgetScript() {
       for (const [key, value] of entries) {
         const normalized = key.trim().toLowerCase().replace(/-/g, "_");
         if (sensitive.test(normalized) || names.has(normalized) || normalized.startsWith("x_amz_") || normalized.replace(/[^a-z]/g, "") === "apikey") continue;
+        // The team's ?shiplet=review reveal is not part of the page, so comments land on the page itself.
+        if (depth === 0 && key === "shiplet" && value === "review") continue;
         let nested; try { nested = new URL(value); } catch {}
         if (nested && /^https?:$/.test(nested.protocol)) {
           if (depth >= 8 || nested.username || nested.password) continue;
@@ -59,6 +61,8 @@ export function embedWidgetScript() {
       // The site's Appearance (theme, accent, default corner); empty when unset.
       themeStyles.href = this.origin + "/api/embed/theme.css?installation_id=" + encodeURIComponent(this.installation);
       this.reviewVisible = true;
+      // Set when the site shows the public nothing ("hidden" view); kept across route changes.
+      this.publicHidden = false;
       this.pins = this.shadowRoot.querySelector(".pins");
       this.surface = this.shadowRoot.querySelector(".surface");
       this.overlayToggle = this.shadowRoot.querySelector(".overlay-toggle");
@@ -85,6 +89,13 @@ export function embedWidgetScript() {
       const start = new URL("/embed/review/start", this.origin);
       start.searchParams.set("installation_id", this.installation);
       start.searchParams.set("return_url", this.page);
+      // ?shiplet=review asks for the full toolbar on a "Feedback only" site. A
+      // convenience for the team, not security: remembered for this tab only.
+      const teamKey = "shiplet.embed.team:" + this.installation;
+      const reveal = new URL(location.href).searchParams.get("shiplet") === "review";
+      let remembered = false;
+      try { if (reveal) sessionStorage.setItem(teamKey, "1"); remembered = sessionStorage.getItem(teamKey) === "1"; } catch {}
+      if (reveal || remembered) start.searchParams.set("team", "1");
       this.frame = document.createElement("iframe");
       this.frame.title = "Shiplet review tools";
       this.frame.setAttribute("sandbox", "allow-scripts allow-forms allow-same-origin allow-popups allow-popups-to-escape-sandbox allow-storage-access-by-user-activation");
@@ -92,7 +103,7 @@ export function embedWidgetScript() {
       this.frame.referrerPolicy = "no-referrer";
       this.frame.src = start.toString();
       this.surface.replaceChildren(this.frame);
-      this.surface.hidden = false;
+      this.surface.hidden = this.publicHidden === true;
       this.surface.dataset.view = "toolbar";
       this.syncOverlayToggle();
       this.positionSurface();
@@ -128,14 +139,19 @@ export function embedWidgetScript() {
         }
         clearTimeout(this.loadTimer);
         this.surface.querySelector(".recovery")?.remove();
-        if (["toolbar", "comments", "thread", "selecting", "composer", "expanded", "drawing", "access", "agents"].includes(data.view)) {
+        if (["toolbar", "comments", "thread", "selecting", "composer", "expanded", "drawing", "access", "agents", "hidden"].includes(data.view)) {
           const previousView = this.surface.dataset.view;
           const focusEpoch = ++this.focusEpoch;
           this.surface.dataset.view = data.view;
-          this.syncOverlayToggle();
+          // "hidden": a Feedback-only site with visitor feedback off shows the public no surface, toggle or pins.
+          if (data.view === "hidden") { this.publicHidden = true; this.surface.hidden = true; }
+          else if (this.publicHidden) { this.publicHidden = false; this.surface.hidden = false; }
           // The toolbar carries a third button (Agents) for signed-in organization members.
           if (data.agents === true) this.surface.dataset.agents = "true"; else delete this.surface.dataset.agents;
-          this.pins.hidden = data.view === "selecting";
+          // Feedback alone, for the public on a Feedback-only site: one button wide.
+          if (data.single === true) this.surface.dataset.single = "true"; else delete this.surface.dataset.single;
+          this.syncOverlayToggle();
+          this.pins.hidden = data.view === "selecting" || data.view === "hidden";
           this.anchor = data.anchor && Number.isFinite(data.anchor.x) && Number.isFinite(data.anchor.y) ? data.anchor : null;
           if (typeof data.activeFeedbackId === "string" && /^[A-Za-z0-9][A-Za-z0-9._:-]{0,255}$/.test(data.activeFeedbackId)) this.selectedFeedbackId = data.activeFeedbackId;
           if (typeof data.overlayVisible === "boolean") { this.overlayVisible = data.overlayVisible; this.overlayToggle.textContent = this.overlayVisible ? "Hide comments" : "Show comments"; this.overlayToggle.setAttribute("aria-label", this.overlayVisible ? "Hide comments" : "Show comments"); this.pins.hidden = !this.overlayVisible || data.view === "selecting"; }
@@ -164,7 +180,8 @@ export function embedWidgetScript() {
     syncOverlayToggle() {
       if (!this.overlayToggle || !this.surface) return;
       const view = this.surface.dataset.view || "toolbar";
-      this.overlayToggle.hidden = this.reviewVisible === false || this.surface.hidden || view !== "toolbar";
+      // Feedback alone has no comments to hide.
+      this.overlayToggle.hidden = this.reviewVisible === false || this.surface.hidden || view !== "toolbar" || this.surface.dataset.single === "true";
     }
     requestRouteTransition(next) {
       if (!this.frame || !this.surface || this.routeTransition) return;
@@ -347,6 +364,7 @@ export const EMBED_WIDGET_CSS = String.raw`
 :host([data-dock=top-left]) .surface,:host([data-dock=top-right]) .surface{top:max(4px,env(safe-area-inset-top));bottom:auto}:host([data-dock=top-left]) .surface,:host([data-dock=bottom-left]) .surface{left:max(4px,env(safe-area-inset-left));right:auto}:host([data-dock=top-right]) .surface,:host([data-dock=bottom-right]) .surface{right:max(4px,env(safe-area-inset-right));left:auto}
 .surface{position:fixed;right:4px;bottom:4px;width:272px;height:80px;border:0;background:transparent}.surface[hidden]{display:none}iframe{display:block;width:100%;height:100%;border:0;background:transparent;color-scheme:normal}
 .surface[data-agents=true]:not([data-view]),.surface[data-agents=true][data-view=toolbar]{width:min(360px,100vw)}
+.surface[data-single=true][data-view=toolbar]{width:156px}
 .surface[data-view=comments]{width:min(420px,100vw);height:min(680px,100dvh)}
 .surface[data-view=agents]{width:min(440px,calc(100vw - 16px));height:min(600px,calc(100dvh - 16px))}
 .surface[data-view=thread]{width:min(440px,calc(100vw - 16px));height:min(560px,calc(100dvh - 16px))}

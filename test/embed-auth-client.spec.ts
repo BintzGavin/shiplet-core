@@ -1,9 +1,12 @@
 import { describe, expect, it, vi } from "vitest";
 import { embedAuthBootstrapScript } from "../src/embed-auth-client";
 
-function bootstrap(blocked = false) {
+function bootstrap(blocked = false, toolbar: { actions?: string[]; visitor?: boolean } = {}) {
   const listeners = new Map<string, (event: any) => any>();
-  const buttons = ["annotate", "comments"].map(action => ({
+  const visitor = toolbar.visitor
+    ? { getAttribute: () => "https://shiplet.test/embed/visitor/frame?installation_id=install_test", addEventListener: vi.fn() }
+    : null;
+  const buttons = (toolbar.actions ?? ["annotate", "comments"]).map(action => ({
     click: (_event: any) => {},
     getAttribute: (name: string) => name === "data-shiplet-embed-action" ? action : "https://shiplet.test/embed/review/authorize",
     addEventListener(_type: string, listener: (event: any) => any) { this.click = listener; },
@@ -20,7 +23,7 @@ function bootstrap(blocked = false) {
   const fetch = vi.fn(async () => ({ ok: true, json: async () => ({ hostUrl: "https://shiplet.test/embed/review/host?installation_id=install_test" }) }));
   new Function("window", "document", "parent", "location", "fetch", "sessionStorage", "setInterval", "clearInterval", embedAuthBootstrapScript())(
     { open, addEventListener: (type: string, listener: (event: any) => any) => listeners.set(type, listener) },
-    { querySelectorAll: () => buttons, querySelector: (selector: string) => selector.includes("visitor-url") ? null : selector.endsWith("-text]") ? statusText : selector.endsWith("-dismiss]") ? dismiss : status },
+    { querySelectorAll: () => buttons, querySelector: (selector: string) => selector.includes("visitor-url") ? visitor : selector.endsWith("-text]") ? statusText : selector.endsWith("-dismiss]") ? dismiss : status },
     parent,
     { origin: "https://shiplet.test", href: "https://shiplet.test/embed/review/start?installation_id=install_test&return_url=https://site.test/essay", replace },
     fetch,
@@ -66,5 +69,17 @@ describe("direct embedded authentication", () => {
     expect(JSON.stringify(harness.parent.postMessage.mock.calls)).not.toContain("ticket");
     await message({ source: harness.popup, origin: "https://shiplet.test", data });
     expect(harness.fetch).toHaveBeenCalledOnce();
+  });
+
+  it("sizes the widget for the toolbar it shows: full, with Feedback, Feedback alone, or nothing", () => {
+    const sized = (toolbar: { actions?: string[]; visitor?: boolean }) => bootstrap(false, toolbar).parent.postMessage.mock.calls;
+    expect(sized({})).toEqual([[{ protocol: "shiplet.embed.ui.v1", view: "toolbar" }, "https://site.test"]]);
+    expect(sized({ visitor: true })).toEqual([[{ protocol: "shiplet.embed.ui.v1", view: "toolbar", agents: true }, "https://site.test"]]);
+    // "Feedback only" for the public: one button wide.
+    expect(sized({ actions: [], visitor: true })).toEqual([[{ protocol: "shiplet.embed.ui.v1", view: "toolbar", single: true }, "https://site.test"]]);
+    // Feedback only while visitor feedback is off: the widget hides itself, and nothing else runs.
+    const hidden = bootstrap(false, { actions: [] });
+    expect(hidden.parent.postMessage.mock.calls).toEqual([[{ protocol: "shiplet.embed.ui.v1", view: "hidden" }, "https://site.test"]]);
+    expect(hidden.listeners.size).toBe(0);
   });
 });

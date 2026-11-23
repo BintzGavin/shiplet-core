@@ -166,6 +166,29 @@ your Shiplet hostname, then set `TURNSTILE_SITE_KEY` as a variable and
 on, and a site that had it stops offering it. Shiplet checks every Turnstile
 token server side, for the `visitor` action and your Shiplet hostname.
 
+## Toolbar for the public
+
+On a public site, Annotate and Comments only lead a visitor to a Shiplet
+sign-in. To keep them out of the way, open
+[Connect a website](https://shiplet.cc/embed/install), select the Shiplet, and
+under **Toolbar for the public** choose **Feedback only**, then **Save toolbar
+choice**. People who are not signed in then see just **Feedback**, a one-button
+toolbar in your Appearance corner. If visitor feedback is off, they see no
+Shiplet toolbar at all, and the widget leaves its corner of your page clear.
+
+Your team gets the full toolbar by adding `?shiplet=review` to the page address,
+for example `https://your-site.com/pricing?shiplet=review` (or
+`&shiplet=review` when the address already has a query). The widget remembers
+this for the rest of the browser tab, so other pages of the site keep the full
+toolbar until the tab closes. A reviewer who already has a site review session
+sees their signed-in toolbar as usual. The `shiplet=review` part is not saved
+with comments, which stay on the page itself.
+
+This is a display choice, not access control: anyone can add
+`?shiplet=review`, and Annotate and Comments still need a Shiplet sign-in with
+access to the Shiplet, exactly as before. **Annotate, Comments and Feedback**
+is the default.
+
 ## Talk to your agents
 
 When agent handshakes are enabled and you are a member of the Shiplet's
