@@ -47,6 +47,11 @@ function str(value, field, { max = LIMITS.fieldChars, optional = true } = {}) {
   return value;
 }
 
+// The same check for a host or transport that validates its own fields.
+export function checkField(value, field, options) {
+  return str(value, field, options);
+}
+
 // A peer is one live agent session. Identity is descriptive (who, where), not
 // an authentication claim: on the local transport every peer is the same OS user.
 export function normalizePeer(input = {}, kinds = KINDS) {
@@ -130,7 +135,8 @@ export function formatForModel(messages) {
     const body = m.text.replace(/<(\/?)peer-message/gi, "<\\$1peer-message");
     return (
       `<peer-message id="${attr(m.id)}" from="${attr(m.from.name)}" kind="${attr(m.from.kind)}" app="${attr(m.from.app)}" ` +
-      `machine="${attr(m.from.machine)}" room="${attr(m.room)}" at="${attr(m.at)}">\n${body}\n</peer-message>`
+      `machine="${attr(m.from.machine)}"${m.via === "relay" ? ` via="relay" account="${attr(m.from.account)}"` : ""} ` +
+      `room="${attr(m.room)}" at="${attr(m.at)}">\n${body}\n</peer-message>`
     );
   });
   return `${PEER_NOTICE}\n\n${blocks.join("\n\n")}`;

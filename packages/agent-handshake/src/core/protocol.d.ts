@@ -55,6 +55,8 @@ export interface Message {
   to: Pick<Peer, "id" | "name" | "kind">;
   text: string;
   at: string;
+  // Set on a message a local transport received from the hosted relay.
+  via?: "relay";
 }
 
 // Hub#handshakes(): what an observer can see of one live handshake.

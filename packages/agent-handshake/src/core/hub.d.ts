@@ -3,7 +3,7 @@ import type { HandshakeSnapshot, Message, Peer, PeerKind, Sender } from "./proto
 
 export interface HubConnection {
   id: string;
-  handle(op: "ping" | "register" | "whoami" | "peers" | "send" | "read" | "export", args?: Record<string, unknown>): Promise<any>;
+  handle(op: "ping" | "register" | "whoami" | "peers" | "send" | "read" | "export" | "inject", args?: Record<string, unknown>): Promise<any>;
   close(): void;
 }
 
@@ -21,4 +21,15 @@ export class Hub {
   findPeer(ref: string): Peer | null;
   roomMembers(roomId: string): Sender[] | null;
   open(): HubConnection;
+  // A restored connection's handle, or null when it is not part of this hub.
+  reopen(connId: string): HubConnection | null;
+  // Plain JSON a host can store and pass to restore() after a restart.
+  snapshot(): HubSnapshot;
+  restore(snapshot: HubSnapshot): void;
+}
+
+export interface HubSnapshot {
+  peers: Array<Record<string, unknown> & { id: string; inbox: Message[] }>;
+  rooms: Array<Record<string, unknown> & { id: string; members: Sender[]; live: string[]; transcript: Message[] }>;
+  conns: Array<{ id: string; peerId: string }>;
 }
