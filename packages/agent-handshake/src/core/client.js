@@ -7,9 +7,9 @@
 //   onClose(callback: () => void): void
 // }
 //
-// Transport #1 is the local unix-socket broker (src/transports/local). A future
-// remote relay (HTTPS/WebSocket to one hosted room per handshake) only needs to
-// implement the same three members and speak the same ops.
+// Transport #1 is the local unix-socket broker (src/transports/local). The
+// hosted relay (src/transports/relay) is not a Transport: the MCP server keeps
+// its local registration and passes relay messages to `inject`.
 export class HandshakeClient {
   constructor(transport) {
     this.transport = transport;
@@ -32,6 +32,11 @@ export class HandshakeClient {
   }
   export(room) {
     return this.transport.request("export", { room });
+  }
+  // Hand messages received from the hosted relay to this connection's own
+  // peer, so waiting hooks and read_inbox deliver them like local ones.
+  inject(messages) {
+    return this.transport.request("inject", { messages });
   }
   close() {
     this.transport.close();
