@@ -663,10 +663,10 @@ export function reviewHostAgentsStyles(): string {
 .shiplet-review-agents-line span{margin-left:6px;color:var(--shiplet-muted)}
 .shiplet-review-agents-line p{margin-top:4px;font-size:13px;white-space:pre-wrap}
 .shiplet-review-agents-composer{display:grid;gap:6px;font-size:12px;font-weight:650}
-.shiplet-review-agents-composer select,.shiplet-review-agents-composer textarea{width:100%;min-height:40px;padding:8px 10px;border:1px solid var(--shiplet-line);border-radius:8px;background:#fff;color:inherit;font:400 14px/1.45 ui-sans-serif,system-ui,sans-serif}
+.shiplet-review-agents-composer select,.shiplet-review-agents-composer textarea{width:100%;min-height:40px;padding:8px 10px;border:1px solid var(--shiplet-line);border-radius:8px;background:var(--shiplet-raised);color:inherit;font:400 14px/1.45 ui-sans-serif,system-ui,sans-serif}
 .shiplet-review-agents-composer textarea{min-height:84px;resize:vertical}
-.shiplet-review-agents-error,.shiplet-review-agents-failed{color:#7c2a17}
-.shiplet-review-agents-error{padding:8px 10px;border:1px solid #e2b4a8;border-radius:8px;background:#fdf1ed;font-size:12px}
+.shiplet-review-agents-error,.shiplet-review-agents-failed{color:var(--shiplet-danger,#7c2a17)}
+.shiplet-review-agents-error{padding:8px 10px;border:1px solid var(--shiplet-danger-line,#e2b4a8);border-radius:8px;background:var(--shiplet-danger-bg,#fdf1ed);font-size:12px}
 .shiplet-review-agents-actions{display:flex;align-items:center;justify-content:space-between;gap:8px}
 .shiplet-review-agents button:disabled{opacity:.55;cursor:not-allowed}
 .shiplet-review-agents-launcher:focus-visible,.shiplet-review-agents :focus-visible{outline:3px solid var(--shiplet-accent);outline-offset:2px}

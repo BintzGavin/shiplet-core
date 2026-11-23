@@ -12,8 +12,8 @@ import app, { schemaInitializationTest } from "../src/index";
 // Pin the two together: when this digest changes, bump
 // CURRENT_KERNEL_SCHEMA_EPOCH in src/index.ts and update both values here.
 const PINNED_KERNEL_SCHEMA = {
-  epoch: 10,
-  digest: "e07b49859ea55e8aa3d1197e282768e61d0a030b6d8a7c6bdfc6740d839868da",
+  epoch: 11,
+  digest: "58e01cc1efa3fd798094296fef520e1ab85da248497c9933ef95181714fca15e",
 };
 
 // Releases up to v0.1.43 recorded epoch 1 before the invite link tables existed.
@@ -33,6 +33,8 @@ const EPOCH_BEFORE_TRACE_SHIPLETS = 7;
 // Builds before CLI device sign-in recorded epoch 8.
 // Builds before public visitor feedback recorded epoch 9.
 const EPOCH_BEFORE_CLI_DEVICE_LOGIN = 8;
+// Builds before the widget Appearance setting recorded epoch 10.
+const EPOCH_BEFORE_WIDGET_APPEARANCE = 10;
 const EPOCH_TABLE = "shiplet_kernel_schema_epoch";
 
 function db() {
@@ -225,5 +227,19 @@ describe("kernel schema epoch", () => {
     expect(columns.results.map((column) => column.name)).toContain(
       "session_ttl_seconds",
     );
+  });
+
+  // Also after the pin, for the same reason.
+  it("adds the widget appearance column to a database that recorded epoch 10", async () => {
+    await request("/health");
+    await recordEpoch(EPOCH_BEFORE_WIDGET_APPEARANCE);
+    await db().prepare("ALTER TABLE embed_installations DROP COLUMN appearance").run();
+
+    expect((await request(`/join/${"E".repeat(32)}`)).status).toBe(404);
+
+    const columns = await db().prepare(
+      "PRAGMA table_info(embed_installations)",
+    ).all<{ name: string }>();
+    expect(columns.results.map((column) => column.name)).toContain("appearance");
   });
 });

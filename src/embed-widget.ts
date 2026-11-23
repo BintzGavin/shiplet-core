@@ -53,8 +53,12 @@ export function embedWidgetScript() {
       if (!/^[A-Za-z0-9_-]{1,160}$/.test(this.installation)) return this.fail("Shiplet: add a valid installation-id.");
       if ((api.protocol !== "https:" && !(api.protocol === "http:" && /^(localhost|127\.0\.0\.1|\[::1\])$/.test(api.hostname))) || api.username || api.password || api.search || api.hash || api.pathname !== "/") return this.fail("Shiplet: use an HTTPS API origin, or localhost.");
       this.origin = api.origin;
-      this.shadowRoot.innerHTML = '<link rel="stylesheet"><button type="button" class="overlay-toggle" aria-label="Hide comments">Hide comments</button><div class="pins"></div><section id="shiplet-embedded-review-surface" class="surface" data-view="toolbar" aria-label="Shiplet review tools"></section>';
-      this.shadowRoot.querySelector("link").href = this.origin + "/api/embed/widget.css";
+      this.shadowRoot.innerHTML = '<link rel="stylesheet"><link rel="stylesheet"><button type="button" class="overlay-toggle" aria-label="Hide comments">Hide comments</button><div class="pins"></div><section id="shiplet-embedded-review-surface" class="surface" data-view="toolbar" aria-label="Shiplet review tools"></section>';
+      const [baseStyles, themeStyles] = this.shadowRoot.querySelectorAll("link");
+      baseStyles.href = this.origin + "/api/embed/widget.css";
+      // The site's Appearance (theme, accent, default corner); empty when unset.
+      themeStyles.href = this.origin + "/api/embed/theme.css?installation_id=" + encodeURIComponent(this.installation);
+      this.reviewVisible = true;
       this.pins = this.shadowRoot.querySelector(".pins");
       this.surface = this.shadowRoot.querySelector(".surface");
       this.overlayToggle = this.shadowRoot.querySelector(".overlay-toggle");
@@ -90,6 +94,7 @@ export function embedWidgetScript() {
       this.surface.replaceChildren(this.frame);
       this.surface.hidden = false;
       this.surface.dataset.view = "toolbar";
+      this.syncOverlayToggle();
       this.positionSurface();
       this.cleanupBridge = attachShipletPageBridge(this.frame, this.origin);
       this.onMessage = event => {
@@ -100,7 +105,8 @@ export function embedWidgetScript() {
           if (Object.keys(data).length !== 4 || !allowedDocks.includes(data.dock) || typeof data.overlayVisible !== "boolean" || typeof data.reviewVisible !== "boolean") return;
           this.setAttribute("data-dock", data.dock);
           this.overlayVisible = data.overlayVisible;
-          this.overlayToggle.hidden = !data.reviewVisible;
+          this.reviewVisible = data.reviewVisible;
+          this.syncOverlayToggle();
           this.surface.hidden = !data.reviewVisible;
           this.pins.hidden = !data.reviewVisible || !data.overlayVisible;
           this.positionPins();
@@ -126,6 +132,7 @@ export function embedWidgetScript() {
           const previousView = this.surface.dataset.view;
           const focusEpoch = ++this.focusEpoch;
           this.surface.dataset.view = data.view;
+          this.syncOverlayToggle();
           // The toolbar carries a third button (Agents) for signed-in organization members.
           if (data.agents === true) this.surface.dataset.agents = "true"; else delete this.surface.dataset.agents;
           this.pins.hidden = data.view === "selecting";
@@ -152,6 +159,12 @@ export function embedWidgetScript() {
       window.addEventListener("message", this.onMessage);
       this.loadTimer = setTimeout(() => this.recovery(), 15000);
       this.frame.addEventListener("error", () => this.recovery());
+    }
+    // "Hide comments" belongs to the collapsed toolbar; an open panel would sit under it.
+    syncOverlayToggle() {
+      if (!this.overlayToggle || !this.surface) return;
+      const view = this.surface.dataset.view || "toolbar";
+      this.overlayToggle.hidden = this.reviewVisible === false || this.surface.hidden || view !== "toolbar";
     }
     requestRouteTransition(next) {
       if (!this.frame || !this.surface || this.routeTransition) return;
@@ -300,6 +313,7 @@ export function embedWidgetScript() {
       if (!this.frame) return;
       if (this.surface.querySelector(".recovery")) return;
       this.surface.dataset.view = "access";
+      this.syncOverlayToggle();
       const box = document.createElement("div"); box.className = "recovery";
       const status = document.createElement("p"); status.setAttribute("role", "status"); status.textContent = "Shiplet could not connect. Check your connection and site CSP.";
       const retry = document.createElement("button"); retry.textContent = "Retry"; retry.onclick = () => { this.close(); this.open(); };
@@ -316,6 +330,7 @@ export function embedWidgetScript() {
       this.frame?.remove(); this.frame = null;
       this.pinItems = []; this.pinStacks = []; this.pins?.replaceChildren();
       if (this.surface) { this.surface.hidden = true; this.surface.replaceChildren(); delete this.surface.dataset.selecting; delete this.surface.dataset.composing; }
+      this.syncOverlayToggle();
       this.anchor = null;
       this.selectedFeedbackId = ""; this.selectedPinIndex = -1;
     }
@@ -324,8 +339,10 @@ export function embedWidgetScript() {
 })();`;
 }
 
+// Every color is a design token on :host with today's light value, so the
+// installation's theme.css (linked after this) can restyle the widget.
 export const EMBED_WIDGET_CSS = String.raw`
-:host{all:initial;position:fixed;right:0;bottom:0;z-index:2147483647;font:14px/1.4 system-ui,sans-serif;color:#20293a}*{box-sizing:border-box}
+:host{all:initial;position:fixed;right:0;bottom:0;z-index:2147483647;font:14px/1.4 system-ui,sans-serif;--shiplet-ink:#20293a;--shiplet-line:#c8cbd3;--shiplet-surface:#fbf9f4;--shiplet-raised:#fff;--shiplet-wash:#edf5f7;--shiplet-info:#245b72;--shiplet-focus:#2f6e88;--shiplet-pin:#a73f28;--shiplet-on-pin:#fff;--shiplet-pin-shadow:#0003;--shiplet-pin-shadow-strong:#0004;color:var(--shiplet-ink)}*{box-sizing:border-box}
 :host([data-dock=top-left]){left:0;right:auto;top:0;bottom:auto}:host([data-dock=top-right]){left:auto;right:0;top:0;bottom:auto}:host([data-dock=bottom-left]){left:0;right:auto;top:auto;bottom:0}:host([data-dock=bottom-right]){left:auto;right:0;top:auto;bottom:0}
 :host([data-dock=top-left]) .surface,:host([data-dock=top-right]) .surface{top:max(4px,env(safe-area-inset-top));bottom:auto}:host([data-dock=top-left]) .surface,:host([data-dock=bottom-left]) .surface{left:max(4px,env(safe-area-inset-left));right:auto}:host([data-dock=top-right]) .surface,:host([data-dock=bottom-right]) .surface{right:max(4px,env(safe-area-inset-right));left:auto}
 .surface{position:fixed;right:4px;bottom:4px;width:272px;height:80px;border:0;background:transparent}.surface[hidden]{display:none}iframe{display:block;width:100%;height:100%;border:0;background:transparent;color-scheme:normal}
@@ -338,8 +355,9 @@ export const EMBED_WIDGET_CSS = String.raw`
 .surface[data-view=expanded]{width:min(408px,100vw);height:min(460px,100dvh)}
 .surface[data-view=drawing]{inset:0;width:100vw;height:100dvh}
 .surface[data-view=access]{width:min(368px,100vw);height:188px}
-.overlay-toggle{position:fixed;right:8px;bottom:80px;z-index:3;min-height:32px;padding:0 9px;border:1px solid #c8cbd3;border-radius:7px;background:#fbf9f4;color:#20293a;font:700 11px system-ui;cursor:pointer;box-shadow:0 3px 10px #0003}.overlay-toggle:focus-visible{outline:3px solid #2f6e88;outline-offset:3px}
-.pins button{position:fixed;border-radius:50%;padding:0;min-height:32px;min-width:32px;width:auto;height:32px;background:#fff;color:#20293a;border:2px solid #20293a;font:800 12px system-ui;cursor:pointer;box-shadow:0 3px 10px #0003}.pins button[data-active=true]{background:#a73f28;color:#fff;box-shadow:0 0 0 2px #20293a,0 4px 12px #0004}.pins .pin-stack{background:#a73f28;color:#fff;border-color:#fff}.pins .pin-stack-menu{position:fixed;z-index:2;display:grid;gap:4px;width:min(320px,calc(100vw - 16px));max-height:min(220px,calc(100vh - 16px));padding:6px;overflow:auto;border:1px solid #c8cbd3;border-radius:9px;background:#fff;box-shadow:0 10px 28px #0004}.pins .pin-stack-menu[hidden]{display:none}.pins .pin-stack-menu button{position:static;width:100%;height:auto;min-height:36px;padding:6px 8px;border:1px solid transparent;border-radius:6px;background:#fff;color:#20293a;font:700 11px/1.3 system-ui;text-align:left;box-shadow:none}.pins .pin-stack-menu button:hover,.pins .pin-stack-menu button:focus-visible{border-color:#2f6e88;background:#edf5f7;outline:0}.pins[hidden]{display:none}
-.recovery{position:absolute;inset:8px;padding:16px;border:1px solid #c8cbd3;border-radius:12px;background:#fbf9f4;display:flex;gap:12px;align-items:center;flex-wrap:wrap}.recovery a{color:#245b72}.recovery p{margin:0}.recovery button{min-height:44px;padding:8px 16px;border:1px solid #20293a;border-radius:8px;background:#20293a;color:#fff;font:700 14px system-ui;cursor:pointer}button:focus-visible,a:focus-visible{outline:3px solid #2f6e88;outline-offset:3px}
+.overlay-toggle{position:fixed;right:8px;bottom:80px;z-index:3;min-height:32px;padding:0 9px;border:1px solid var(--shiplet-line);border-radius:7px;background:var(--shiplet-surface);color:var(--shiplet-ink);font:700 11px system-ui;cursor:pointer;box-shadow:0 3px 10px var(--shiplet-pin-shadow)}.overlay-toggle[hidden]{display:none}.overlay-toggle:focus-visible{outline:3px solid var(--shiplet-focus);outline-offset:3px}
+:host([data-dock=top-left]) .overlay-toggle,:host([data-dock=top-right]) .overlay-toggle{top:80px;bottom:auto}:host([data-dock=top-left]) .overlay-toggle,:host([data-dock=bottom-left]) .overlay-toggle{left:8px;right:auto}
+.pins button{position:fixed;border-radius:50%;padding:0;min-height:32px;min-width:32px;width:auto;height:32px;background:var(--shiplet-raised);color:var(--shiplet-ink);border:2px solid var(--shiplet-ink);font:800 12px system-ui;cursor:pointer;box-shadow:0 3px 10px var(--shiplet-pin-shadow)}.pins button[data-active=true]{background:var(--shiplet-pin);color:var(--shiplet-on-pin);box-shadow:0 0 0 2px var(--shiplet-ink),0 4px 12px var(--shiplet-pin-shadow-strong)}.pins .pin-stack{background:var(--shiplet-pin);color:var(--shiplet-on-pin);border-color:var(--shiplet-raised)}.pins .pin-stack-menu{position:fixed;z-index:2;display:grid;gap:4px;width:min(320px,calc(100vw - 16px));max-height:min(220px,calc(100vh - 16px));padding:6px;overflow:auto;border:1px solid var(--shiplet-line);border-radius:9px;background:var(--shiplet-raised);box-shadow:0 10px 28px var(--shiplet-pin-shadow-strong)}.pins .pin-stack-menu[hidden]{display:none}.pins .pin-stack-menu button{position:static;width:100%;height:auto;min-height:36px;padding:6px 8px;border:1px solid transparent;border-radius:6px;background:var(--shiplet-raised);color:var(--shiplet-ink);font:700 11px/1.3 system-ui;text-align:left;box-shadow:none}.pins .pin-stack-menu button:hover,.pins .pin-stack-menu button:focus-visible{border-color:var(--shiplet-focus);background:var(--shiplet-wash);outline:0}.pins[hidden]{display:none}
+.recovery{position:absolute;inset:8px;padding:16px;border:1px solid var(--shiplet-line);border-radius:12px;background:var(--shiplet-surface);display:flex;gap:12px;align-items:center;flex-wrap:wrap}.recovery a{color:var(--shiplet-info)}.recovery p{margin:0}.recovery button{min-height:44px;padding:8px 16px;border:1px solid var(--shiplet-ink);border-radius:8px;background:var(--shiplet-ink);color:var(--shiplet-raised);font:700 14px system-ui;cursor:pointer}button:focus-visible,a:focus-visible{outline:3px solid var(--shiplet-focus);outline-offset:3px}
 @media(max-width:480px){.surface{right:0;bottom:0}.surface[data-view=comments]{height:100dvh;width:100vw}.surface[data-view=agents]{right:8px;bottom:8px;width:calc(100vw - 16px);height:min(600px,calc(100dvh - 16px))}.surface[data-view=thread]{right:8px;bottom:8px;width:calc(100vw - 16px);height:min(560px,calc(100dvh - 16px))}.surface[data-view=expanded]{height:min(460px,100dvh)}}
 `;

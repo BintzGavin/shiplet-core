@@ -651,6 +651,12 @@ export async function ensureSchema(db: D1Database) {
 		name: "visitors_enabled_on",
 		ddl: "visitors_enabled_on TEXT",
 	});
+	// The site's widget Appearance as JSON ({ theme, accent, position }); null
+	// keeps Shiplet's default look.
+	await addColumnIfMissing(db, "embed_installations", {
+		name: "appearance",
+		ddl: "appearance TEXT",
+	});
 	for (const column of [
 		{ name: "result_feedback_id", ddl: "result_feedback_id TEXT" },
 		{ name: "result_reply_id", ddl: "result_reply_id TEXT" },

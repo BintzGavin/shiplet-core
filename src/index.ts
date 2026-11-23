@@ -162,6 +162,14 @@ import { ensureTraceSchema } from "./traces/schema";
 import { registerTraceRoutes } from "./traces/routes";
 import { registerHandshakeRoutes } from "./handshakes/routes";
 import { registerVisitorRoutes, setInstallationVisitors, turnstileConfigured, visitorInstallation } from "./embed-visitors";
+import {
+  embedAppearanceVersion,
+  embedThemeCss,
+  embedThemeStylesheetUrl,
+  parseEmbedAppearance,
+  readEmbedAppearance,
+  setInstallationAppearance,
+} from "./embed-appearance";
 import { VISITOR_FRAME_CSS, VISITOR_FRAME_SCRIPT, visitorFrameResponse } from "./embed-visitor-frame";
 import { handshakeError, handshakesAvailable } from "./handshakes/handlers";
 import { executeHandshakeCodeModeRequest, isHandshakeCodeModePath } from "./handshakes/codemode";
@@ -933,7 +941,8 @@ const KERNEL_SCHEMA_EPOCH_MARKER = "kernel";
 // 6: trace audiences, variants, and pending attachments.
 // 7: trace upload links.
 // 10: embed_visitor_sessions and embed_installations.visitors_enabled_on.
-const CURRENT_KERNEL_SCHEMA_EPOCH = 10;
+// 11: embed_installations.appearance for the widget Appearance setting.
+const CURRENT_KERNEL_SCHEMA_EPOCH = 11;
 
 async function readKernelSchemaEpoch(db: D1Database): Promise<number | null> {
   const table = await db
@@ -13239,8 +13248,31 @@ app.on(["GET", "POST"], "/embed/install", async (c) => {
       const form = new URLSearchParams(body);
       selectedProjectId = form.get("project_id") || "";
       const action = form.get("action") || "create";
-      if (!["create", "revoke", "visitors_on", "visitors_off"].includes(action))
+      if (
+        ![
+          "create",
+          "revoke",
+          "visitors_on",
+          "visitors_off",
+          "appearance_save",
+          "appearance_reset",
+        ].includes(action)
+      )
         return c.text("Invalid action", 400);
+      // Checked before any write, so an invalid appearance changes nothing.
+      const appearance =
+        action === "appearance_save"
+          ? parseEmbedAppearance({
+              theme: form.get("theme"),
+              accent: form.get("accent"),
+              position: form.get("position"),
+            })
+          : null;
+      if (action === "appearance_save" && !appearance)
+        return c.text(
+          "Choose a theme (auto, light or dark), an accent color as #rrggbb, and a corner.",
+          400,
+        );
       const site = normalizeEmbedSiteUrl(form.get("site_url"));
       if (action === "create" && !site)
         return c.text(
@@ -13290,6 +13322,19 @@ app.on(["GET", "POST"], "/embed/install", async (c) => {
         message = on
           ? "Visitor feedback is on. Anyone on the site can leave a note after a quick bot check."
           : "Visitor feedback is off. Visitors can no longer leave notes or chat.";
+      } else if (action === "appearance_save" || action === "appearance_reset") {
+        if (
+          !(await setInstallationAppearance(
+            c.env.DB,
+            project.id,
+            form.get("installation_id") || "",
+            appearance,
+          ))
+        )
+          return c.text("No connected site with that installation", 404);
+        message = appearance
+          ? "Appearance saved. The widget on your site uses it from the next page load."
+          : "Appearance reset to Shiplet's default.";
       } else {
         await registerBrowserEmbed(c.env.DB, project, user, site!.siteUrl);
         message = "Your install snippet is ready.";
@@ -13332,6 +13377,7 @@ app.on(["GET", "POST"], "/embed/install", async (c) => {
           installations,
           message,
           visitorsAvailable: turnstileConfigured(c.env),
+          nonce: kernelDocumentNonce(c),
         }),
         {
           nonce: kernelDocumentNonce(c),
@@ -13363,6 +13409,37 @@ app.get(
       },
     }),
 );
+
+// The installation's widget Appearance as design-token overrides, linked after
+// the base stylesheet by every Shiplet page inside the widget and by the
+// widget's shadow root. Empty without an appearance. The exact version in the
+// URL is immutable; any other request revalidates, so a change shows at once.
+app.get("/api/embed/theme.css", async (c) => {
+  const headers: Record<string, string> = {
+    "content-type": "text/css; charset=utf-8",
+    "access-control-allow-origin": "*",
+    "x-content-type-options": "nosniff",
+  };
+  const installationId = c.req.query("installation_id") || "";
+  const installation = /^[A-Za-z0-9_-]{1,160}$/.test(installationId)
+    ? await getEmbedInstallation(c.env.DB, installationId)
+    : null;
+  if (!installation)
+    return new Response("", {
+      status: 404,
+      headers: { ...headers, "cache-control": "no-store" },
+    });
+  const appearance = readEmbedAppearance(installation.appearance);
+  const version = await embedAppearanceVersion(appearance);
+  headers.etag = `"${version}"`;
+  headers["cache-control"] =
+    c.req.query("v") === version
+      ? "public, max-age=31536000, immutable"
+      : "no-cache";
+  if (c.req.header("if-none-match") === headers.etag)
+    return new Response(null, { status: 304, headers });
+  return new Response(embedThemeCss(appearance), { headers });
+});
 
 app.get(
   "/api/embed/widget.js",
@@ -14494,13 +14571,18 @@ async function embedReviewStateResponse(
   });
 }
 
-function embedAuthBootstrapResponse(
+async function embedAuthBootstrapResponse(
   c: any,
   installation: NonNullable<Awaited<ReturnType<typeof getEmbedInstallation>>>,
   deniedAccount?: string,
   visitorsOn = false,
 ) {
   const origin = new URL(c.req.url).origin;
+  const themeUrl = await embedThemeStylesheetUrl(
+    origin,
+    installation.id,
+    readEmbedAppearance(installation.appearance),
+  );
   const nonce = createKernelDocumentNonce();
   const authorization = new URL("/embed/review/authorize", origin);
   authorization.searchParams.set("installation_id", installation.id);
@@ -14522,7 +14604,7 @@ function embedAuthBootstrapResponse(
   const visitorLink = visitorsOn
     ? `<button type="button" class="shiplet-review-launcher" data-shiplet-visitor-url="${escapeEmbedHtml(visitorUrl.toString())}" aria-label="Leave feedback without an account">Feedback</button>`
     : "";
-  const html = `<!doctype html><html lang="en" data-shiplet-embed-auth-bootstrap="v1" data-shiplet-embed-origin="${escapeEmbedHtml(installation.site_origin)}"${deniedAccount ? ' data-review-state="permission_denied"' : ""}><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Shiplet review</title><link rel="stylesheet" href="${origin}/api/review/host.css"><script src="${origin}/api/embed/auth-bootstrap.js" nonce="${nonce}" defer></script></head><body>${notice}<div class="shiplet-review-launcher-dock"><button type="button" class="shiplet-review-launcher" data-shiplet-embed-action="annotate" data-login-url="${escapeEmbedHtml(loginUrl)}" aria-label="Annotate">Annotate</button><button type="button" class="shiplet-review-comments-launcher" data-shiplet-embed-action="comments" data-login-url="${escapeEmbedHtml(loginUrl)}" aria-label="Open comments" title="Comments"><span class="shiplet-review-count" aria-hidden="true">…</span></button>${visitorLink}</div><div class="shiplet-embed-auth-status" data-shiplet-embed-auth-status hidden><span role="status" aria-live="polite" data-shiplet-embed-auth-status-text></span><button type="button" data-shiplet-embed-auth-dismiss>Dismiss</button></div></body></html>`;
+  const html = `<!doctype html><html lang="en" data-shiplet-embed-auth-bootstrap="v1" data-shiplet-embed-origin="${escapeEmbedHtml(installation.site_origin)}"${deniedAccount ? ' data-review-state="permission_denied"' : ""}><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Shiplet review</title><link rel="stylesheet" href="${origin}/api/review/host.css"><link rel="stylesheet" href="${escapeEmbedHtml(themeUrl)}"><script src="${origin}/api/embed/auth-bootstrap.js" nonce="${nonce}" defer></script></head><body>${notice}<div class="shiplet-review-launcher-dock"><button type="button" class="shiplet-review-launcher" data-shiplet-embed-action="annotate" data-login-url="${escapeEmbedHtml(loginUrl)}" aria-label="Annotate">Annotate</button><button type="button" class="shiplet-review-comments-launcher" data-shiplet-embed-action="comments" data-login-url="${escapeEmbedHtml(loginUrl)}" aria-label="Open comments" title="Comments"><span class="shiplet-review-count" aria-hidden="true">…</span></button>${visitorLink}</div><div class="shiplet-embed-auth-status" data-shiplet-embed-auth-status hidden><span role="status" aria-live="polite" data-shiplet-embed-auth-status-text></span><button type="button" data-shiplet-embed-auth-dismiss>Dismiss</button></div></body></html>`;
   return new Response(html, {
     status: deniedAccount ? 403 : 200,
     headers: {
@@ -14650,6 +14732,11 @@ app.get("/embed/visitor/frame", async (c) => {
   return visitorFrameResponse({
     origin,
     installation,
+    themeStylesheetUrl: await embedThemeStylesheetUrl(
+      origin,
+      installation.id,
+      readEmbedAppearance(installation.appearance),
+    ),
     pageUrl,
     siteKey: c.env.TURNSTILE_SITE_KEY || "",
     nonce: createKernelDocumentNonce(),
@@ -16288,7 +16375,18 @@ app.get("/embed/review/host", async (c) => {
       installation_id: session.installationId,
       page_url: pageUrl,
     });
+    const installation = await getEmbedInstallation(
+      c.env.DB,
+      session.installationId,
+    );
+    const appearance = readEmbedAppearance(installation?.appearance);
     return createTrustedReviewHostResponse({
+      themeStylesheetUrl: await embedThemeStylesheetUrl(
+        origin,
+        session.installationId,
+        appearance,
+      ),
+      siteDock: appearance?.position,
       shipletId: project.id,
       revisionId: session.revisionId,
       title: project.name,

@@ -183,6 +183,27 @@ ends, the panel asks you to choose **Annotate** to sign in again. Reviewers
 outside the organization never see the panel. Your site cannot read the
 conversation: it stays inside Shiplet's frame.
 
+## Appearance
+
+The widget's controls render inside Shiplet's own frames, so your site's CSS
+cannot restyle them. To make them look like part of your page, open
+[Connect a website](https://shiplet.cc/embed/install), select the Shiplet, and
+use **Appearance** on the connected site:
+
+- **Theme**: **Match the visitor's system** (light, or dark when the visitor's
+  device prefers dark), **Light**, or **Dark**.
+- **Accent color**: used for the main buttons (Annotate, Feedback, Send, Ask)
+  and the active comment pin. Shiplet picks near-black or white text for it,
+  whichever reads better, and a matching hover shade.
+- **Position**: the corner the toolbar starts in. A signed-in reviewer who
+  moves the dock in their review settings keeps their own corner.
+
+Choose **Save appearance**; the widget uses it from the next page load. **Reset
+to Shiplet's default** returns to the standard look. Appearance changes
+Shiplet's frames, panels and comment pins only, never your page. The widget
+loads it as a second stylesheet from `/api/embed/theme.css`, covered by the
+`style-src` entry below.
+
 ## Configuration and removal
 
 | Attribute | Meaning |
@@ -209,7 +230,8 @@ frame-src … https://shiplet.cc;
 style-src … https://shiplet.cc;
 ```
 
-The widget loads its shadow-root stylesheet from `/api/embed/widget.css`.
+The widget loads its shadow-root stylesheets from `/api/embed/widget.css` and
+`/api/embed/theme.css` (your site's Appearance).
 You do not need to allow inline styles for the widget. Authentication and feedback requests
 originate inside the Shiplet frame, so the host does not need Shiplet in its
 `connect-src`. Visitor feedback loads Turnstile inside the Shiplet frame too, so
