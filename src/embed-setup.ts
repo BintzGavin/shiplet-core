@@ -8,6 +8,7 @@ import {
   EMBED_DEFAULT_ACCENT,
   readEmbedAppearance,
 } from "./embed-appearance";
+import { readEmbedPublicToolbar } from "./embed-public-toolbar";
 import { newId, type OrganizationRecord, type ShipletUser } from "./store";
 import type { Project } from "./types";
 
@@ -106,7 +107,7 @@ export function renderEmbedSetup(input: {
     .map((installation) => {
       const snippet = embedInstallSnippet(input.appOrigin, installation.id);
       const prompt = `Install Shiplet feedback in this frontend. Add the following script once and mount the custom element once in the shared browser layout, outside route-specific content. Preserve existing authentication and routing. Do not add API keys or a backend proxy. Use the provided installation ID only on ${installation.site_origin}; register other origins separately at ${input.appOrigin}/embed/install. Verify opening feedback, selecting an element, SPA navigation, mobile layout, and cleanup. Follow ${input.appOrigin}/docs/embed for framework examples and CSP requirements.\n\n${snippet}`;
-      return `<section class="success-card shiplet-panel"><h2>${e(installation.site_origin)}</h2><p>Paste these two tags into your shared page layout. Reviewers sign in with their Shiplet account.</p><label>Install snippet<textarea readonly rows="3" style="width:100%;font-family:monospace">${e(snippet)}</textarea></label><details><summary>Paste this into your agent</summary><label>Agent install prompt<textarea readonly rows="9" style="width:100%">${e(prompt)}</textarea></label></details><p><a href="${e(installation.site_url)}" target="_blank" rel="noopener noreferrer">Open your site</a> · <a href="/docs/embed">Install guide</a></p><form method="post" action="/embed/install"><input type="hidden" name="project_id" value="${e(installation.project_id)}"><input type="hidden" name="installation_id" value="${e(installation.id)}"><button class="btn btn-secondary" name="action" value="revoke">Disconnect this site</button></form>${visitorPanel(installation, input.visitorsAvailable === true, e)}${appearancePanel(installation, e)}</section>`;
+      return `<section class="success-card shiplet-panel"><h2>${e(installation.site_origin)}</h2><p>Paste these two tags into your shared page layout. Reviewers sign in with their Shiplet account.</p><label>Install snippet<textarea readonly rows="3" style="width:100%;font-family:monospace">${e(snippet)}</textarea></label><details><summary>Paste this into your agent</summary><label>Agent install prompt<textarea readonly rows="9" style="width:100%">${e(prompt)}</textarea></label></details><p><a href="${e(installation.site_url)}" target="_blank" rel="noopener noreferrer">Open your site</a> · <a href="/docs/embed">Install guide</a></p><form method="post" action="/embed/install"><input type="hidden" name="project_id" value="${e(installation.project_id)}"><input type="hidden" name="installation_id" value="${e(installation.id)}"><button class="btn btn-secondary" name="action" value="revoke">Disconnect this site</button></form>${visitorPanel(installation, input.visitorsAvailable === true, e)}${publicToolbarPanel(installation, input.visitorsAvailable === true, e)}${appearancePanel(installation, e)}</section>`;
     })
     .join("");
   const accentScript =
@@ -149,6 +150,25 @@ function appearancePanel(
     ? `Now: ${THEME_LABELS[appearance.theme]}, accent ${appearance.accent}, ${POSITION_LABELS[appearance.position].toLowerCase()}.`
     : "Now: Shiplet's default look.";
   return `<div class="embed-appearance"><h3>Appearance</h3><p>Make the widget look like part of this site. It changes Shiplet's toolbar, panels and comment pins, not your page. Reviewers can still move the toolbar to another corner for themselves.</p><p>${e(current)}</p><form method="post" action="/embed/install"><input type="hidden" name="project_id" value="${e(installation.project_id)}"><input type="hidden" name="installation_id" value="${e(installation.id)}"><label>Theme <select name="theme">${options(THEME_LABELS, theme)}</select></label> <label>Accent color <span style="display:flex;align-items:center;gap:8px"><input type="color" name="accent" value="${e(accent)}" data-embed-accent style="width:64px;height:40px;padding:2px"> <span data-embed-accent-hex>${e(accent)}</span></span></label> <label>Position <select name="position">${options(POSITION_LABELS, position)}</select></label> <button class="btn btn-primary" name="action" value="appearance_save">Save appearance</button> <button class="btn btn-secondary" name="action" value="appearance_reset">Reset to Shiplet's default</button></form></div>`;
+}
+
+// What signed-out people see on this site: the full toolbar (the default) or
+// just Feedback, with the team revealing the rest by ?shiplet=review. Not
+// access control: Annotate still needs a sign-in and review access.
+function publicToolbarPanel(
+  installation: EmbedInstallationRecord & { visitors_enabled_on?: string | null },
+  visitorsAvailable: boolean,
+  e: (value: string) => string,
+) {
+  const feedbackOnly = readEmbedPublicToolbar(installation.public_toolbar) === "feedback_only";
+  const visitorsOn = visitorsAvailable && Boolean(installation.visitors_enabled_on);
+  const choice = (value: string, checked: boolean, label: string) =>
+    `<label style="display:flex;gap:8px;align-items:center"><input type="radio" name="public_toolbar" value="${e(value)}"${checked ? " checked" : ""}> <span>${label}</span></label>`;
+  const warning =
+    feedbackOnly && !visitorsOn
+      ? `<p class="banner banner-info">Visitor feedback is off, so the public sees no Shiplet toolbar at all. Your team still opens it with <code>?shiplet=review</code>.</p>`
+      : "";
+  return `<div class="embed-public-toolbar"><h3>Toolbar for the public</h3><p>What people who are not signed in to Shiplet see on this site. This only changes what the toolbar shows: annotating and reading comments always need a Shiplet sign-in with access to this Shiplet.</p>${warning}<form method="post" action="/embed/install" style="display:grid;gap:8px"><input type="hidden" name="project_id" value="${e(installation.project_id)}"><input type="hidden" name="installation_id" value="${e(installation.id)}">${choice("full", !feedbackOnly, "Annotate, Comments and Feedback")}${choice("feedback_only", feedbackOnly, "Feedback only. Your team adds <code>?shiplet=review</code> to the page address to annotate.")}<div><button class="btn btn-primary" name="action" value="public_toolbar">Save toolbar choice</button></div></form></div>`;
 }
 
 // Public visitor feedback for one connected site: off by default, and only

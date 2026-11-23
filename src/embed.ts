@@ -17,6 +17,8 @@ export type EmbedInstallationRecord = {
   revoked_on: string | null;
   // The widget Appearance as JSON; read it with readEmbedAppearance.
   appearance?: string | null;
+  // "Toolbar for the public"; read it with readEmbedPublicToolbar.
+  public_toolbar?: string | null;
 };
 
 type EmbedExchangeCodeRecord = {

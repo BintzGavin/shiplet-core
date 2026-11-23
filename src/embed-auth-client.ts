@@ -11,7 +11,11 @@ export function embedAuthBootstrapScript() {
     let siteOrigin; try { siteOrigin = new URL(registeredPage).origin; } catch { return; }
     // Visitor feedback adds a third launcher, so the widget widens its toolbar for it.
     const visitor = document.querySelector("[data-shiplet-visitor-url]");
-    function notify(view) { if (parent !== window) parent.postMessage(Object.assign({ protocol: "shiplet.embed.ui.v1", view }, visitor ? { agents: true } : {}), siteOrigin); }
+    // "Feedback only" for the public: with no review buttons the toolbar is
+    // Feedback alone (one button wide), or nothing, so the widget hides itself.
+    if (!buttons.length && !visitor) { if (parent !== window) parent.postMessage({ protocol: "shiplet.embed.ui.v1", view: "hidden" }, siteOrigin); return; }
+    const size = !buttons.length ? { single: true } : visitor ? { agents: true } : {};
+    function notify(view) { if (parent !== window) parent.postMessage(Object.assign({ protocol: "shiplet.embed.ui.v1", view }, size), siteOrigin); }
     function report(message) { statusText.textContent = message; status.hidden = false; notify("access"); }
     function collapse() { status.hidden = true; notify("toolbar"); }
     notify("toolbar");
@@ -61,4 +65,49 @@ export function embedAuthBootstrapScript() {
     });
     window.addEventListener("pagehide", () => { clearInterval(closeTimer); if (popup && !popup.closed) popup.close(); });
   })();`;
+}
+
+export type EmbedSignedOutToolbar = "full" | "feedback" | "hidden";
+
+function escapeHtml(value: unknown) {
+  return String(value ?? "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
+/**
+ * The signed-out page inside the widget. "full" is Annotate, Comments and,
+ * with a visitor URL, Feedback. "feedback" is Feedback alone and "hidden" is
+ * no toolbar at all, for a site whose public toolbar is Feedback only.
+ */
+export function embedAuthBootstrapHtml(input: {
+  origin: string;
+  siteOrigin: string;
+  themeStylesheetUrl: string;
+  nonce: string;
+  loginUrl: string;
+  visitorUrl: string | null;
+  deniedAccount?: string;
+  toolbar: EmbedSignedOutToolbar;
+}) {
+  const e = escapeHtml;
+  const { origin, deniedAccount, loginUrl } = input;
+  const notice = deniedAccount
+    ? `<span class="shiplet-review-visually-hidden" role="alert">${e(deniedAccount)} needs review access. Sign in with another account to continue.</span>`
+    : "";
+  const visitorLink = input.visitorUrl
+    ? `<button type="button" class="shiplet-review-launcher" data-shiplet-visitor-url="${e(input.visitorUrl)}" aria-label="Leave feedback without an account">Feedback</button>`
+    : "";
+  const reviewButtons =
+    input.toolbar === "full"
+      ? `<button type="button" class="shiplet-review-launcher" data-shiplet-embed-action="annotate" data-login-url="${e(loginUrl)}" aria-label="Annotate">Annotate</button><button type="button" class="shiplet-review-comments-launcher" data-shiplet-embed-action="comments" data-login-url="${e(loginUrl)}" aria-label="Open comments" title="Comments"><span class="shiplet-review-count" aria-hidden="true">…</span></button>`
+      : "";
+  const toolbar =
+    input.toolbar === "hidden"
+      ? ""
+      : `<div class="shiplet-review-launcher-dock">${reviewButtons}${visitorLink}</div><div class="shiplet-embed-auth-status" data-shiplet-embed-auth-status hidden><span role="status" aria-live="polite" data-shiplet-embed-auth-status-text></span><button type="button" data-shiplet-embed-auth-dismiss>Dismiss</button></div>`;
+  return `<!doctype html><html lang="en" data-shiplet-embed-auth-bootstrap="v1" data-shiplet-embed-origin="${e(input.siteOrigin)}"${deniedAccount ? ' data-review-state="permission_denied"' : ""}><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Shiplet review</title><link rel="stylesheet" href="${origin}/api/review/host.css"><link rel="stylesheet" href="${e(input.themeStylesheetUrl)}"><script src="${origin}/api/embed/auth-bootstrap.js" nonce="${input.nonce}" defer></script></head><body>${notice}${toolbar}</body></html>`;
 }

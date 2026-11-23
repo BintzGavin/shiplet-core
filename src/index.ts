@@ -1,4 +1,8 @@
-import { embedAuthBootstrapScript } from "./embed-auth-client";
+import {
+  embedAuthBootstrapHtml,
+  embedAuthBootstrapScript,
+  type EmbedSignedOutToolbar,
+} from "./embed-auth-client";
 // Copyright (c) 2022 Cloudflare, Inc.
 // Licensed under the APACHE LICENSE, VERSION 2.0 license found in the LICENSE file or at http://www.apache.org/licenses/LICENSE-2.0
 
@@ -171,6 +175,12 @@ import {
   setInstallationAppearance,
 } from "./embed-appearance";
 import { VISITOR_FRAME_CSS, VISITOR_FRAME_SCRIPT, visitorFrameResponse } from "./embed-visitor-frame";
+import {
+  embedSignedOutToolbar,
+  parseEmbedPublicToolbarChoice,
+  readEmbedPublicToolbar,
+  setInstallationPublicToolbar,
+} from "./embed-public-toolbar";
 import { handshakeError, handshakesAvailable } from "./handshakes/handlers";
 import { executeHandshakeCodeModeRequest, isHandshakeCodeModePath } from "./handshakes/codemode";
 import { deleteProjectTraceObjects, sweepArchivedShipletTraces } from "./traces/store";
@@ -942,7 +952,8 @@ const KERNEL_SCHEMA_EPOCH_MARKER = "kernel";
 // 7: trace upload links.
 // 10: embed_visitor_sessions and embed_installations.visitors_enabled_on.
 // 11: embed_installations.appearance for the widget Appearance setting.
-const CURRENT_KERNEL_SCHEMA_EPOCH = 11;
+// 12: embed_installations.public_toolbar for "Toolbar for the public".
+const CURRENT_KERNEL_SCHEMA_EPOCH = 12;
 
 async function readKernelSchemaEpoch(db: D1Database): Promise<number | null> {
   const table = await db
@@ -13256,9 +13267,20 @@ app.on(["GET", "POST"], "/embed/install", async (c) => {
           "visitors_off",
           "appearance_save",
           "appearance_reset",
+          "public_toolbar",
         ].includes(action)
       )
         return c.text("Invalid action", 400);
+      // Exactly one of the two choices, checked before any write.
+      const publicToolbar =
+        action === "public_toolbar"
+          ? parseEmbedPublicToolbarChoice(form.getAll("public_toolbar"))
+          : null;
+      if (action === "public_toolbar" && !publicToolbar)
+        return c.text(
+          "Choose the toolbar for the public: full or feedback_only.",
+          400,
+        );
       // Checked before any write, so an invalid appearance changes nothing.
       const appearance =
         action === "appearance_save"
@@ -13335,6 +13357,19 @@ app.on(["GET", "POST"], "/embed/install", async (c) => {
         message = appearance
           ? "Appearance saved. The widget on your site uses it from the next page load."
           : "Appearance reset to Shiplet's default.";
+      } else if (action === "public_toolbar") {
+        if (
+          !(await setInstallationPublicToolbar(
+            c.env.DB,
+            project.id,
+            form.get("installation_id") || "",
+            publicToolbar!.value,
+          ))
+        )
+          return c.text("No connected site with that installation", 404);
+        message = publicToolbar!.value
+          ? "Toolbar for the public: Feedback only. Your team adds ?shiplet=review to the page address to annotate."
+          : "Toolbar for the public: Annotate, Comments and Feedback.";
       } else {
         await registerBrowserEmbed(c.env.DB, project, user, site!.siteUrl);
         message = "Your install snippet is ready.";
@@ -14576,6 +14611,9 @@ async function embedAuthBootstrapResponse(
   installation: NonNullable<Awaited<ReturnType<typeof getEmbedInstallation>>>,
   deniedAccount?: string,
   visitorsOn = false,
+  // "Toolbar for the public": the full toolbar unless the site chose Feedback
+  // only and this is not the team's ?shiplet=review reveal (team=1).
+  toolbar: EmbedSignedOutToolbar = "full",
 ) {
   const origin = new URL(c.req.url).origin;
   const themeUrl = await embedThemeStylesheetUrl(
@@ -14595,16 +14633,25 @@ async function embedAuthBootstrapResponse(
   );
   if (deniedAccount) authorization.searchParams.set("switch_account", "1");
   const loginUrl = authorization.toString();
-  const notice = deniedAccount
-    ? `<span class="shiplet-review-visually-hidden" role="alert">${escapeEmbedHtml(deniedAccount)} needs review access. Sign in with another account to continue.</span>`
-    : "";
   const visitorUrl = new URL("/embed/visitor/frame", origin);
   visitorUrl.searchParams.set("installation_id", installation.id);
   visitorUrl.searchParams.set("return_url", authorization.searchParams.get("return_url") || installation.site_url);
-  const visitorLink = visitorsOn
-    ? `<button type="button" class="shiplet-review-launcher" data-shiplet-visitor-url="${escapeEmbedHtml(visitorUrl.toString())}" aria-label="Leave feedback without an account">Feedback</button>`
-    : "";
-  const html = `<!doctype html><html lang="en" data-shiplet-embed-auth-bootstrap="v1" data-shiplet-embed-origin="${escapeEmbedHtml(installation.site_origin)}"${deniedAccount ? ' data-review-state="permission_denied"' : ""}><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Shiplet review</title><link rel="stylesheet" href="${origin}/api/review/host.css"><link rel="stylesheet" href="${escapeEmbedHtml(themeUrl)}"><script src="${origin}/api/embed/auth-bootstrap.js" nonce="${nonce}" defer></script></head><body>${notice}<div class="shiplet-review-launcher-dock"><button type="button" class="shiplet-review-launcher" data-shiplet-embed-action="annotate" data-login-url="${escapeEmbedHtml(loginUrl)}" aria-label="Annotate">Annotate</button><button type="button" class="shiplet-review-comments-launcher" data-shiplet-embed-action="comments" data-login-url="${escapeEmbedHtml(loginUrl)}" aria-label="Open comments" title="Comments"><span class="shiplet-review-count" aria-hidden="true">…</span></button>${visitorLink}</div><div class="shiplet-embed-auth-status" data-shiplet-embed-auth-status hidden><span role="status" aria-live="polite" data-shiplet-embed-auth-status-text></span><button type="button" data-shiplet-embed-auth-dismiss>Dismiss</button></div></body></html>`;
+  // The team's reveal survives a trip through the visitor panel and back.
+  if (
+    readEmbedPublicToolbar(installation.public_toolbar) &&
+    new URL(c.req.url).searchParams.get("team") === "1"
+  )
+    visitorUrl.searchParams.set("team", "1");
+  const html = embedAuthBootstrapHtml({
+    origin,
+    siteOrigin: installation.site_origin,
+    themeStylesheetUrl: themeUrl,
+    nonce,
+    loginUrl,
+    visitorUrl: visitorsOn ? visitorUrl.toString() : null,
+    deniedAccount,
+    toolbar,
+  });
   return new Response(html, {
     status: deniedAccount ? 403 : 200,
     headers: {
@@ -14729,6 +14776,7 @@ app.get("/embed/visitor/frame", async (c) => {
   const back = new URL("/embed/review/start", origin);
   back.searchParams.set("installation_id", installation.id);
   back.searchParams.set("return_url", pageUrl);
+  if (c.req.query("team") === "1") back.searchParams.set("team", "1");
   return visitorFrameResponse({
     origin,
     installation,
@@ -14930,9 +14978,21 @@ app.get("/embed/review/start", async (c) => {
       }
     }
     if (!user) {
-      // Signed out: offer visitor feedback too, when the site has it on.
+      // Signed out: offer visitor feedback too, when the site has it on. A
+      // site with "Feedback only" shows the public just that (or nothing),
+      // unless the team asked for the full toolbar with ?shiplet=review.
       const visitors = await visitorInstallation(c.env, installation.id);
-      return embedAuthBootstrapResponse(c, installation, undefined, Boolean(visitors));
+      return embedAuthBootstrapResponse(
+        c,
+        installation,
+        undefined,
+        Boolean(visitors),
+        embedSignedOutToolbar({
+          setting: readEmbedPublicToolbar(installation.public_toolbar),
+          visitorsOn: Boolean(visitors),
+          team: url.searchParams.get("team") === "1",
+        }),
+      );
     }
     const project = await getProjectById(c.env.DB, installation.project_id);
     if (

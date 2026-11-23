@@ -657,6 +657,12 @@ export async function ensureSchema(db: D1Database) {
 		name: "appearance",
 		ddl: "appearance TEXT",
 	});
+	// "Toolbar for the public": "feedback_only" shows signed-out visitors just
+	// the Feedback button; null keeps Annotate, Comments and Feedback.
+	await addColumnIfMissing(db, "embed_installations", {
+		name: "public_toolbar",
+		ddl: "public_toolbar TEXT",
+	});
 	for (const column of [
 		{ name: "result_feedback_id", ddl: "result_feedback_id TEXT" },
 		{ name: "result_reply_id", ddl: "result_reply_id TEXT" },

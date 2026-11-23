@@ -12,8 +12,8 @@ import app, { schemaInitializationTest } from "../src/index";
 // Pin the two together: when this digest changes, bump
 // CURRENT_KERNEL_SCHEMA_EPOCH in src/index.ts and update both values here.
 const PINNED_KERNEL_SCHEMA = {
-  epoch: 11,
-  digest: "58e01cc1efa3fd798094296fef520e1ab85da248497c9933ef95181714fca15e",
+  epoch: 12,
+  digest: "c8225f9b672aea98590eae544a673f47a2fb1a6eb3024b75e102ec1c1a6887ad",
 };
 
 // Releases up to v0.1.43 recorded epoch 1 before the invite link tables existed.
@@ -35,6 +35,8 @@ const EPOCH_BEFORE_TRACE_SHIPLETS = 7;
 const EPOCH_BEFORE_CLI_DEVICE_LOGIN = 8;
 // Builds before the widget Appearance setting recorded epoch 10.
 const EPOCH_BEFORE_WIDGET_APPEARANCE = 10;
+// Builds before "Toolbar for the public" recorded epoch 11.
+const EPOCH_BEFORE_PUBLIC_TOOLBAR = 11;
 const EPOCH_TABLE = "shiplet_kernel_schema_epoch";
 
 function db() {
@@ -241,5 +243,19 @@ describe("kernel schema epoch", () => {
       "PRAGMA table_info(embed_installations)",
     ).all<{ name: string }>();
     expect(columns.results.map((column) => column.name)).toContain("appearance");
+  });
+
+  // Also after the pin, for the same reason.
+  it("adds the public toolbar column to a database that recorded epoch 11", async () => {
+    await request("/health");
+    await recordEpoch(EPOCH_BEFORE_PUBLIC_TOOLBAR);
+    await db().prepare("ALTER TABLE embed_installations DROP COLUMN public_toolbar").run();
+
+    expect((await request(`/join/${"F".repeat(32)}`)).status).toBe(404);
+
+    const columns = await db().prepare(
+      "PRAGMA table_info(embed_installations)",
+    ).all<{ name: string }>();
+    expect(columns.results.map((column) => column.name)).toContain("public_toolbar");
   });
 });
