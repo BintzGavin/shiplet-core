@@ -344,6 +344,7 @@ async function operateTrustedHostScript(options?: {
   locationHref?: string;
   sessionStore?: Map<string, string>;
   handshakes?: FakeHandshakeRelay;
+  siteDock?: string;
 }) {
   const pageAttributes = new Map([
     ["data-shiplet-embed-origin", options?.embedded ? "https://client.example" : ""],
@@ -372,6 +373,7 @@ async function operateTrustedHostScript(options?: {
     ["data-revision-id", "revision_a1"],
     ["data-review-submission-mode", options?.submissionMode || "confirmation"],
     ...(options?.organizationId ? [["data-shiplet-organization-id", options.organizationId] as [string, string]] : []),
+    ...(options?.siteDock ? [["data-review-site-dock", options.siteDock] as [string, string]] : []),
   ]);
   const page = {
     style: { setProperty: vi.fn() },
@@ -3882,6 +3884,55 @@ describe("trusted review host boundary", () => {
     expect(Array.from(stored.keys()).filter((key) => key.startsWith("shiplet.review.preferences.v1:")).sort()).toEqual(
       [ownKey, otherActorKey, otherProjectKey].sort(),
     );
+  });
+
+  it("starts at the website's own corner until the reviewer picks a dock", async () => {
+    const preferences = (dock: string) => JSON.stringify({
+      version: 1,
+      dock,
+      launch: "manual",
+      overlaysVisible: true,
+      bubbleColor: "#B44729",
+      annotation: { tool: "pen", color: "#D92D5B", strokeWidth: 5 },
+      motion: "system",
+      copyRequestsEnabled: false,
+    });
+    const ownKey = "shiplet.review.preferences.v1:human:actor_test:shiplet_a";
+    const stored = new Map<string, string>();
+    const localStorage = {
+      getItem: (key: string) => stored.get(key) ?? null,
+      setItem: (key: string, value: string) => { stored.set(key, value); },
+    };
+    const open = async () => {
+      const harness = await operateTrustedHostScript({ draftContext: true, siteDock: "bottom-left", localStorage });
+      await settleTrustedHost(12);
+      return harness;
+    };
+
+    // Nothing saved: the site's corner.
+    expect((await open()).body.getAttribute("data-review-dock")).toBe("bottom-left");
+    // Saving another preference also saved the old default dock; the site's corner still applies.
+    stored.set(ownKey, preferences("bottom-right"));
+    const harness = await open();
+    expect(harness.body.getAttribute("data-review-dock")).toBe("bottom-left");
+    // A dock the reviewer picks wins, including the old default.
+    const dock = harness.createdElements.find((element) => element.getAttribute("aria-label") === "Review dock");
+    expect(dock).toBeDefined();
+    if (!dock) return;
+    dock.value = "bottom-right";
+    await dock.dispatch("change", { isTrusted: true });
+    expect(harness.body.getAttribute("data-review-dock")).toBe("bottom-right");
+    expect(stored.get("shiplet.review.dock-chosen.v1:human:actor_test:shiplet_a")).toBe("1");
+    expect((await open()).body.getAttribute("data-review-dock")).toBe("bottom-right");
+    // A dock other than the old default was the reviewer's choice.
+    stored.clear();
+    stored.set(ownKey, preferences("top-right"));
+    expect((await open()).body.getAttribute("data-review-dock")).toBe("top-right");
+    // Without a site corner nothing changes.
+    stored.clear();
+    const plain = await operateTrustedHostScript({ draftContext: true, localStorage });
+    await settleTrustedHost(12);
+    expect(plain.body.getAttribute("data-review-dock")).toBe("bottom-right");
   });
 
   it("[T2] strips credential-bearing query keys from copied clean review links", async () => {

@@ -4,6 +4,10 @@ import {
   normalizeEmbedSiteUrl,
   type EmbedInstallationRecord,
 } from "./embed";
+import {
+  EMBED_DEFAULT_ACCENT,
+  readEmbedAppearance,
+} from "./embed-appearance";
 import { newId, type OrganizationRecord, type ShipletUser } from "./store";
 import type { Project } from "./types";
 
@@ -88,6 +92,8 @@ export function renderEmbedSetup(input: {
   message?: string;
   // The server has Turnstile keys, so visitor feedback can be turned on.
   visitorsAvailable?: boolean;
+  // Lets the Appearance form show the accent's hex as it changes.
+  nonce?: string;
 }) {
   const e = escapeHtml;
   const options = input.projects
@@ -100,10 +106,49 @@ export function renderEmbedSetup(input: {
     .map((installation) => {
       const snippet = embedInstallSnippet(input.appOrigin, installation.id);
       const prompt = `Install Shiplet feedback in this frontend. Add the following script once and mount the custom element once in the shared browser layout, outside route-specific content. Preserve existing authentication and routing. Do not add API keys or a backend proxy. Use the provided installation ID only on ${installation.site_origin}; register other origins separately at ${input.appOrigin}/embed/install. Verify opening feedback, selecting an element, SPA navigation, mobile layout, and cleanup. Follow ${input.appOrigin}/docs/embed for framework examples and CSP requirements.\n\n${snippet}`;
-      return `<section class="success-card shiplet-panel"><h2>${e(installation.site_origin)}</h2><p>Paste these two tags into your shared page layout. Reviewers sign in with their Shiplet account.</p><label>Install snippet<textarea readonly rows="3" style="width:100%;font-family:monospace">${e(snippet)}</textarea></label><details><summary>Paste this into your agent</summary><label>Agent install prompt<textarea readonly rows="9" style="width:100%">${e(prompt)}</textarea></label></details><p><a href="${e(installation.site_url)}" target="_blank" rel="noopener noreferrer">Open your site</a> · <a href="/docs/embed">Install guide</a></p><form method="post" action="/embed/install"><input type="hidden" name="project_id" value="${e(installation.project_id)}"><input type="hidden" name="installation_id" value="${e(installation.id)}"><button class="btn btn-secondary" name="action" value="revoke">Disconnect this site</button></form>${visitorPanel(installation, input.visitorsAvailable === true, e)}</section>`;
+      return `<section class="success-card shiplet-panel"><h2>${e(installation.site_origin)}</h2><p>Paste these two tags into your shared page layout. Reviewers sign in with their Shiplet account.</p><label>Install snippet<textarea readonly rows="3" style="width:100%;font-family:monospace">${e(snippet)}</textarea></label><details><summary>Paste this into your agent</summary><label>Agent install prompt<textarea readonly rows="9" style="width:100%">${e(prompt)}</textarea></label></details><p><a href="${e(installation.site_url)}" target="_blank" rel="noopener noreferrer">Open your site</a> · <a href="/docs/embed">Install guide</a></p><form method="post" action="/embed/install"><input type="hidden" name="project_id" value="${e(installation.project_id)}"><input type="hidden" name="installation_id" value="${e(installation.id)}"><button class="btn btn-secondary" name="action" value="revoke">Disconnect this site</button></form>${visitorPanel(installation, input.visitorsAvailable === true, e)}${appearancePanel(installation, e)}</section>`;
     })
     .join("");
-  return `<div class="dashboard-shell shiplet-dashboard-stage"><header class="app-page-topbar"><div class="app-page-title"><span class="success-card-label">Shiplet on your site</span><h1>Connect a website</h1><p>Leave comments directly on your working site. Teammates and agents share the same feedback queue.</p></div></header><p><a href="/">Back to workspace</a> · <a href="/docs/embed">Installation guide</a></p>${input.message ? `<p role="status" class="banner banner-info">${e(input.message)}</p>` : ""}<section class="success-card shiplet-panel"><form method="post" action="/embed/install" style="display:grid;gap:16px"><label>Shiplet<select name="project_id"><option value="new">Create a Shiplet for this website</option>${options}</select></label><label>Workspace for a new Shiplet<select name="organization_id">${input.organizations.map((org) => `<option value="${e(org.id)}">${e(org.name)}</option>`).join("")}</select></label><label>Site URL<input type="url" name="site_url" placeholder="https://your-site.com" required maxlength="2048"></label><p>Use HTTPS, or localhost for development. Add each staging and production origin separately.</p><button class="btn btn-primary" type="submit">Create install snippet</button></form></section>${input.projects.length ? `<details><summary>Manage existing connections</summary><ul>${input.projects.map((project) => `<li><a href="/embed/install?project_id=${e(project.id)}">${e(project.name)}</a></li>`).join("")}</ul></details>` : ""}${installations}</div>`;
+  const accentScript =
+    input.installations.length && input.nonce
+      ? `<script nonce="${e(input.nonce)}">for(const input of document.querySelectorAll("[data-embed-accent]"))input.addEventListener("input",()=>{const hex=input.parentElement.querySelector("[data-embed-accent-hex]");if(hex)hex.textContent=input.value;});</script>`
+      : "";
+  return `<div class="dashboard-shell shiplet-dashboard-stage"><header class="app-page-topbar"><div class="app-page-title"><span class="success-card-label">Shiplet on your site</span><h1>Connect a website</h1><p>Leave comments directly on your working site. Teammates and agents share the same feedback queue.</p></div></header><p><a href="/">Back to workspace</a> · <a href="/docs/embed">Installation guide</a></p>${input.message ? `<p role="status" class="banner banner-info">${e(input.message)}</p>` : ""}<section class="success-card shiplet-panel"><form method="post" action="/embed/install" style="display:grid;gap:16px"><label>Shiplet<select name="project_id"><option value="new">Create a Shiplet for this website</option>${options}</select></label><label>Workspace for a new Shiplet<select name="organization_id">${input.organizations.map((org) => `<option value="${e(org.id)}">${e(org.name)}</option>`).join("")}</select></label><label>Site URL<input type="url" name="site_url" placeholder="https://your-site.com" required maxlength="2048"></label><p>Use HTTPS, or localhost for development. Add each staging and production origin separately.</p><button class="btn btn-primary" type="submit">Create install snippet</button></form></section>${input.projects.length ? `<details><summary>Manage existing connections</summary><ul>${input.projects.map((project) => `<li><a href="/embed/install?project_id=${e(project.id)}">${e(project.name)}</a></li>`).join("")}</ul></details>` : ""}${installations}${accentScript}</div>`;
+}
+
+const THEME_LABELS = {
+  auto: "Match the visitor's system",
+  light: "Light",
+  dark: "Dark",
+} as const;
+const POSITION_LABELS = {
+  "bottom-right": "Bottom right",
+  "bottom-left": "Bottom left",
+  "top-right": "Top right",
+  "top-left": "Top left",
+} as const;
+
+// How the widget looks on this site: theme, accent and default corner. It
+// changes Shiplet's frames and the widget only, never the site's own page.
+function appearancePanel(
+  installation: EmbedInstallationRecord,
+  e: (value: string) => string,
+) {
+  const appearance = readEmbedAppearance(installation.appearance);
+  const theme = appearance?.theme ?? "auto";
+  const accent = appearance?.accent ?? EMBED_DEFAULT_ACCENT;
+  const position = appearance?.position ?? "bottom-right";
+  const options = <T extends string>(labels: Record<T, string>, selected: T) =>
+    (Object.keys(labels) as T[])
+      .map(
+        (value) =>
+          `<option value="${e(value)}"${value === selected ? " selected" : ""}>${e(labels[value])}</option>`,
+      )
+      .join("");
+  const current = appearance
+    ? `Now: ${THEME_LABELS[appearance.theme]}, accent ${appearance.accent}, ${POSITION_LABELS[appearance.position].toLowerCase()}.`
+    : "Now: Shiplet's default look.";
+  return `<div class="embed-appearance"><h3>Appearance</h3><p>Make the widget look like part of this site. It changes Shiplet's toolbar, panels and comment pins, not your page. Reviewers can still move the toolbar to another corner for themselves.</p><p>${e(current)}</p><form method="post" action="/embed/install"><input type="hidden" name="project_id" value="${e(installation.project_id)}"><input type="hidden" name="installation_id" value="${e(installation.id)}"><label>Theme <select name="theme">${options(THEME_LABELS, theme)}</select></label> <label>Accent color <span style="display:flex;align-items:center;gap:8px"><input type="color" name="accent" value="${e(accent)}" data-embed-accent style="width:64px;height:40px;padding:2px"> <span data-embed-accent-hex>${e(accent)}</span></span></label> <label>Position <select name="position">${options(POSITION_LABELS, position)}</select></label> <button class="btn btn-primary" name="action" value="appearance_save">Save appearance</button> <button class="btn btn-secondary" name="action" value="appearance_reset">Reset to Shiplet's default</button></form></div>`;
 }
 
 // Public visitor feedback for one connected site: off by default, and only

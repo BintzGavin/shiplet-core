@@ -16,6 +16,8 @@ function escapeHtml(value: string) {
 export function visitorFrameResponse(input: {
 	origin: string;
 	installation: Pick<EmbedInstallationRecord, "id" | "site_origin" | "site_name">;
+	// The installation's /api/embed/theme.css, on Shiplet's own origin.
+	themeStylesheetUrl: string;
 	pageUrl: string;
 	siteKey: string;
 	nonce: string;
@@ -23,7 +25,7 @@ export function visitorFrameResponse(input: {
 }) {
 	const { origin, installation, nonce } = input;
 	const e = escapeHtml;
-	const html = `<!doctype html><html lang="en" data-shiplet-visitor-frame="v1" data-installation-id="${e(installation.id)}" data-site-origin="${e(installation.site_origin)}" data-page-url="${e(input.pageUrl)}" data-site-key="${e(input.siteKey)}"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Feedback</title><link rel="stylesheet" href="${origin}/api/embed/visitor.css?v=${VISITOR_FRAME_VERSION}"><script src="${origin}/api/embed/visitor.js?v=${VISITOR_FRAME_VERSION}" nonce="${nonce}" defer></script><script src="${TURNSTILE_ORIGIN}/turnstile/v0/api.js?render=explicit" nonce="${nonce}" async defer></script></head><body><main class="visitor" aria-labelledby="visitorTitle"><header class="visitor-head"><h1 id="visitorTitle">Feedback for ${e(installation.site_name || new URL(installation.site_origin).hostname)}</h1><a class="visitor-close" href="${e(input.backUrl)}" data-visitor-close>Close</a></header><p class="visitor-lede">No account needed. Your note goes to the team behind this site, marked as from a visitor. Don't include passwords or personal details.</p><section data-visitor-step="check"><p class="visitor-hint">First, a quick check that you are a person.</p><div id="visitorCheck"></div><button type="button" data-visitor-retry hidden>Try again</button></section><section data-visitor-step="note" hidden><form data-visitor-note><label for="visitorNote">Your note about this page</label><textarea id="visitorNote" rows="4" maxlength="2000" required></textarea><button type="submit">Send note</button></form><p role="status" data-visitor-note-status></p></section><section data-visitor-step="chat" hidden aria-labelledby="visitorChatTitle"><h2 id="visitorChatTitle">Ask <span data-visitor-agent></span></h2><p class="visitor-hint">An AI agent is answering visitors right now. It can make mistakes.</p><ol class="visitor-lines" aria-live="polite" data-visitor-lines></ol><form data-visitor-chat><label for="visitorAsk">Your question</label><textarea id="visitorAsk" rows="2" maxlength="2000" required></textarea><button type="submit">Ask</button></form></section><p role="alert" class="visitor-error" data-visitor-error hidden></p></main></body></html>`;
+	const html = `<!doctype html><html lang="en" data-shiplet-visitor-frame="v1" data-installation-id="${e(installation.id)}" data-site-origin="${e(installation.site_origin)}" data-page-url="${e(input.pageUrl)}" data-site-key="${e(input.siteKey)}"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Feedback</title><link rel="stylesheet" href="${origin}/api/embed/visitor.css?v=${VISITOR_FRAME_VERSION}"><link rel="stylesheet" href="${e(input.themeStylesheetUrl)}"><script src="${origin}/api/embed/visitor.js?v=${VISITOR_FRAME_VERSION}" nonce="${nonce}" defer></script><script src="${TURNSTILE_ORIGIN}/turnstile/v0/api.js?render=explicit" nonce="${nonce}" async defer></script></head><body><main class="visitor" aria-labelledby="visitorTitle"><header class="visitor-head"><h1 id="visitorTitle">Feedback for ${e(installation.site_name || new URL(installation.site_origin).hostname)}</h1><a class="visitor-close" href="${e(input.backUrl)}" data-visitor-close>Close</a></header><p class="visitor-lede">No account needed. Your note goes to the team behind this site, marked as from a visitor. Don't include passwords or personal details.</p><section data-visitor-step="check"><p class="visitor-hint">First, a quick check that you are a person.</p><div id="visitorCheck"></div><button type="button" data-visitor-retry hidden>Try again</button></section><section data-visitor-step="note" hidden><form data-visitor-note><label for="visitorNote">Your note about this page</label><textarea id="visitorNote" rows="4" maxlength="2000" required></textarea><button type="submit">Send note</button></form><p role="status" data-visitor-note-status></p></section><section data-visitor-step="chat" hidden aria-labelledby="visitorChatTitle"><h2 id="visitorChatTitle">Ask <span data-visitor-agent></span></h2><p class="visitor-hint">An AI agent is answering visitors right now. It can make mistakes.</p><ol class="visitor-lines" aria-live="polite" data-visitor-lines></ol><form data-visitor-chat><label for="visitorAsk">Your question</label><textarea id="visitorAsk" rows="2" maxlength="2000" required></textarea><button type="submit">Ask</button></form></section><p role="alert" class="visitor-error" data-visitor-error hidden></p></main></body></html>`;
 	return new Response(html, {
 		status: 200,
 		headers: {
@@ -48,19 +50,19 @@ export function visitorFrameResponse(input: {
 	});
 }
 
-export const VISITOR_FRAME_CSS = `:root{color-scheme:light dark;--bg:#fbfaf7;--text:#1f2933;--soft:#52606d;--line:#d9d4c7;--accent:#c2563b;--err:#b42318}
-@media(prefers-color-scheme:dark){:root{--bg:#1b1f24;--text:#eef1f4;--soft:#a7b1bc;--line:#3a424c;--accent:#e07a5f;--err:#f97066}}
-*{box-sizing:border-box}html,body{margin:0;height:100%;background:var(--bg);color:var(--text);font:15px/1.45 system-ui,-apple-system,sans-serif}
-.visitor{display:grid;gap:12px;align-content:start;height:100%;overflow-y:auto;padding:16px;border:1px solid var(--line);border-radius:12px}
+export const VISITOR_FRAME_CSS = `:root{color-scheme:light dark;--shiplet-surface:#fbfaf7;--shiplet-ink:#1f2933;--shiplet-muted:#52606d;--shiplet-line:#d9d4c7;--shiplet-action:#c2563b;--shiplet-on-action:#fff;--shiplet-action-hover:#c2563b;--shiplet-focus:#c2563b;--shiplet-danger:#b42318}
+@media(prefers-color-scheme:dark){:root{--shiplet-surface:#1b1f24;--shiplet-ink:#eef1f4;--shiplet-muted:#a7b1bc;--shiplet-line:#3a424c;--shiplet-action:#e07a5f;--shiplet-action-hover:#e07a5f;--shiplet-focus:#e07a5f;--shiplet-danger:#f97066}}
+*{box-sizing:border-box}html,body{margin:0;height:100%;background:var(--shiplet-surface);color:var(--shiplet-ink);font:15px/1.45 system-ui,-apple-system,sans-serif}
+.visitor{display:grid;gap:12px;align-content:start;height:100%;overflow-y:auto;padding:16px;border:1px solid var(--shiplet-line);border-radius:12px}
 .visitor-head{display:flex;justify-content:space-between;align-items:baseline;gap:12px}.visitor-head h1{margin:0;font-size:17px}
-.visitor-close{color:var(--soft);font-size:14px}.visitor-lede,.visitor-hint{margin:0;color:var(--soft);font-size:13px}
+.visitor-close{color:var(--shiplet-muted);font-size:14px}.visitor-lede,.visitor-hint{margin:0;color:var(--shiplet-muted);font-size:13px}
 section{display:grid;gap:8px}section[hidden],[hidden]{display:none!important}h2{margin:8px 0 0;font-size:15px}
-form{display:grid;gap:6px}label{font-weight:600;font-size:13px}textarea{width:100%;font:inherit;color:inherit;background:transparent;border:1px solid var(--line);border-radius:8px;padding:8px;resize:vertical}
-button{justify-self:start;font:inherit;font-weight:600;color:#fff;background:var(--accent);border:0;border-radius:8px;padding:7px 14px;cursor:pointer}button:disabled{opacity:.6;cursor:default}
-button:focus-visible,textarea:focus-visible,a:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
-.visitor-lines{display:grid;gap:6px;margin:0;padding:0;list-style:none;max-height:180px;overflow-y:auto}.visitor-lines li{padding:6px 10px;border:1px solid var(--line);border-radius:8px;max-width:90%;overflow-wrap:anywhere}
-.visitor-lines li[data-mine]{justify-self:end}.visitor-lines strong{display:block;font-size:12px;color:var(--soft)}
-.visitor-error{margin:0;color:var(--err);font-size:13px}[data-visitor-note-status]{margin:0;font-size:13px}`;
+form{display:grid;gap:6px}label{font-weight:600;font-size:13px}textarea{width:100%;font:inherit;color:inherit;background:transparent;border:1px solid var(--shiplet-line);border-radius:8px;padding:8px;resize:vertical}
+button{justify-self:start;font:inherit;font-weight:600;color:var(--shiplet-on-action);background:var(--shiplet-action);border:0;border-radius:8px;padding:7px 14px;cursor:pointer}button:hover{background:var(--shiplet-action-hover)}button:disabled{opacity:.6;cursor:default}
+button:focus-visible,textarea:focus-visible,a:focus-visible{outline:2px solid var(--shiplet-focus);outline-offset:2px}
+.visitor-lines{display:grid;gap:6px;margin:0;padding:0;list-style:none;max-height:180px;overflow-y:auto}.visitor-lines li{padding:6px 10px;border:1px solid var(--shiplet-line);border-radius:8px;max-width:90%;overflow-wrap:anywhere}
+.visitor-lines li[data-mine]{justify-self:end}.visitor-lines strong{display:block;font-size:12px;color:var(--shiplet-muted)}
+.visitor-error{margin:0;color:var(--shiplet-danger);font-size:13px}[data-visitor-note-status]{margin:0;font-size:13px}`;
 
 // Plain script, no framework. Every value from the server or the agent is set
 // with textContent, never as HTML.

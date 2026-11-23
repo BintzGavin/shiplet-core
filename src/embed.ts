@@ -15,6 +15,8 @@ export type EmbedInstallationRecord = {
   created_on: string;
   last_used_on: string | null;
   revoked_on: string | null;
+  // The widget Appearance as JSON; read it with readEmbedAppearance.
+  appearance?: string | null;
 };
 
 type EmbedExchangeCodeRecord = {
