@@ -307,5 +307,8 @@ describe("visitor feedback on a public website", () => {
 		const script = await (await request("/api/embed/visitor.js")).text();
 		expect(script).not.toContain("innerHTML");
 		expect(script).toContain('action: "visitor"');
+		// A failed check waits for the person; it never resets Turnstile on its own.
+		const exchange = script.slice(script.indexOf("async function exchange"), script.indexOf("function renderCheck"));
+		expect(exchange).not.toContain("turnstile.reset");
 	});
 });

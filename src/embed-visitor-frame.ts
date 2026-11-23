@@ -23,7 +23,7 @@ export function visitorFrameResponse(input: {
 }) {
 	const { origin, installation, nonce } = input;
 	const e = escapeHtml;
-	const html = `<!doctype html><html lang="en" data-shiplet-visitor-frame="v1" data-installation-id="${e(installation.id)}" data-site-origin="${e(installation.site_origin)}" data-page-url="${e(input.pageUrl)}" data-site-key="${e(input.siteKey)}"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Feedback</title><link rel="stylesheet" href="${origin}/api/embed/visitor.css"><script src="${origin}/api/embed/visitor.js" nonce="${nonce}" defer></script><script src="${TURNSTILE_ORIGIN}/turnstile/v0/api.js?render=explicit" nonce="${nonce}" async defer></script></head><body><main class="visitor" aria-labelledby="visitorTitle"><header class="visitor-head"><h1 id="visitorTitle">Feedback for ${e(installation.site_name || new URL(installation.site_origin).hostname)}</h1><a class="visitor-close" href="${e(input.backUrl)}" data-visitor-close>Close</a></header><p class="visitor-lede">No account needed. Your note goes to the team behind this site, marked as from a visitor. Don't include passwords or personal details.</p><section data-visitor-step="check"><p class="visitor-hint">First, a quick check that you are a person.</p><div id="visitorCheck"></div></section><section data-visitor-step="note" hidden><form data-visitor-note><label for="visitorNote">Your note about this page</label><textarea id="visitorNote" rows="4" maxlength="2000" required></textarea><button type="submit">Send note</button></form><p role="status" data-visitor-note-status></p></section><section data-visitor-step="chat" hidden aria-labelledby="visitorChatTitle"><h2 id="visitorChatTitle">Ask <span data-visitor-agent></span></h2><p class="visitor-hint">An AI agent is answering visitors right now. It can make mistakes.</p><ol class="visitor-lines" aria-live="polite" data-visitor-lines></ol><form data-visitor-chat><label for="visitorAsk">Your question</label><textarea id="visitorAsk" rows="2" maxlength="2000" required></textarea><button type="submit">Ask</button></form></section><p role="alert" class="visitor-error" data-visitor-error hidden></p></main></body></html>`;
+	const html = `<!doctype html><html lang="en" data-shiplet-visitor-frame="v1" data-installation-id="${e(installation.id)}" data-site-origin="${e(installation.site_origin)}" data-page-url="${e(input.pageUrl)}" data-site-key="${e(input.siteKey)}"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Feedback</title><link rel="stylesheet" href="${origin}/api/embed/visitor.css?v=${VISITOR_FRAME_VERSION}"><script src="${origin}/api/embed/visitor.js?v=${VISITOR_FRAME_VERSION}" nonce="${nonce}" defer></script><script src="${TURNSTILE_ORIGIN}/turnstile/v0/api.js?render=explicit" nonce="${nonce}" async defer></script></head><body><main class="visitor" aria-labelledby="visitorTitle"><header class="visitor-head"><h1 id="visitorTitle">Feedback for ${e(installation.site_name || new URL(installation.site_origin).hostname)}</h1><a class="visitor-close" href="${e(input.backUrl)}" data-visitor-close>Close</a></header><p class="visitor-lede">No account needed. Your note goes to the team behind this site, marked as from a visitor. Don't include passwords or personal details.</p><section data-visitor-step="check"><p class="visitor-hint">First, a quick check that you are a person.</p><div id="visitorCheck"></div><button type="button" data-visitor-retry hidden>Try again</button></section><section data-visitor-step="note" hidden><form data-visitor-note><label for="visitorNote">Your note about this page</label><textarea id="visitorNote" rows="4" maxlength="2000" required></textarea><button type="submit">Send note</button></form><p role="status" data-visitor-note-status></p></section><section data-visitor-step="chat" hidden aria-labelledby="visitorChatTitle"><h2 id="visitorChatTitle">Ask <span data-visitor-agent></span></h2><p class="visitor-hint">An AI agent is answering visitors right now. It can make mistakes.</p><ol class="visitor-lines" aria-live="polite" data-visitor-lines></ol><form data-visitor-chat><label for="visitorAsk">Your question</label><textarea id="visitorAsk" rows="2" maxlength="2000" required></textarea><button type="submit">Ask</button></form></section><p role="alert" class="visitor-error" data-visitor-error hidden></p></main></body></html>`;
 	return new Response(html, {
 		status: 200,
 		headers: {
@@ -119,8 +119,10 @@ export const VISITOR_FRAME_SCRIPT = String.raw`(() => {
 				poll();
 			}
 		} catch (error) {
+			// Never retry on its own: a check that passes without interaction
+			// would otherwise resubmit in a loop. The person asks for another try.
 			showError(error.message);
-			if (window.turnstile && widgetId !== null) window.turnstile.reset(widgetId);
+			if (!token) $("[data-visitor-retry]").hidden = false;
 		}
 	}
 
@@ -204,7 +206,22 @@ export const VISITOR_FRAME_SCRIPT = String.raw`(() => {
 		}
 	});
 
+	$("[data-visitor-retry]").addEventListener("click", (event) => {
+		if (!event.isTrusted) return;
+		event.currentTarget.hidden = true;
+		showError("");
+		if (window.turnstile && widgetId !== null) window.turnstile.reset(widgetId);
+	});
 	$("[data-visitor-close]").addEventListener("click", () => notify("toolbar"));
 	notify("expanded");
 	renderCheck();
 })();`;
+
+// Changes whenever the script or styles change, so a cached copy is never reused after a deploy.
+export const VISITOR_FRAME_VERSION = contentVersion(VISITOR_FRAME_SCRIPT + VISITOR_FRAME_CSS);
+
+function contentVersion(text: string) {
+	let hash = 5381;
+	for (let index = 0; index < text.length; index++) hash = ((hash << 5) + hash + text.charCodeAt(index)) >>> 0;
+	return hash.toString(36);
+}
