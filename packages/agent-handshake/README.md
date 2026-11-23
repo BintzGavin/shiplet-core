@@ -4,7 +4,8 @@ Lets running agent sessions (Claude Code, Codex, or anything else that can load
 an MCP server) talk to each other while they work. This package is the local
 version: every session on one machine talks through a broker on a unix socket.
 Shiplet also hosts the same hub as a relay, so agents on different machines in
-one organization can talk (see [The hosted relay](#the-hosted-relay)).
+one organization can talk, and this package's MCP server can join it (see
+[The hosted relay](#the-hosted-relay)).
 
 Messages stay in memory only until the receiving session reads them. Nothing is
 written to disk unless you turn on the log or export a handshake as a Shiplet
@@ -228,10 +229,14 @@ The package uses the root's `@modelcontextprotocol/sdk` and `zod`.
 | `SHIPLET_HANDSHAKE_LOG` | unset | If set to a file path, the broker appends every message to it as JSON Lines (mode 0600). Off by default. |
 | `SHIPLET_HANDSHAKE_IDLE_MS` | `30000` | How long the broker waits with no clients before it exits |
 | `SHIPLET_HANDSHAKE_MAX_AUTO_TURNS` | `25` | Consecutive Stop-hook deliveries before waiting for the user |
+| `SHIPLET_API_URL` | unset | Shiplet origin for the hosted relay. The relay is used only when this and the next two are all set. See [Connecting a session to the relay](#connecting-a-session-to-the-relay). |
+| `SHIPLET_ORGANIZATION_ID` | unset | Organization whose relay the session joins |
+| `SHIPLET_API_KEY` | unset | Organization API key with the `mcp` scope |
 
 The log and the broker options are read by the broker. The first MCP server to
 start passes its own environment to the broker, so set them in the MCP
-server's `env`.
+server's `env`. The three `SHIPLET_` relay variables are read by each MCP
+server, so set them in its `env` as well.
 
 ## Export a handshake as a Shiplet trace
 
@@ -272,13 +277,17 @@ src/core/        transport-neutral: protocol.js (shapes, limits, model formattin
                  client.js (HandshakeClient over a Transport), hooks.js, trace.js
 src/mcp/         the MCP server (uses HandshakeClient only)
 src/transports/local/   transport #1: unix-socket broker + client
+src/transports/relay/   the hosted relay: HTTPS calls + push WebSocket (connectRelay)
 ```
+
+The relay client is not a `Transport`. The MCP server stays registered on the
+local broker and passes relay messages to its own peer with the `inject` op.
 
 A transport is anything with this shape:
 
 ```js
 interface Transport {
-  request(op, args): Promise<object>   // ops: register, whoami, peers, send, read, export, ping
+  request(op, args): Promise<object>   // ops: register, whoami, peers, send, read, export, inject, ping
   close(): void
   onClose(callback): void
 }
@@ -435,9 +444,57 @@ Limits:
 - The conversation lives in the browser tab (`sessionStorage`), shared by the
   dashboard and review pages of that tab. The widget's frame keeps its own.
 
-Still open: a relay transport for this package (`connectRelay`), so the MCP
-server and hooks can push relay messages into a session the way they do
-locally. Until then, agents use the relay through Shiplet MCP.
+### Connecting a session to the relay
+
+The MCP server in this package can join the relay too, so a session talks to
+local peers and relay peers with the same tools. Set three variables in the
+MCP server's `env` (the hooks need none of them):
+
+- `SHIPLET_API_URL`: the Shiplet origin, such as `https://shiplet.cc`. It must
+  be HTTPS; plain HTTP is allowed only for localhost.
+- `SHIPLET_ORGANIZATION_ID`: the organization to join.
+- `SHIPLET_API_KEY`: an organization API key with the `mcp` scope.
+
+If any of the three is missing, the server never contacts the relay and works
+exactly as it does locally.
+
+With all three set, the server registers locally as before, then opens a relay
+session under the same name, kind, app and machine. Nothing else about the
+session (its id, cwd or pid) is sent. It holds a WebSocket to the relay, and
+hands every message pushed on it to its own local peer, marked `via="relay"`
+with the sender's `account`. From there, hooks and `read_inbox` deliver it like
+a local message:
+
+- A Claude Code session that is idle with the `asyncRewake` Stop hook is woken
+  by a relay message, the same way it is woken by a local one.
+- Codex still sees relay messages only on its next turn (or when it calls
+  `read_inbox`).
+
+The tools with the relay on:
+
+- `list_peers` adds the relay's peers, marked `where: "relay"`, with the
+  Shiplet `account` each acts for. This session's own relay peer is left out.
+- `send` goes to the relay when `to` is a relay peer id, when `room` is a relay
+  handshake (one this session received a message in or sent to), or when `to`
+  names a relay peer and no local peer has that name. A local peer wins a name
+  clash; use the relay peer's id to reach the other one. `room` is passed to the
+  relay as `handshake`.
+- `whoami` adds `relay: { session, peerId }`.
+- `export_handshake` does not export relay handshakes. Use Shiplet MCP for
+  those.
+- `register` changes the local peer only.
+
+If the socket drops, the server reconnects with a new ticket after 1 s,
+doubling the wait up to 30 s. It pings every 30 s so a dead connection is
+noticed. If the relay reports the session gone (`session_not_found`, after a
+restart or 10 idle minutes without a socket), the server opens a new session,
+so its relay peer id changes. When the server exits, it closes its relay
+session. Errors go to the server's stderr. The API key is sent only in the
+`Authorization` header of relay calls. It is never logged and never appears in
+tool output, but it does sit in the MCP config file, so keep that file private.
+
+Not yet tried against the deployed relay. The tests run against a fake relay
+in the test process.
 
 ## Security (local transport)
 
@@ -457,7 +514,7 @@ locally. Until then, agents use the relay through Shiplet MCP.
 ## Development
 
 ```sh
-npm test          # from this directory: hub unit tests, handshake tests, and two real MCP processes over a real broker
+npm test          # from this directory: hub unit tests, handshake tests, two real MCP processes over a real broker, and the relay bridge against a fake relay
 npm run check     # syntax check
 ```
 
