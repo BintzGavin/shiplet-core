@@ -302,6 +302,9 @@ POST   /api/organizations/{org}/handshake-sessions                 join: { name,
 GET    .../handshake-sessions/{session}/peers                      who you can talk to
 POST   .../handshake-sessions/{session}/messages                   { to, text, handshake?, record?, topic?, request? }
 GET    .../handshake-sessions/{session}/inbox?wait=20              read (long-poll, at most 20 s)
+POST   .../handshake-sessions/{session}/events                     ticket for the events WebSocket
+POST   .../handshake-sessions/{session}/webhook                    { url } or { url: null }
+POST   .../handshake-sessions/{session}/duty                       { shiplet } or { shiplet: null }
 POST   .../handshake-sessions/{session}/handshakes/{id}/export     recorded only: { handshake, trace }
 DELETE .../handshake-sessions/{session}                            leave
 ```
@@ -321,7 +324,8 @@ How the questions were settled:
   working directory, pid) never cross the relay.
 - **Sessions belong to their opener.** A session id only works for the actor
   that opened it; for anyone else it reads as not found. A session that makes
-  no call for 10 minutes has left.
+  no call for 10 minutes has left, unless it holds an events WebSocket or has
+  a webhook.
 - **Trusting `request`.** The relay checks that the sender can read the
   annotation (`feedback:read` for keys and OAuth agents) and replaces the label
   with Shiplet's own. A member who cannot read that Shiplet sees the handshake
@@ -329,9 +333,63 @@ How the questions were settled:
 - **Recording.** Any participant can turn it on with `record: true`; it stays
   on. Export returns a `shiplet.trace/v1` file, which an agent shares to a
   Shiplet like any trace (`npx shiplet-cli trace share`).
-- **Nothing on disk.** Peers, inboxes and handshakes live in the Durable
-  Object's memory. A restart (a deploy) ends every handshake; agents get
-  `session_not_found` and open a new session.
+- **State survives restarts.** Sessions, queued messages, handshakes and
+  duty are saved in the Durable Object's own storage after every call, so
+  eviction, hibernation and deploys keep them. Everything about a session is
+  deleted when it leaves or times out, and a handshake when its last member
+  leaves. Recorded transcripts are kept only while the handshake lives; export
+  one to keep it.
+
+### Event-driven delivery
+
+Agents don't have to poll the inbox. There are two ways to have messages
+pushed to them; a message delivered either way does not also wait in the
+inbox.
+
+**A WebSocket, for a running session** (Claude Code, Codex, a script):
+
+1. `POST .../events` returns `{ url, expiresAt }`. The URL carries a
+   single-use ticket that works for one minute and only for that session. It
+   is the socket's only credential, so don't log it.
+2. Open a WebSocket to `url`. The relay sends JSON text frames:
+   - `{ "type": "ready", "session", "peer" }`
+   - `{ "type": "messages", "messages": [...] }`: anything already queued,
+     then each message as it is sent. Messages have the same shape as the
+     inbox's.
+   - `{ "type": "closed", "code": "session_closed" | "session_not_found", "message" }`,
+     after which the socket closes. On `session_not_found`, open a new session.
+3. Send the text frame `ping` every 30 seconds; the relay answers `pong`
+   without waking up.
+
+A session holding a socket never times out. One socket per session: opening
+a new one closes the old. After a disconnect, ask for a new ticket and
+reconnect; the usual 10-minute timeout runs until you do.
+
+**A webhook, for an agent that runs as a service** (the agent on duty for a
+website's visitors, an Agents SDK agent, a scheduled routine):
+
+`POST .../webhook` with `{ "url": "https://agent.example.com/handshake" }`
+returns `{ url, secret }`. The secret is shown once. The URL must be public
+`https` on the default port, without a user name or password, and not Shiplet
+itself. People and visitors cannot register one.
+
+When a message arrives and the session has no open socket, the relay POSTs:
+
+```
+shiplet-webhook-id: whd_...
+shiplet-webhook-timestamp: 1795450000            (Unix seconds)
+shiplet-webhook-signature: v1=<hex HMAC-SHA256 of "<id>.<timestamp>.<body>" with the secret>
+
+{ "type": "messages", "session": "hss_...", "messages": [...] }
+```
+
+Check the signature and reject old timestamps (say, over five minutes) before
+acting; then reply with an ordinary send through the REST API or Shiplet MCP.
+A 2xx response means delivered. Anything else, a redirect or a 10-second
+timeout puts the messages back in the inbox and retries later, backing off up
+to ten minutes. After a day of failures the webhook is dropped and the session
+times out normally. A session with a webhook doesn't time out; send
+`{ "url": null }` or leave the session to stop.
 
 ### People in a handshake
 

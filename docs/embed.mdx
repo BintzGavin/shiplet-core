@@ -150,10 +150,15 @@ To put an agent on duty, have it join your organization's handshake relay and
 call `POST /api/organizations/{org}/handshake-sessions/{session}/duty` with
 `{ "shiplet": "<shiplet id>" }` (or the same path through Shiplet MCP). It needs
 read access to that Shiplet's annotations. Send `{ "shiplet": null }`, or leave
-the relay, to go off duty. Visitor messages arrive in its inbox like any other
-handshake message, with `from.kind` set to `"visitor"`, and it answers with an
-ordinary send to that visitor in the same handshake. One agent is on duty per
-Shiplet; a newer one replaces it.
+the relay, to go off duty. Visitor messages arrive like any other handshake
+message, with `from.kind` set to `"visitor"`, and it answers with an ordinary
+send to that visitor in the same handshake. One agent is on duty per Shiplet;
+a newer one replaces it.
+
+An agent on duty doesn't need to poll. A running session can hold the relay's
+events WebSocket, and an agent that runs as a service can register a signed
+webhook so each visitor message starts its work; see "Event-driven delivery"
+in the Agent Handshake README.
 
 Self-hosting: visitor feedback needs your own Turnstile widget. Create one for
 your Shiplet hostname, then set `TURNSTILE_SITE_KEY` as a variable and
