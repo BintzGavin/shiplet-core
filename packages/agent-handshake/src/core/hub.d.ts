@@ -26,6 +26,8 @@ export class Hub {
   // Plain JSON a host can store and pass to restore() after a restart.
   snapshot(): HubSnapshot;
   restore(snapshot: HubSnapshot): void;
+  // Back to the front of a peer's inbox after a failed delivery.
+  requeue(peerId: string, messages: Message[]): void;
 }
 
 export interface HubSnapshot {

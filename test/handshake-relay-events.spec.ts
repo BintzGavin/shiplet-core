@@ -2,7 +2,7 @@
 // evicted, hibernated or redeployed, and an agent can hold a WebSocket that
 // receives each message the moment it is sent instead of polling its inbox.
 import { createExecutionContext, env, runInDurableObject, waitOnExecutionContext } from "cloudflare:test";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import app from "../src/index";
 import { HandshakeRelay } from "../src/handshakes/relay";
 
@@ -219,4 +219,112 @@ describe("agents receive messages over a WebSocket", () => {
 			expect((await request(`${base}/hss_missing/events?ticket=hset_${"0".repeat(48)}`, { headers: { Upgrade: "websocket" } })).status).toBe(403);
 		});
 	});
+});
+
+// Service agents (the agent on duty for visitors, an Agents SDK agent, a cloud
+// routine) have no session open to hold a socket. The relay calls their webhook.
+const HOOK = "https://agent.shiplet-tests.dev/handshake";
+const realFetch = globalThis.fetch;
+// Read inside the stub: a body made in the relay cannot be read from the test.
+const hookCalls: Array<{ method: string; headers: Headers; body: string }> = [];
+let hookStatus = 200;
+function stubHook() {
+	globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+		const call = new Request(input, init);
+		if (call.url === HOOK) {
+			hookCalls.push({ method: call.method, headers: new Headers(call.headers), body: await call.text() });
+			return new Response(null, { status: hookStatus });
+		}
+		return realFetch(input, init);
+	}) as typeof fetch;
+}
+afterEach(() => {
+	globalThis.fetch = realFetch;
+	hookCalls.length = 0;
+	hookStatus = 200;
+});
+
+async function eventually<T>(check: () => Promise<T | undefined> | T | undefined) {
+	for (let attempt = 0; attempt < 40; attempt++) {
+		const value = await check();
+		if (value !== undefined) return value;
+		await new Promise((resolve) => setTimeout(resolve, 50));
+	}
+	throw new Error("timed out");
+}
+
+async function hmac(secret: string, text: string) {
+	const key = await crypto.subtle.importKey("raw", new TextEncoder().encode(secret), { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
+	return [...new Uint8Array(await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(text)))].map((byte) => byte.toString(16).padStart(2, "0")).join("");
+}
+
+describe("service agents receive messages through a signed webhook", () => {
+	it("delivers each message to a public https URL, signed with a secret shown once", () =>
+		withHandshakes(async () => {
+			stubHook();
+			const { organizationId, builder, reviewer } = await organizationWithKeys();
+			const base = `/api/organizations/${organizationId}/handshake-sessions`;
+			const service = await join(organizationId, reviewer, "support");
+			const talker = await join(organizationId, builder, "builder");
+
+			for (const url of ["http://agent.shiplet-tests.dev/x", "https://10.0.0.8/x", "https://localhost/x", "https://user:pw@agent.shiplet-tests.dev/x", "https://agent.shiplet-tests.dev:8443/x", "not a url"]) {
+				expect((await request(`${base}/${service.session}/webhook`, json(reviewer, { url }))).status, url).toBe(400);
+			}
+			// Only the session's own actor.
+			expect((await request(`${base}/${service.session}/webhook`, json(builder, { url: HOOK }))).status).toBe(404);
+			const registered = await request(`${base}/${service.session}/webhook`, json(reviewer, { url: HOOK }));
+			expect(registered.status).toBe(201);
+			const { secret } = (await registered.json()) as { url: string; secret: string };
+			expect(secret).toMatch(/^whsec_[a-f0-9]{64}$/);
+
+			expect((await request(`${base}/${talker.session}/messages`, json(builder, { to: service.peer.id, text: "Can you check checkout?" }))).status).toBe(200);
+			const call = await eventually(() => hookCalls[0]);
+			expect(call.method).toBe("POST");
+			const id = call.headers.get("shiplet-webhook-id")!;
+			const timestamp = call.headers.get("shiplet-webhook-timestamp")!;
+			const body = call.body;
+			expect(Math.abs(Number(timestamp) * 1000 - Date.now())).toBeLessThan(60_000);
+			expect(call.headers.get("shiplet-webhook-signature")).toBe(`v1=${await hmac(secret, `${id}.${timestamp}.${body}`)}`);
+			const payload = JSON.parse(body) as { type: string; session: string; messages: Array<{ text: string; from: { account: string; cwd: null } }> };
+			expect(payload).toMatchObject({ type: "messages", session: service.session });
+			expect(payload.messages).toHaveLength(1);
+			expect(payload.messages[0]).toMatchObject({ text: "Can you check checkout?", from: { account: "Builder key", cwd: null } });
+			// Delivered, so not queued again.
+			const inbox = (await (await request(`${base}/${service.session}/inbox`, { headers: reviewer })).json()) as { messages: unknown[] };
+			expect(inbox.messages).toEqual([]);
+
+			// With a webhook the session stays open between calls.
+			await runInDurableObject(relayStub(`organization:${organizationId}`), async (instance) => {
+				(instance as unknown as { sessions: Map<string, { lastSeen: number }> }).sessions.get(service.session)!.lastSeen = 0;
+			});
+			expect((await request(`${base}/${service.session}/peers`, { headers: reviewer })).status).toBe(200);
+			// Removing it brings back the usual idle timeout.
+			expect((await request(`${base}/${service.session}/webhook`, json(reviewer, { url: null }))).status).toBe(200);
+		}));
+
+	it("keeps a message queued when the webhook fails, for a retry or an inbox read", () =>
+		withHandshakes(async () => {
+			stubHook();
+			hookStatus = 500;
+			const { organizationId, builder, reviewer } = await organizationWithKeys();
+			const base = `/api/organizations/${organizationId}/handshake-sessions`;
+			const service = await join(organizationId, reviewer, "support");
+			const talker = await join(organizationId, builder, "builder");
+			expect((await request(`${base}/${service.session}/webhook`, json(reviewer, { url: HOOK }))).status).toBe(201);
+			await request(`${base}/${talker.session}/messages`, json(builder, { to: service.peer.id, text: "Still there?" }));
+			await eventually(() => hookCalls[0]);
+			const inbox = await eventually(async () => {
+				const read = (await (await request(`${base}/${service.session}/inbox`, { headers: reviewer })).json()) as { messages: Array<{ text: string }> };
+				return read.messages.length ? read : undefined;
+			});
+			expect(inbox.messages.map((message) => message.text)).toEqual(["Still there?"]);
+			// A retry is scheduled rather than hammering a failing endpoint.
+			await runInDurableObject(relayStub(`organization:${organizationId}`), async (instance, state) => {
+				const hook = (instance as unknown as { sessions: Map<string, { webhook?: { failures: number; retryAt: number } }> }).sessions.get(service.session)!.webhook!;
+				expect(hook.failures).toBe(1);
+				expect(hook.retryAt).toBeGreaterThan(Date.now());
+				expect(await state.storage.getAlarm()).toBeLessThanOrEqual(hook.retryAt);
+			});
+			expect(hookCalls).toHaveLength(1);
+		}));
 });

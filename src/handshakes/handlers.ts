@@ -6,6 +6,7 @@
 // an annotation needs read access to that annotation's Shiplet, and anyone
 // listing handshakes sees the annotation only if they can read it too.
 import type { Env } from "../env";
+import { isPublicHostname } from "../external-url-proxy";
 import { AGENT_HANDSHAKES_FLAG, useFeatureFlag } from "../feature-flags";
 import type { AuthenticatedMcpAgentPrincipal } from "../mcp-principal";
 import { canOrganizationApiTokenAccessProject, type OrganizationApiTokenRecord } from "../org-api-tokens";
@@ -114,7 +115,7 @@ async function verifyRequest(env: Env, member: HandshakeMember, request: unknown
 // for the compiler on these result shapes.
 type RelayApi = Pick<
 	HandshakeRelay,
-	"openSession" | "closeSession" | "createEventTicket" | "peers" | "send" | "read" | "exportHandshake" | "list" | "setDuty" | "dutyStatus" | "openVisitor" | "visitorStatus" | "visitorSend" | "visitorRead"
+	"openSession" | "closeSession" | "createEventTicket" | "setWebhook" | "peers" | "send" | "read" | "exportHandshake" | "list" | "setDuty" | "dutyStatus" | "openVisitor" | "visitorStatus" | "visitorSend" | "visitorRead"
 >;
 
 export function relay(env: Env, organizationId: string): RelayApi {
@@ -183,6 +184,39 @@ export async function handleEventTicket(env: Env, member: HandshakeMember, sessi
 	url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
 	url.search = new URLSearchParams({ ticket: result.ticket }).toString();
 	return Response.json({ url: url.toString(), expiresAt: result.expiresAt }, { status: 201, headers: { "cache-control": "no-store" } });
+}
+
+// A service agent's webhook: a public https URL the relay posts its messages
+// to, signed with a secret returned once. { url: null } removes it.
+export async function handleWebhook(env: Env, member: HandshakeMember, sessionId: string, body: unknown, requestUrl: string) {
+	if (embedBinding(member.actor)) return handshakeError(403, "forbidden", "Webhooks are for agents, not the website widget.");
+	const value = record(body).url;
+	if (value === null) return respond(await relay(env, member.organizationId).setWebhook(member.owner, sessionId, null));
+	const url = webhookUrl(value, [new URL(requestUrl).hostname, appHostname(env)]);
+	if (!url) return handshakeError(400, "bad_request", "url must be a public https URL on the default port, without a user name or password.");
+	return respond(await relay(env, member.organizationId).setWebhook(member.owner, sessionId, url), 201);
+}
+
+function webhookUrl(value: unknown, ownHosts: Array<string | null>) {
+	if (typeof value !== "string" || value.length > 2048) return null;
+	let url: URL;
+	try {
+		url = new URL(value);
+	} catch {
+		return null;
+	}
+	if (url.protocol !== "https:" || url.username || url.password || (url.port && url.port !== "443")) return null;
+	if (!isPublicHostname(url.hostname) || ownHosts.includes(url.hostname.toLowerCase())) return null;
+	url.hash = "";
+	return url.toString();
+}
+
+function appHostname(env: Env) {
+	try {
+		return new URL(String((env as { SHIPLET_APP_URL?: string }).SHIPLET_APP_URL ?? "")).hostname.toLowerCase();
+	} catch {
+		return null;
+	}
 }
 
 // Opens the events WebSocket. The relay checks the ticket against the session.

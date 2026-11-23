@@ -12,6 +12,7 @@ import {
 	handleEventSocket,
 	handleEventTicket,
 	handleExport,
+	handleWebhook,
 	handleListHandshakes,
 	handleListPeers,
 	handleOpenSession,
@@ -161,6 +162,13 @@ export function registerHandshakeRoutes(app: Hono<any>, options: HandshakeRouteO
 		const admitted = await member(c, options);
 		if (admitted instanceof Response) return admitted;
 		return handleEventTicket(c.env, admitted, c.req.param("sessionId"), c.req.url);
+	});
+
+	app.post(`${session}/webhook`, async (c) => {
+		const admitted = await member(c, options);
+		if (admitted instanceof Response) return admitted;
+		const body = await readJson(c.req.raw);
+		return body instanceof Response ? body : handleWebhook(c.env, admitted, c.req.param("sessionId"), body, c.req.url);
 	});
 
 	app.get(`${session}/events`, (c) => handleEventSocket(c.env, c.req.param("organizationId"), c.req.param("sessionId"), c.req.raw));

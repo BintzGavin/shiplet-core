@@ -235,7 +235,7 @@ function isPublicIpv6(groups: number[]) {
   );
 }
 
-function isPublicHostname(hostname: string) {
+export function isPublicHostname(hostname: string) {
   const normalized = hostname
     .toLowerCase()
     .replace(/^\[|\]$/g, "")

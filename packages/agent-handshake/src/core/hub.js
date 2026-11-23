@@ -58,6 +58,21 @@ export class Hub {
     }));
   }
 
+  // Puts messages a host took out for delivery back at the front of a peer's
+  // inbox when that delivery failed (the relay's webhooks).
+  requeue(peerId, messages) {
+    const peer = this.peers.get(peerId);
+    if (!peer || !messages.length) return;
+    if (peer.waiter) {
+      const waiter = peer.waiter;
+      peer.waiter = null;
+      this.#finish(waiter, peer, messages);
+      return;
+    }
+    peer.inbox.unshift(...messages);
+    while (peer.inbox.length > LIMITS.inboxMessages) peer.inbox.shift();
+  }
+
   // Read-only lookups for a host that enforces its own rules (the relay).
   findPeer(ref) {
     const peer = this.peers.get(ref) ?? [...this.peers.values()].find((p) => p.name === ref);

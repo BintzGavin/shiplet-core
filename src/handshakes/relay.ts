@@ -56,7 +56,15 @@ export type RelaySendInput = {
 // they last sent (for the rate limits).
 type VisitorScope = { shiplet: string; origin: string; page: string; sent: number[] };
 
-type Session = { id: string; owner: RelayOwner; conn: HubConnection; peerId: string; lastSeen: number; visitor?: VisitorScope };
+// A service agent's webhook. Failing deliveries back off; after a day of
+// failures the webhook is dropped and the session idles out as usual.
+type Webhook = { url: string; secret: string; failures: number; failingSince: number | null; retryAt: number | null };
+
+type Session = { id: string; owner: RelayOwner; conn: HubConnection; peerId: string; lastSeen: number; visitor?: VisitorScope; webhook?: Webhook };
+
+const WEBHOOK_TIMEOUT_MS = 10_000;
+const WEBHOOK_GIVE_UP_MS = 24 * 3_600_000;
+const WEBHOOK_MAX_BACKOFF_MS = 10 * 60_000;
 
 // Visitor limits. Text is counted in characters, after trimming.
 export const VISITOR_TEXT_CHARS = 2000;
@@ -130,6 +138,8 @@ export class HandshakeRelay extends DurableObject<Env> {
 	private contacts = new Map<string, Set<string>>();
 	// Shiplet id -> visitor message times in the last hour.
 	private shipletVisitorSends = new Map<string, number[]>();
+	// Sessions with a webhook delivery in flight, so deliveries stay in order.
+	private delivering = new Set<string>();
 	// Single-use events tickets. In memory only: a ticket outlives a restart by
 	// at most a minute, and the agent asks for another.
 	private tickets = new Map<string, { session: string; expires: number }>();
@@ -339,8 +349,30 @@ export class HandshakeRelay extends DurableObject<Env> {
 
 	async alarm() {
 		this.expire();
+		for (const session of [...this.sessions.values()]) if (session.webhook?.retryAt && session.webhook.retryAt <= Date.now()) {
+			session.webhook.retryAt = null;
+			await this.deliver(session.id);
+		}
 		await this.persist();
 		await this.keepTime();
+	}
+
+	// A service agent's webhook (url: null removes it). The Worker has checked
+	// the URL is public https. The secret is returned once, here.
+	async setWebhook(owner: RelayOwner, id: string, url: string | null): Promise<RelayResult<{ url: string | null; secret?: string }>> {
+		const session = this.use(owner, id);
+		if (!("conn" in session)) return session;
+		const kind = this.hub.findPeer(session.peerId)?.kind;
+		if (session.visitor || kind === "person") return failure(403, "forbidden", "Only agents can receive messages through a webhook.");
+		if (!url) {
+			delete session.webhook;
+			session.lastSeen = Date.now();
+			return { ok: true, url: null };
+		}
+		const secret = `whsec_${[...crypto.getRandomValues(new Uint8Array(32))].map((byte) => byte.toString(16).padStart(2, "0")).join("")}`;
+		session.webhook = { url, secret, failures: 0, failingSince: null, retryAt: null };
+		this.ctx.waitUntil(this.deliver(session.id));
+		return { ok: true, url, secret };
 	}
 
 	// A single-use ticket that opens this session's events WebSocket.
@@ -406,15 +438,21 @@ export class HandshakeRelay extends DurableObject<Env> {
 		return this.ctx.getWebSockets(sessionId).filter((socket) => socket.readyState === SOCKET_OPEN);
 	}
 
-	// Whether a session still counts as connected.
+	// Whether a session still counts as connected: it holds a socket, has a
+	// webhook, or called recently.
 	private alive(session: Session) {
-		return this.sockets(session.id).length > 0 || Date.now() - session.lastSeen <= RELAY_IDLE_MS;
+		return this.held(session) || Date.now() - session.lastSeen <= RELAY_IDLE_MS;
 	}
 
-	// Hands everything queued for a peer to its open socket, if it has one.
+	private held(session: Session) {
+		return this.sockets(session.id).length > 0 || Boolean(session.webhook);
+	}
+
+	// Hands everything queued for a peer to its open socket, or else to its webhook.
 	private async push(peerId: string) {
 		const session = [...this.sessions.values()].find((candidate) => candidate.peerId === peerId);
 		const [socket] = session ? this.sockets(session.id) : [];
+		if (session && !socket && session.webhook) this.ctx.waitUntil(this.deliver(session.id));
 		if (!session || !socket) return;
 		for (;;) {
 			const read = (await session.conn.handle("read", { wait_ms: 0, max: 50, via: "tool" })) as { messages: Message[] };
@@ -433,6 +471,72 @@ export class HandshakeRelay extends DurableObject<Env> {
 				size += length;
 			}
 			flush();
+		}
+	}
+
+	// Posts queued messages to the session's webhook, a batch at a time, in
+	// order. A failed post puts the batch back and schedules a retry.
+	private async deliver(id: string) {
+		if (this.delivering.has(id)) return;
+		this.delivering.add(id);
+		try {
+			for (;;) {
+				const session = this.sessions.get(id);
+				const hook = session?.webhook;
+				if (!session || !hook || this.sockets(id).length || (hook.retryAt && hook.retryAt > Date.now())) return;
+				const read = (await session.conn.handle("read", { wait_ms: 0, max: 50, via: "tool" })) as { messages: Message[] };
+				if (!read.messages.length) return;
+				if (await this.post(hook, id, read.messages.map((message) => this.message(message)))) {
+					Object.assign(hook, { failures: 0, failingSince: null, retryAt: null });
+					await this.persist();
+					continue;
+				}
+				this.hub.requeue(session.peerId, read.messages);
+				hook.failures++;
+				hook.failingSince ??= Date.now();
+				if (Date.now() - hook.failingSince > WEBHOOK_GIVE_UP_MS) {
+					delete session.webhook;
+					session.lastSeen = Date.now();
+				} else {
+					hook.retryAt = Date.now() + Math.min(30_000 * 2 ** (hook.failures - 1), WEBHOOK_MAX_BACKOFF_MS);
+				}
+				await this.persist();
+				await this.keepTime();
+				return;
+			}
+		} finally {
+			this.delivering.delete(id);
+		}
+	}
+
+	// Signed like common webhook schemes: HMAC-SHA256 of "<id>.<timestamp>.<body>".
+	private async post(hook: Webhook, session: string, messages: Message[]) {
+		const id = `whd_${[...crypto.getRandomValues(new Uint8Array(12))].map((byte) => byte.toString(16).padStart(2, "0")).join("")}`;
+		const timestamp = String(Math.floor(Date.now() / 1000));
+		const body = JSON.stringify({ type: "messages", session, messages });
+		const encoder = new TextEncoder();
+		const key = await crypto.subtle.importKey("raw", encoder.encode(hook.secret), { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
+		const signature = [...new Uint8Array(await crypto.subtle.sign("HMAC", key, encoder.encode(`${id}.${timestamp}.${body}`)))]
+			.map((byte) => byte.toString(16).padStart(2, "0"))
+			.join("");
+		try {
+			const response = await fetch(hook.url, {
+				method: "POST",
+				redirect: "manual",
+				signal: AbortSignal.timeout(WEBHOOK_TIMEOUT_MS),
+				headers: {
+					"content-type": "application/json",
+					"user-agent": "Shiplet-Handshake-Webhook/1",
+					"shiplet-webhook-id": id,
+					"shiplet-webhook-timestamp": timestamp,
+					"shiplet-webhook-signature": `v1=${signature}`,
+				},
+				body,
+			});
+			await response.body?.cancel();
+			return response.status >= 200 && response.status < 300;
+		} catch {
+			return false;
 		}
 	}
 
@@ -576,12 +680,15 @@ export class HandshakeRelay extends DurableObject<Env> {
 		for (const peerId of [...this.accounts.keys()]) if (!named.has(peerId)) this.accounts.delete(peerId);
 	}
 
-	// Wakes the relay when the next session without a socket could have idled
-	// out. Sessions holding a socket never idle out, so they need no alarm.
+	// Wakes the relay when the next session without a socket or webhook could
+	// have idled out, or a webhook retry is due.
 	private async keepTime() {
-		const idle = [...this.sessions.values()].filter((session) => !this.sockets(session.id).length);
-		if (!idle.length) return;
-		const due = Math.min(...idle.map((session) => session.lastSeen)) + RELAY_IDLE_MS + 1_000;
+		const times = [...this.sessions.values()].flatMap((session) => [
+			...(this.held(session) ? [] : [session.lastSeen + RELAY_IDLE_MS + 1_000]),
+			...(session.webhook?.retryAt ? [session.webhook.retryAt] : []),
+		]);
+		if (!times.length) return;
+		const due = Math.min(...times);
 		const current = await this.ctx.storage.getAlarm();
 		if (current === null || current > due) await this.ctx.storage.setAlarm(due);
 	}
@@ -633,6 +740,7 @@ const SAVED_AFTER = [
 	"exportHandshake",
 	"list",
 	"createEventTicket",
+	"setWebhook",
 ] as const;
 for (const name of SAVED_AFTER) {
 	const original = HandshakeRelay.prototype[name] as (...args: unknown[]) => Promise<unknown>;
