@@ -9,7 +9,9 @@ export function embedAuthBootstrapScript() {
     const installation = new URL(location.href).searchParams.get("installation_id") || "";
     const registeredPage = new URL(location.href).searchParams.get("return_url");
     let siteOrigin; try { siteOrigin = new URL(registeredPage).origin; } catch { return; }
-    function notify(view) { if (parent !== window) parent.postMessage({ protocol: "shiplet.embed.ui.v1", view }, siteOrigin); }
+    // Visitor feedback adds a third launcher, so the widget widens its toolbar for it.
+    const visitor = document.querySelector("[data-shiplet-visitor-url]");
+    function notify(view) { if (parent !== window) parent.postMessage(Object.assign({ protocol: "shiplet.embed.ui.v1", view }, visitor ? { agents: true } : {}), siteOrigin); }
     function report(message) { statusText.textContent = message; status.hidden = false; notify("access"); }
     function collapse() { status.hidden = true; notify("toolbar"); }
     notify("toolbar");
@@ -33,6 +35,12 @@ export function embedAuthBootstrapScript() {
       }, 500);
     });
     dismiss.addEventListener("click", collapse);
+    if (visitor) visitor.addEventListener("click", event => {
+      if (!event.isTrusted) return;
+      const target = new URL(visitor.getAttribute("data-shiplet-visitor-url") || "", location.origin);
+      if (target.origin !== location.origin || target.pathname !== "/embed/visitor/frame") return;
+      location.assign(target.toString());
+    });
     window.addEventListener("message", async event => {
       if (!popup || event.source !== popup || event.origin !== location.origin || exchanging) return;
       const data = event.data;
