@@ -12,11 +12,12 @@ import { canOrganizationApiTokenAccessProject, type OrganizationApiTokenRecord }
 import { getReviewFeedback } from "../review";
 import { canViewProject, getOrganizationMembership, getProjectById, type ShipletUser } from "../store";
 import type { Project } from "../types";
-import type { HandshakeSnapshot } from "../../packages/agent-handshake/src/core/protocol.js";
+import { PERSON_KIND, type HandshakeSnapshot } from "../../packages/agent-handshake/src/core/protocol.js";
 import type { HandshakeRelay, RelayFailure, RelayOwner, RelaySendInput } from "./relay";
 
 export type HandshakeActor =
-	| { kind: "user"; user: ShipletUser }
+	// browser: a page on Shiplet's own origin with the person's browser session.
+	| { kind: "user"; user: ShipletUser; browser?: boolean }
 	| { kind: "token"; token: OrganizationApiTokenRecord }
 	| { kind: "oauth_agent"; principal: AuthenticatedMcpAgentPrincipal };
 
@@ -109,15 +110,37 @@ function record(value: unknown): Record<string, unknown> {
 	return value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : {};
 }
 
+// The Shiplet pages a person can talk from.
+export const PERSON_APPS = ["shiplet-dashboard", "shiplet-review", "shiplet-embed"] as const;
+
 export async function handleOpenSession(env: Env, member: HandshakeMember, body: unknown) {
 	const input = record(body);
-	const result = await relay(env, member.organizationId).openSession(member.owner, {
-		name: input.name,
-		kind: input.kind,
-		app: input.app,
-		machine: input.machine,
-	});
+	const peer = input.kind === PERSON_KIND ? personPeer(member, input.app) : { name: input.name, kind: input.kind, app: input.app, machine: input.machine };
+	if (peer instanceof Response) return peer;
+	const result = await relay(env, member.organizationId).openSession(member.owner, peer);
 	return respond(result, 201);
+}
+
+// A person joins only from a Shiplet page with their browser session, and the
+// relay names them from their account, so the person kind is something an
+// agent can rely on.
+function personPeer(member: HandshakeMember, app: unknown) {
+	const { actor } = member;
+	if (actor.kind !== "user" || !actor.browser) {
+		return handshakeError(403, "person_requires_browser", "Only a person signed in to Shiplet can join as a person, from a Shiplet page.");
+	}
+	return {
+		name: peerName(displayName(actor.user)),
+		kind: PERSON_KIND,
+		app: (PERSON_APPS as readonly unknown[]).includes(app) ? app : PERSON_APPS[0],
+		machine: null,
+	};
+}
+
+// "Dana Reyes" -> "Dana-Reyes": a handshake name (letters, digits, . _ -).
+export function peerName(value: string) {
+	const name = value.replace(/[^A-Za-z0-9._-]+/g, "-").replace(/^[^A-Za-z0-9]+/, "").slice(0, 64).replace(/-+$/, "");
+	return name || "person";
 }
 
 export async function handleCloseSession(env: Env, member: HandshakeMember, sessionId: string) {

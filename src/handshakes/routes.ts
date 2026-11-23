@@ -30,7 +30,11 @@ async function actorFromRequest(env: Env, request: Request): Promise<HandshakeAc
 		if (request.method !== "GET" && site && site !== "same-origin" && site !== "none") {
 			return handshakeError(403, "forbidden", "Handshake changes must come from Shiplet itself.");
 		}
-		return { kind: "user", user };
+		// A page on Shiplet's own origin, signed in with the browser session
+		// (not a CLI session, which sends an Authorization header). Only this
+		// actor may join as a person.
+		const browser = site === "same-origin" && !request.headers.get("authorization");
+		return { kind: "user", user, browser };
 	}
 	const authorization = request.headers.get("authorization")?.trim();
 	if (authorization) {

@@ -4,6 +4,7 @@
 // `connection.handle(op, args)`. When a connection closes, the peer it
 // registered disappears together with its undelivered messages.
 import {
+  KINDS,
   LIMITS,
   ProtocolError,
   checkText,
@@ -18,8 +19,11 @@ import {
 
 export class Hub {
   // `ids` makes ids predictable (tests, the dashboard's sample handshakes).
-  constructor({ now = () => new Date(), maxAutoTurns = 25, onMessage = null, ids = newId } = {}) {
+  // `kinds` lists the peer kinds this host admits; anything else registers as
+  // "other". Only a host that authenticates people adds "person".
+  constructor({ now = () => new Date(), maxAutoTurns = 25, onMessage = null, ids = newId, kinds = KINDS } = {}) {
     this.now = now;
+    this.kinds = kinds;
     this.newId = ids;
     this.maxAutoTurns = maxAutoTurns;
     this.onMessage = onMessage; // optional log sink; off by default
@@ -85,7 +89,7 @@ export class Hub {
   }
 
   #register(conn, args) {
-    const fields = normalizePeer(args);
+    const fields = normalizePeer(args, this.kinds);
     let peer = conn.peerId ? this.peers.get(conn.peerId) : null;
     fields.name = this.#uniqueName(fields.name, peer?.id);
     if (peer) {

@@ -53,6 +53,8 @@ export type HandshakeSummary = {
 	request: HandshakeRequestView | null;
 	// True for sample data that no agent produced.
 	sample: boolean;
+	// The organization whose relay holds it; null for sample handshakes.
+	organizationId: string | null;
 };
 
 export type HandshakeDetail = HandshakeSummary & {
@@ -69,7 +71,7 @@ export interface HandshakeSource {
 
 export function toHandshakeDetail(
 	snapshot: HandshakeSnapshot,
-	options: { requests: Array<Omit<HandshakeRequestView, "feedbackId"> & { id: string }>; sample: boolean },
+	options: { requests: Array<Omit<HandshakeRequestView, "feedbackId"> & { id: string }>; sample: boolean; organizationId?: string | null },
 ): HandshakeDetail {
 	const ref = snapshot.request;
 	const match = ref
@@ -94,6 +96,7 @@ export function toHandshakeDetail(
 				}
 			: null,
 		sample: options.sample,
+		organizationId: options.organizationId ?? null,
 		messages: snapshot.record ? (snapshot.transcript ?? []) : null,
 	};
 }
@@ -108,12 +111,24 @@ function defaultTopic(members: Sender[]) {
 	return names.length ? `${names.join(" and ")}` : "Handshake";
 }
 
-const KIND_LABELS: Record<PeerKind, string> = { claude: "Claude Code", codex: "Codex", other: "Agent" };
+const KIND_LABELS: Record<PeerKind, string> = { claude: "Claude Code", codex: "Codex", other: "Agent", person: "Person" };
 
-// "Claude Code", "Codex", or the app an "other" agent named.
+// "Claude Code", "Codex", "Person", or the app an "other" agent named.
 export function peerAgent(peer: Pick<Sender, "kind" | "app">) {
 	if (peer.kind === "other") return peer.app && peer.app !== "other" ? peer.app : KIND_LABELS.other;
 	return KIND_LABELS[peer.kind] ?? KIND_LABELS.other;
+}
+
+const PERSON_PLACES: Record<string, string> = {
+	"shiplet-dashboard": "on the dashboard",
+	"shiplet-review": "on the review page",
+	"shiplet-embed": "on the website",
+};
+
+// Where a peer is talking from: "on the review page" for a person, the app for an agent.
+export function peerPlace(peer: Pick<Sender, "kind" | "app">) {
+	if (peer.kind === "person") return PERSON_PLACES[peer.app] ?? "";
+	return peer.app && peer.app !== peer.kind ? peer.app : "";
 }
 
 export function livePeers<T extends Pick<HandshakePeer, "live">>(handshake: { peers: T[] }) {
@@ -137,4 +152,4 @@ export function handshakeHref(handshakeId: string) {
 }
 
 export const HANDSHAKE_DEFINITION =
-	"A handshake is a live conversation between agents, relayed through Shiplet. Nothing is stored unless an agent in it records it and shares it as a trace.";
+	"A handshake is a live conversation between agents, and the people who join them, relayed through Shiplet. Nothing is stored unless an agent in it records it and shares it as a trace.";

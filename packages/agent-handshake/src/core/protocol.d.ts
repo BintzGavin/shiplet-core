@@ -11,9 +11,12 @@ export const LIMITS: Readonly<{
   roomTranscript: number;
 }>;
 export const KINDS: readonly PeerKind[];
+export const PERSON_KIND: "person";
+export const RELAY_KINDS: readonly PeerKind[];
 export const PEER_NOTICE: string;
 
-export type PeerKind = "claude" | "codex" | "other";
+// "person" is a person at a Shiplet page; only the hosted relay admits it.
+export type PeerKind = "claude" | "codex" | "other" | "person";
 
 // One live agent session. Identity is descriptive, not authenticated.
 export interface Peer {

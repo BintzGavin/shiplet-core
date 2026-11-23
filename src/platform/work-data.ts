@@ -50,18 +50,21 @@ export async function loadWorkData(env: Env, user: ShipletUser, options: { trace
 				: [];
 	// A handshake's request is shown only when it names an annotation this
 	// person can already see.
-	const handshakes = snapshots.map((snapshot) => toHandshakeDetail(snapshot, { requests, sample: handshakeMode === "sample" }));
+	const handshakes = snapshots.map((snapshot) =>
+		toHandshakeDetail(snapshot, { requests, sample: handshakeMode === "sample", organizationId: "organizationId" in snapshot ? String(snapshot.organizationId) : null }),
+	);
 	return { now, requests, traces, tracesEnabled, shiplets, handshakeMode, handshakes, organizations };
 }
 
 // Live handshakes in every organization this person belongs to. A relay that
 // fails drops its handshakes from the page rather than failing it.
-async function relayHandshakes(env: Env, user: ShipletUser, organizations: OrganizationRef[]): Promise<HandshakeSnapshot[]> {
+async function relayHandshakes(env: Env, user: ShipletUser, organizations: OrganizationRef[]): Promise<Array<HandshakeSnapshot & { organizationId: string }>> {
 	const lists = await Promise.all(
 		organizations.map(async (organization) => {
 			try {
 				const member = await admitToOrganization(env, { kind: "user", user }, organization.id);
-				return member instanceof Response ? [] : await listHandshakesFor(env, member);
+				if (member instanceof Response) return [];
+				return (await listHandshakesFor(env, member)).map((snapshot) => ({ ...snapshot, organizationId: organization.id }));
 			} catch {
 				console.error(JSON.stringify({ event: "work_loop.handshakes", outcome: "failed" }));
 				return [];

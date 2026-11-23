@@ -14,7 +14,7 @@ import { DurableObject } from "cloudflare:workers";
 import type { Env } from "../env";
 import { Hub } from "../../packages/agent-handshake/src/core/hub.js";
 import type { HubConnection } from "../../packages/agent-handshake/src/core/hub.js";
-import type { HandshakeSnapshot, Message, Sender } from "../../packages/agent-handshake/src/core/protocol.js";
+import { RELAY_KINDS, type HandshakeSnapshot, type Message, type Sender } from "../../packages/agent-handshake/src/core/protocol.js";
 import { toShipletTrace, type HandshakeExport } from "../../packages/agent-handshake/src/core/trace.js";
 
 export const RELAY_IDLE_MS = 10 * 60_000;
@@ -69,7 +69,9 @@ function sessionId() {
 }
 
 export class HandshakeRelay extends DurableObject<Env> {
-	private hub = new Hub();
+	// The relay admits people (kind "person"); handlers.ts lets only a browser
+	// signed in to Shiplet open one.
+	private hub = new Hub({ kinds: RELAY_KINDS });
 	private sessions = new Map<string, Session>();
 	// peer id -> account, kept while the peer is still named in a handshake.
 	private accounts = new Map<string, string>();

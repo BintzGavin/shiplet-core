@@ -1,5 +1,5 @@
 // Types for hub.js, the transport-neutral handshake hub.
-import type { HandshakeSnapshot, Message } from "./protocol.js";
+import type { HandshakeSnapshot, Message, PeerKind } from "./protocol.js";
 
 export interface HubConnection {
   id: string;
@@ -13,6 +13,8 @@ export class Hub {
     maxAutoTurns?: number;
     onMessage?: ((message: Message) => void) | null;
     ids?: (prefix: string) => string;
+    // Peer kinds this host admits; others register as "other". Defaults to KINDS (no "person").
+    kinds?: readonly PeerKind[];
   });
   stats(): { connections: number; peers: number; rooms: number };
   handshakes(): HandshakeSnapshot[];
