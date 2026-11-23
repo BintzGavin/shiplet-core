@@ -1024,6 +1024,17 @@ a.feedback-ticket-id { text-decoration: none; }
 .handshake-peers li { display: grid; gap: 2px; padding-bottom: 10px; border-bottom: 1px dashed var(--line); }
 .handshake-peers li span:not(.status-badge) { color: var(--text-soft); font-size: var(--type-small); }
 .handshake-peers .status-badge { justify-self: start; margin-top: 4px; }
+.handshake-talk { display: grid; gap: 10px; align-content: start; }
+.handshake-talk .trace-hint { margin: 0; }
+.handshake-talk-form { display: grid; gap: 10px; }
+.handshake-talk-form .form-group + .form-group { margin-top: 0; }
+.handshake-talk-form > .btn { justify-self: start; }
+.handshake-talk-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
+.handshake-talk-lines { margin: 0; max-height: 360px; overflow-y: auto; }
+.handshake-message[data-line-state="pending"] { opacity: 0.7; }
+.handshake-message[data-line-state="failed"] { border-color: var(--danger, #b42318); }
+.handshake-talk-failed { color: var(--danger, #b42318); font-size: var(--type-small); }
+.handshake-talk-leave { justify-self: start; }
 .work-prompt {
   margin: 8px 0;
   padding: 10px;

@@ -20,7 +20,7 @@ function bootstrap(blocked = false) {
   const fetch = vi.fn(async () => ({ ok: true, json: async () => ({ hostUrl: "https://shiplet.test/embed/review/host?installation_id=install_test" }) }));
   new Function("window", "document", "parent", "location", "fetch", "sessionStorage", "setInterval", "clearInterval", embedAuthBootstrapScript())(
     { open, addEventListener: (type: string, listener: (event: any) => any) => listeners.set(type, listener) },
-    { querySelectorAll: () => buttons, querySelector: (selector: string) => selector.endsWith("-text]") ? statusText : selector.endsWith("-dismiss]") ? dismiss : status },
+    { querySelectorAll: () => buttons, querySelector: (selector: string) => selector.includes("visitor-url") ? null : selector.endsWith("-text]") ? statusText : selector.endsWith("-dismiss]") ? dismiss : status },
     parent,
     { origin: "https://shiplet.test", href: "https://shiplet.test/embed/review/start?installation_id=install_test&return_url=https://site.test/essay", replace },
     fetch,

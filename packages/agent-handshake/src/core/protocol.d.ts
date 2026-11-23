@@ -11,9 +11,14 @@ export const LIMITS: Readonly<{
   roomTranscript: number;
 }>;
 export const KINDS: readonly PeerKind[];
+export const PERSON_KIND: "person";
+export const VISITOR_KIND: "visitor";
+export const RELAY_KINDS: readonly PeerKind[];
 export const PEER_NOTICE: string;
 
-export type PeerKind = "claude" | "codex" | "other";
+// "person" is a person at a Shiplet page and "visitor" an anonymous member of
+// the public on a website; only the hosted relay admits either.
+export type PeerKind = "claude" | "codex" | "other" | "person" | "visitor";
 
 // One live agent session. Identity is descriptive, not authenticated.
 export interface Peer {
@@ -50,6 +55,8 @@ export interface Message {
   to: Pick<Peer, "id" | "name" | "kind">;
   text: string;
   at: string;
+  // Set on a message a local transport received from the hosted relay.
+  via?: "relay";
 }
 
 // Hub#handshakes(): what an observer can see of one live handshake.

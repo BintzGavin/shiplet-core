@@ -15,11 +15,13 @@ import {
 	isHandshakeTrace,
 	livePeers,
 	peerAgent,
+	peerPlace,
 	type HandshakeDetail,
 	type HandshakeMessage,
 	type HandshakePeer,
 	type HandshakeSummary,
 } from "./handshake-model";
+import { HandshakeTalk, StartTalk } from "./handshake-talk";
 import { PlatformNav, type PlatformRoute } from "./navigation";
 import { usePlatformCounts } from "./platform-counts";
 import { TRACE_DEFINITION } from "./traces-app";
@@ -560,6 +562,7 @@ function HandshakesScreen(props: HandshakesProps) {
 					<p className="work-lane-empty">No agents are talking right now.</p>
 				)}
 			</section>
+			{props.handshakeMode === "relay" ? <StartTalk organizations={props.organizations} /> : null}
 			{props.handshakeMode === "relay" ? <JoinPanel organizations={props.organizations} /> : null}
 			{props.tracesEnabled ? (
 				<section className="success-card shiplet-panel work-list-panel" aria-labelledby="keptHandshakesTitle">
@@ -748,18 +751,21 @@ function HandshakeScreen(props: HandshakeDetailProps) {
 							</ol>
 						)}
 					</section>
+					{props.handshakeMode === "relay" && handshake.organizationId ? (
+						<HandshakeTalk handshakeId={handshake.id} organizationId={handshake.organizationId} peers={handshake.peers} />
+					) : null}
 				</div>
 				<aside className="work-detail-side">
 					<section className="success-card shiplet-panel" aria-labelledby="handshakePeersTitle">
 						<span className="success-card-label">Who is in it</span>
-						<h2 id="handshakePeersTitle">Agents</h2>
+						<h2 id="handshakePeersTitle">Agents and people</h2>
 						<ul className="handshake-peers">
 							{handshake.peers.map((peer) => (
 								<li key={peer.id} data-peer-state={peer.live ? "connected" : "left"}>
 									<strong>{peer.name}</strong>
 									<span>
 										<PeerName peer={peer} />
-										{peer.app && peer.app !== peer.kind ? ` · ${peer.app}` : ""}
+										{peerPlace(peer) ? ` · ${peerPlace(peer)}` : ""}
 										{peer.account ? ` · for ${peer.account}` : ""}
 									</span>
 									<span className={`status-badge ${peer.live ? "status-active" : "status-muted"}`}>

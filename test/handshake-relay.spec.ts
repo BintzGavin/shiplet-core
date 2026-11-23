@@ -112,7 +112,7 @@ const base = (organizationId: string) => `/api/organizations/${organizationId}`;
 async function open(organizationId: string, headers: Record<string, string>, peer: Record<string, unknown>) {
 	const response = await request(`${base(organizationId)}/handshake-sessions`, json(headers, peer));
 	expect(response.status, await response.clone().text()).toBe(201);
-	return (await response.json()) as { session: string; peer: { id: string; name: string; account: string } };
+	return (await response.json()) as { session: string; peer: { id: string; name: string; kind: string; account: string } };
 }
 
 describe("hosted handshake relay", () => {
@@ -196,6 +196,69 @@ describe("hosted handshake relay", () => {
 			expect((await request(`${base(organizationId)}/handshake-sessions/${checker.session}`, json(codex, undefined, "DELETE"))).status).toBe(200);
 			const after = (await (await request(`${base(organizationId)}/handshakes`, { headers: OWNER })).json()) as { handshakes: unknown[] };
 			expect(after.handshakes).toEqual([]);
+		});
+	});
+
+	it("lets a person signed in to Shiplet join as a person and talk with an agent", async () => {
+		await withHandshakes(async () => {
+			const organizationId = await setup();
+			const codex = await apiKey(organizationId, ["mcp"]);
+			const browser = { ...OWNER, "x-shiplet-user-first-name": "Dana", "x-shiplet-user-last-name": "Reyes", "sec-fetch-site": "same-origin" };
+			const builder = await open(organizationId, codex, { name: "builder", kind: "codex", app: "codex-cli" });
+
+			// The relay names the person from their account; they cannot pose as someone else or as an agent app.
+			const dana = await open(organizationId, browser, { name: "ceo", kind: "person", app: "claude-cli", machine: "laptop" });
+			expect(dana.peer).toMatchObject({ name: "Dana-Reyes", kind: "person", app: "shiplet-dashboard", machine: null, account: "Dana Reyes" });
+			const fromReview = await open(organizationId, browser, { kind: "person", app: "shiplet-review" });
+			expect(fromReview.peer).toMatchObject({ name: "Dana-Reyes-2", kind: "person", app: "shiplet-review" });
+
+			// The agent sees a person in its peer list and gets their message labelled as from a person.
+			const peers = (await (await request(`${base(organizationId)}/handshake-sessions/${builder.session}/peers`, { headers: codex })).json()) as {
+				peers: Array<{ name: string; kind: string }>;
+			};
+			expect(peers.peers).toContainEqual(expect.objectContaining({ name: "Dana-Reyes", kind: "person" }));
+			const sent = await request(
+				`${base(organizationId)}/handshake-sessions/${dana.session}/messages`,
+				json(browser, { to: "builder", text: "The pay button still looks gray to me.", topic: "Pay button" }),
+			);
+			expect(sent.status, await sent.clone().text()).toBe(200);
+			const { handshake } = (await sent.json()) as { handshake: string };
+			const inbox = (await (await request(`${base(organizationId)}/handshake-sessions/${builder.session}/inbox`, { headers: codex })).json()) as {
+				messages: Array<{ text: string; from: { kind: string; name: string; account: string } }>;
+			};
+			expect(inbox.messages[0]).toMatchObject({ text: "The pay button still looks gray to me.", from: { kind: "person", name: "Dana-Reyes", account: "Dana Reyes" } });
+
+			// The agent answers in the same handshake and the person reads it by long-poll.
+			const waiting = request(`${base(organizationId)}/handshake-sessions/${dana.session}/inbox?wait=5`, { headers: browser });
+			await request(`${base(organizationId)}/handshake-sessions/${builder.session}/messages`, json(codex, { to: dana.peer.id, handshake, text: "Darkening it now." }));
+			const answer = (await (await waiting).json()) as { messages: Array<{ text: string; room: string }> };
+			expect(answer.messages).toEqual([expect.objectContaining({ text: "Darkening it now.", room: handshake })]);
+
+			// Watchers see a person in the handshake.
+			const { handshakes } = (await (await request(`${base(organizationId)}/handshakes`, { headers: COLLEAGUE })).json()) as {
+				handshakes: Array<{ id: string; members: Array<{ kind: string; account: string }> }>;
+			};
+			expect(handshakes.find((item) => item.id === handshake)?.members).toContainEqual(expect.objectContaining({ kind: "person", account: "Dana Reyes" }));
+		});
+	});
+
+	it("keeps the person kind for people signed in to Shiplet in a browser", async () => {
+		await withHandshakes(async () => {
+			const organizationId = await setup();
+			const codex = await apiKey(organizationId, ["mcp"]);
+
+			// An agent with an API key cannot claim to be a person.
+			const agent = await request(`${base(organizationId)}/handshake-sessions`, json(codex, { name: "dana", kind: "person" }));
+			expect(agent.status).toBe(403);
+			expect(((await agent.json()) as { error: string }).error).toBe("person_requires_browser");
+
+			// Nor can a request that did not come from a browser page (no fetch metadata).
+			const script = await request(`${base(organizationId)}/handshake-sessions`, json(OWNER, { name: "dana", kind: "person" }));
+			expect(script.status).toBe(403);
+
+			// Agents opened by a signed-in account keep working as agents.
+			const builder = await open(organizationId, OWNER, { name: "builder", kind: "claude" });
+			expect(builder.peer.kind).toBe("claude");
 		});
 	});
 

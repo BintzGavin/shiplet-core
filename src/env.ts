@@ -30,6 +30,10 @@ type GeneratedEnv = Omit<
  */
 export type Env = GeneratedEnv & {
 	dispatcher?: Dispatcher;
+	// Cloudflare Turnstile for public visitor feedback on embedded websites.
+	// Both are the operator's own; without them visitor feedback stays off.
+	TURNSTILE_SITE_KEY?: string;
+	TURNSTILE_SECRET?: string;
 	EMAIL?: {
 		send(message: {
 			to: string;

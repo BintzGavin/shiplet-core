@@ -4,6 +4,9 @@
 // `connection.handle(op, args)`. When a connection closes, the peer it
 // registered disappears together with its undelivered messages.
 import {
+  KINDS,
+  RELAY_KINDS,
+  checkField,
   LIMITS,
   ProtocolError,
   checkText,
@@ -18,8 +21,11 @@ import {
 
 export class Hub {
   // `ids` makes ids predictable (tests, the dashboard's sample handshakes).
-  constructor({ now = () => new Date(), maxAutoTurns = 25, onMessage = null, ids = newId } = {}) {
+  // `kinds` lists the peer kinds this host admits; anything else registers as
+  // "other". Only a host that authenticates people adds "person".
+  constructor({ now = () => new Date(), maxAutoTurns = 25, onMessage = null, ids = newId, kinds = KINDS } = {}) {
     this.now = now;
+    this.kinds = kinds;
     this.newId = ids;
     this.maxAutoTurns = maxAutoTurns;
     this.onMessage = onMessage; // optional log sink; off by default
@@ -52,15 +58,87 @@ export class Hub {
     }));
   }
 
+  // Puts messages a host took out for delivery back at the front of a peer's
+  // inbox when that delivery failed (the relay's webhooks).
+  requeue(peerId, messages) {
+    const peer = this.peers.get(peerId);
+    if (!peer || !messages.length) return;
+    if (peer.waiter) {
+      const waiter = peer.waiter;
+      peer.waiter = null;
+      this.#finish(waiter, peer, messages);
+      return;
+    }
+    peer.inbox.unshift(...messages);
+    while (peer.inbox.length > LIMITS.inboxMessages) peer.inbox.shift();
+  }
+
+  // Read-only lookups for a host that enforces its own rules (the relay).
+  findPeer(ref) {
+    const peer = this.peers.get(ref) ?? [...this.peers.values()].find((p) => p.name === ref);
+    return peer ? publicPeer(peer) : null;
+  }
+
+  roomMembers(roomId) {
+    const room = this.rooms.get(roomId);
+    return room ? [...room.members.values()] : null;
+  }
+
   open() {
     const connId = this.newId("conn");
     const conn = { id: connId, peerId: null, waiters: new Set() };
     this.conns.set(connId, conn);
+    return this.#connection(conn);
+  }
+
+  // The handle of a connection that survived a restore, or null.
+  reopen(connId) {
+    const conn = this.conns.get(connId);
+    return conn ? this.#connection(conn) : null;
+  }
+
+  #connection(conn) {
     return {
-      id: connId,
+      id: conn.id,
       handle: (op, args = {}) => this.#handle(conn, op, args ?? {}),
       close: () => this.#close(conn),
     };
+  }
+
+  // Everything a host needs to bring this hub back after a restart, as plain
+  // JSON: peers with their queued messages, handshakes, and the connections
+  // that registered a peer. Waiting readers are not included; they belong to
+  // requests that ended with the restart.
+  snapshot() {
+    return {
+      peers: [...this.peers.values()].map(({ waiter: _waiter, ...peer }) => ({ ...peer, inbox: peer.inbox.slice() })),
+      rooms: [...this.rooms.values()].map((room) => ({
+        ...room,
+        members: [...room.members.values()],
+        live: [...room.live],
+        transcript: room.transcript.slice(),
+      })),
+      conns: [...this.conns.values()].filter((conn) => conn.peerId).map((conn) => ({ id: conn.id, peerId: conn.peerId })),
+    };
+  }
+
+  restore({ peers = [], rooms = [], conns = [] } = {}) {
+    this.peers.clear();
+    this.conns.clear();
+    this.pending.clear();
+    this.rooms.clear();
+    this.dmRooms.clear();
+    for (const peer of peers) this.peers.set(peer.id, { ...peer, inbox: peer.inbox.slice(), waiter: null });
+    for (const room of rooms) {
+      this.rooms.set(room.id, {
+        ...room,
+        members: new Map(room.members.map((member) => [member.id, member])),
+        live: new Set(room.live),
+        transcript: room.transcript.slice(),
+      });
+      if (room.dmKey) this.dmRooms.set(room.dmKey, room.id);
+    }
+    for (const conn of conns) if (this.peers.has(conn.peerId)) this.conns.set(conn.id, { id: conn.id, peerId: conn.peerId, waiters: new Set() });
   }
 
   async #handle(conn, op, args) {
@@ -79,13 +157,15 @@ export class Hub {
         return this.#read(conn, args);
       case "export":
         return this.#export(conn, args);
+      case "inject":
+        return this.#inject(conn, args);
       default:
         throw new ProtocolError("bad_request", `unknown op ${JSON.stringify(op)}`);
     }
   }
 
   #register(conn, args) {
-    const fields = normalizePeer(args);
+    const fields = normalizePeer(args, this.kinds);
     let peer = conn.peerId ? this.peers.get(conn.peerId) : null;
     fields.name = this.#uniqueName(fields.name, peer?.id);
     if (peer) {
@@ -295,6 +375,39 @@ export class Hub {
       self: senderOf(self),
       messages: room.transcript.slice(),
     };
+  }
+
+  // A transport bridged to the hosted relay hands relay messages to its own
+  // peer, so hooks deliver them like local ones. They are marked via "relay",
+  // keep the relay's ids, and never join a local handshake.
+  #inject(conn, args) {
+    const self = this.#self(conn);
+    if (!Array.isArray(args.messages) || args.messages.length > 50) {
+      throw new ProtocolError("bad_request", "messages must be a list of at most 50 relay messages");
+    }
+    const messages = args.messages.map((m) => {
+      if (!m || typeof m !== "object" || !m.from || typeof m.from !== "object") throw new ProtocolError("bad_request", "each message needs from");
+      return {
+        id: checkField(m.id, "id", { max: 128, optional: false }),
+        room: checkField(m.room, "room", { max: 128, optional: false }),
+        from: {
+          id: checkField(m.from.id, "from.id", { max: 128, optional: false }),
+          name: checkField(m.from.name, "from.name", { max: LIMITS.nameChars, optional: false }),
+          kind: RELAY_KINDS.includes(m.from.kind) ? m.from.kind : "other",
+          app: checkField(m.from.app, "from.app", { max: 64 }),
+          machine: checkField(m.from.machine, "from.machine", { max: 255 }),
+          session: null,
+          cwd: null,
+          account: checkField(m.from.account, "from.account", { max: 255 }),
+        },
+        to: { id: self.id, name: self.name, kind: self.kind },
+        text: checkText(m.text),
+        at: typeof m.at === "string" && m.at.length <= 64 ? m.at : this.now().toISOString(),
+        via: "relay",
+      };
+    });
+    for (const message of messages) this.#deliver(self, message);
+    return { injected: messages.length };
   }
 
   #close(conn) {
