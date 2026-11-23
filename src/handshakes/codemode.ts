@@ -7,6 +7,7 @@ import type { ShipletUser } from "../store";
 import {
 	admitToOrganization,
 	handleCloseSession,
+	handleDuty,
 	handleExport,
 	handleListHandshakes,
 	handleListPeers,
@@ -38,6 +39,7 @@ const ROUTES: Array<{ method: string; pattern: RegExp; name: string }> = [
 	{ method: "GET", pattern: new RegExp(`^${SESSION}/peers$`), name: "peers" },
 	{ method: "POST", pattern: new RegExp(`^${SESSION}/messages$`), name: "send" },
 	{ method: "GET", pattern: new RegExp(`^${SESSION}/inbox$`), name: "inbox" },
+	{ method: "POST", pattern: new RegExp(`^${SESSION}/duty$`), name: "duty" },
 	{ method: "POST", pattern: new RegExp(`^${SESSION}/handshakes/([^/]+)/export$`), name: "export" },
 ];
 
@@ -74,6 +76,8 @@ export async function executeHandshakeCodeModeRequest(env: Env, context: Handsha
 			return unwrap(await handleReadInbox(env, member, sessionId, request.query?.wait));
 		case "export":
 			return unwrap(await handleExport(env, member, sessionId, handshakeId));
+		case "duty":
+			return unwrap(await handleDuty(env, member, sessionId, request.body));
 	}
 	throw new Response("Code Mode request path is not supported.", { status: 404 });
 }

@@ -8,6 +8,7 @@ import { readBodyWithLimit } from "../traces/routes";
 import {
 	admitToOrganization,
 	handleCloseSession,
+	handleDuty,
 	handleExport,
 	handleListHandshakes,
 	handleListPeers,
@@ -99,6 +100,13 @@ export function registerHandshakeRoutes(app: Hono<any>) {
 	app.get(`${session}/inbox`, async (c) => {
 		const admitted = await member(c.env, c.req.raw, c.req.param("organizationId"));
 		return admitted instanceof Response ? admitted : handleReadInbox(c.env, admitted, c.req.param("sessionId"), c.req.query("wait"));
+	});
+
+	app.post(`${session}/duty`, async (c) => {
+		const admitted = await member(c.env, c.req.raw, c.req.param("organizationId"));
+		if (admitted instanceof Response) return admitted;
+		const body = await readJson(c.req.raw);
+		return body instanceof Response ? body : handleDuty(c.env, admitted, c.req.param("sessionId"), body);
 	});
 
 	app.post(`${session}/handshakes/:handshakeId/export`, async (c) => {

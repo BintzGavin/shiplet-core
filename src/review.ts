@@ -750,6 +750,8 @@ export async function createReviewFeedback(
 	payload: ValidReviewFeedbackPayload,
 	effectFence?: ReviewFeedbackEffectFence,
 	eventActor?: CanonicalReviewActor,
+	// "visitor": an anonymous member of the public on an embedded website.
+	options: { source?: "visitor" } = {},
 ) {
 	const receiptFence =
 		effectFence?.kind === "receipt" ? effectFence : undefined;
@@ -903,7 +905,7 @@ export async function createReviewFeedback(
 			payload.userAgent,
 			user?.id || null,
 			user?.email || null,
-			user ? "web" : "api",
+			options.source ?? (user ? "web" : "api"),
 			now,
 			now,
 			...(intentFence

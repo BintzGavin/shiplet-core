@@ -12,7 +12,7 @@ import { canOrganizationApiTokenAccessProject, type OrganizationApiTokenRecord }
 import { getReviewFeedback } from "../review";
 import { canViewProject, getOrganizationMembership, getProjectById, type ShipletUser } from "../store";
 import type { Project } from "../types";
-import { PERSON_KIND, type HandshakeSnapshot } from "../../packages/agent-handshake/src/core/protocol.js";
+import { PERSON_KIND, VISITOR_KIND, type HandshakeSnapshot } from "../../packages/agent-handshake/src/core/protocol.js";
 import type { HandshakeRelay, RelayFailure, RelayOwner, RelaySendInput } from "./relay";
 
 export type HandshakeActor =
@@ -91,9 +91,12 @@ async function verifyRequest(env: Env, member: HandshakeMember, request: unknown
 
 // The relay's RPC methods, typed directly: the generic stub type is too deep
 // for the compiler on these result shapes.
-type RelayApi = Pick<HandshakeRelay, "openSession" | "closeSession" | "peers" | "send" | "read" | "exportHandshake" | "list">;
+type RelayApi = Pick<
+	HandshakeRelay,
+	"openSession" | "closeSession" | "peers" | "send" | "read" | "exportHandshake" | "list" | "setDuty" | "dutyStatus" | "openVisitor" | "visitorStatus" | "visitorSend" | "visitorRead"
+>;
 
-function relay(env: Env, organizationId: string): RelayApi {
+export function relay(env: Env, organizationId: string): RelayApi {
 	const namespace = env.HANDSHAKE_RELAY;
 	return namespace.get(namespace.idFromName(`organization:${organizationId}`)) as unknown as RelayApi;
 }
@@ -115,6 +118,9 @@ export const PERSON_APPS = ["shiplet-dashboard", "shiplet-review", "shiplet-embe
 
 export async function handleOpenSession(env: Env, member: HandshakeMember, body: unknown) {
 	const input = record(body);
+	if (input.kind === VISITOR_KIND) {
+		return handshakeError(403, "forbidden", "Visitors join through the website widget, never through the organization relay.");
+	}
 	const peer = input.kind === PERSON_KIND ? personPeer(member, input.app) : { name: input.name, kind: input.kind, app: input.app, machine: input.machine };
 	if (peer instanceof Response) return peer;
 	const result = await relay(env, member.organizationId).openSession(member.owner, peer);
@@ -170,6 +176,22 @@ export async function handleSend(env: Env, member: HandshakeMember, sessionId: s
 export async function handleReadInbox(env: Env, member: HandshakeMember, sessionId: string, wait: unknown) {
 	const seconds = Number(wait ?? 0);
 	return respond(await relay(env, member.organizationId).read(member.owner, sessionId, Number.isFinite(seconds) ? seconds * 1000 : 0));
+}
+
+// Answer a Shiplet's public website visitors (shiplet: id), or stop (null).
+// Only someone who can read that Shiplet's annotations may go on duty for it.
+export async function handleDuty(env: Env, member: HandshakeMember, sessionId: string, body: unknown) {
+	const shiplet = record(body).shiplet;
+	if (shiplet !== null && (typeof shiplet !== "string" || !shiplet)) {
+		return handshakeError(400, "bad_request", "shiplet must be a Shiplet id, or null to go off duty.");
+	}
+	if (shiplet) {
+		const project = (await getProjectById(env.DB, shiplet)) as Project | null;
+		if (!project || !(await canReadAnnotations(env, member, project))) {
+			return handshakeError(403, "forbidden", "Going on duty needs read access to that Shiplet's annotations.");
+		}
+	}
+	return respond(await relay(env, member.organizationId).setDuty(member.owner, sessionId, shiplet ?? null));
 }
 
 export async function handleExport(env: Env, member: HandshakeMember, sessionId: string, handshakeId: string) {

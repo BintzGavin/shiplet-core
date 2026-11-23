@@ -161,6 +161,8 @@ import {
 import { ensureTraceSchema } from "./traces/schema";
 import { registerTraceRoutes } from "./traces/routes";
 import { registerHandshakeRoutes } from "./handshakes/routes";
+import { registerVisitorRoutes, setInstallationVisitors, turnstileConfigured, visitorInstallation } from "./embed-visitors";
+import { VISITOR_FRAME_CSS, VISITOR_FRAME_SCRIPT, visitorFrameResponse } from "./embed-visitor-frame";
 import { executeHandshakeCodeModeRequest, isHandshakeCodeModePath } from "./handshakes/codemode";
 import { deleteProjectTraceObjects, sweepArchivedShipletTraces } from "./traces/store";
 import { sweepExpiredUploadLinks } from "./traces/uploads";
@@ -929,7 +931,8 @@ const KERNEL_SCHEMA_EPOCH_MARKER = "kernel";
 // 5: project_traces for agent session traces.
 // 6: trace audiences, variants, and pending attachments.
 // 7: trace upload links.
-const CURRENT_KERNEL_SCHEMA_EPOCH = 9;
+// 10: embed_visitor_sessions and embed_installations.visitors_enabled_on.
+const CURRENT_KERNEL_SCHEMA_EPOCH = 10;
 
 async function readKernelSchemaEpoch(db: D1Database): Promise<number | null> {
   const table = await db
@@ -13235,7 +13238,7 @@ app.on(["GET", "POST"], "/embed/install", async (c) => {
       const form = new URLSearchParams(body);
       selectedProjectId = form.get("project_id") || "";
       const action = form.get("action") || "create";
-      if (action !== "create" && action !== "revoke")
+      if (!["create", "revoke", "visitors_on", "visitors_off"].includes(action))
         return c.text("Invalid action", 400);
       const site = normalizeEmbedSiteUrl(form.get("site_url"));
       if (action === "create" && !site)
@@ -13277,6 +13280,15 @@ app.on(["GET", "POST"], "/embed/install", async (c) => {
           )
           .run();
         message = "Site disconnected. Its feedback stays in Shiplet.";
+      } else if (action === "visitors_on" || action === "visitors_off") {
+        const on = action === "visitors_on";
+        if (on && !turnstileConfigured(c.env))
+          return c.text("Visitor feedback needs Turnstile keys on this Shiplet server.", 409);
+        if (!(await setInstallationVisitors(c.env.DB, project.id, form.get("installation_id") || "", on)))
+          return c.text("No connected site with that installation", 404);
+        message = on
+          ? "Visitor feedback is on. Anyone on the site can leave a note after a quick bot check."
+          : "Visitor feedback is off. Visitors can no longer leave notes or chat.";
       } else {
         await registerBrowserEmbed(c.env.DB, project, user, site!.siteUrl);
         message = "Your install snippet is ready.";
@@ -13318,6 +13330,7 @@ app.on(["GET", "POST"], "/embed/install", async (c) => {
           selectedProjectId,
           installations,
           message,
+          visitorsAvailable: turnstileConfigured(c.env),
         }),
         {
           nonce: kernelDocumentNonce(c),
@@ -14484,6 +14497,7 @@ function embedAuthBootstrapResponse(
   c: any,
   installation: NonNullable<Awaited<ReturnType<typeof getEmbedInstallation>>>,
   deniedAccount?: string,
+  visitorsOn = false,
 ) {
   const origin = new URL(c.req.url).origin;
   const nonce = createKernelDocumentNonce();
@@ -14501,7 +14515,13 @@ function embedAuthBootstrapResponse(
   const notice = deniedAccount
     ? `<span class="shiplet-review-visually-hidden" role="alert">${escapeEmbedHtml(deniedAccount)} needs review access. Sign in with another account to continue.</span>`
     : "";
-  const html = `<!doctype html><html lang="en" data-shiplet-embed-auth-bootstrap="v1" data-shiplet-embed-origin="${escapeEmbedHtml(installation.site_origin)}"${deniedAccount ? ' data-review-state="permission_denied"' : ""}><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Shiplet review</title><link rel="stylesheet" href="${origin}/api/review/host.css"><script src="${origin}/api/embed/auth-bootstrap.js" nonce="${nonce}" defer></script></head><body>${notice}<div class="shiplet-review-launcher-dock"><button type="button" class="shiplet-review-launcher" data-shiplet-embed-action="annotate" data-login-url="${escapeEmbedHtml(loginUrl)}" aria-label="Annotate">Annotate</button><button type="button" class="shiplet-review-comments-launcher" data-shiplet-embed-action="comments" data-login-url="${escapeEmbedHtml(loginUrl)}" aria-label="Open comments" title="Comments"><span class="shiplet-review-count" aria-hidden="true">…</span></button></div><div class="shiplet-embed-auth-status" data-shiplet-embed-auth-status hidden><span role="status" aria-live="polite" data-shiplet-embed-auth-status-text></span><button type="button" data-shiplet-embed-auth-dismiss>Dismiss</button></div></body></html>`;
+  const visitorUrl = new URL("/embed/visitor/frame", origin);
+  visitorUrl.searchParams.set("installation_id", installation.id);
+  visitorUrl.searchParams.set("return_url", authorization.searchParams.get("return_url") || installation.site_url);
+  const visitorLink = visitorsOn
+    ? `<a class="shiplet-review-launcher shiplet-visitor-launcher" href="${escapeEmbedHtml(visitorUrl.toString())}" aria-label="Leave feedback without an account">Feedback</a>`
+    : "";
+  const html = `<!doctype html><html lang="en" data-shiplet-embed-auth-bootstrap="v1" data-shiplet-embed-origin="${escapeEmbedHtml(installation.site_origin)}"${deniedAccount ? ' data-review-state="permission_denied"' : ""}><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Shiplet review</title><link rel="stylesheet" href="${origin}/api/review/host.css"><script src="${origin}/api/embed/auth-bootstrap.js" nonce="${nonce}" defer></script></head><body>${notice}<div class="shiplet-review-launcher-dock"><button type="button" class="shiplet-review-launcher" data-shiplet-embed-action="annotate" data-login-url="${escapeEmbedHtml(loginUrl)}" aria-label="Annotate">Annotate</button><button type="button" class="shiplet-review-comments-launcher" data-shiplet-embed-action="comments" data-login-url="${escapeEmbedHtml(loginUrl)}" aria-label="Open comments" title="Comments"><span class="shiplet-review-count" aria-hidden="true">…</span></button>${visitorLink}</div><div class="shiplet-embed-auth-status" data-shiplet-embed-auth-status hidden><span role="status" aria-live="polite" data-shiplet-embed-auth-status-text></span><button type="button" data-shiplet-embed-auth-dismiss>Dismiss</button></div></body></html>`;
   return new Response(html, {
     status: deniedAccount ? 403 : 200,
     headers: {
@@ -14615,6 +14635,38 @@ function trustedConfirmationResponse(
     },
   });
 }
+
+// Public visitor feedback: the frame inside the widget, and its script and styles.
+app.get("/embed/visitor/frame", async (c) => {
+  const installation = await visitorInstallation(c.env, c.req.query("installation_id"));
+  if (!installation) return c.text("Visitor feedback is off for this website.", 404);
+  const origin = new URL(c.req.url).origin;
+  const pageUrl =
+    normalizeEmbedReturnUrl(c.req.query("return_url"), installation.site_origin) || installation.site_url;
+  const back = new URL("/embed/review/start", origin);
+  back.searchParams.set("installation_id", installation.id);
+  back.searchParams.set("return_url", pageUrl);
+  return visitorFrameResponse({
+    origin,
+    installation,
+    pageUrl,
+    siteKey: c.env.TURNSTILE_SITE_KEY || "",
+    nonce: createKernelDocumentNonce(),
+    backUrl: back.toString(),
+  });
+});
+
+app.get("/api/embed/visitor.js", () =>
+  new Response(VISITOR_FRAME_SCRIPT, {
+    headers: { "content-type": "application/javascript; charset=utf-8", "cache-control": "public, max-age=300", "x-content-type-options": "nosniff" },
+  }),
+);
+
+app.get("/api/embed/visitor.css", () =>
+  new Response(VISITOR_FRAME_CSS, {
+    headers: { "content-type": "text/css; charset=utf-8", "cache-control": "public, max-age=300", "x-content-type-options": "nosniff" },
+  }),
+);
 
 app.get("/api/embed/auth-bootstrap.js", () => {
   return new Response(
@@ -14790,7 +14842,9 @@ app.get("/embed/review/start", async (c) => {
       }
     }
     if (!user) {
-      return embedAuthBootstrapResponse(c, installation);
+      // Signed out: offer visitor feedback too, when the site has it on.
+      const visitors = await visitorInstallation(c.env, installation.id);
+      return embedAuthBootstrapResponse(c, installation, undefined, Boolean(visitors));
     }
     const project = await getProjectById(c.env.DB, installation.project_id);
     if (
@@ -17227,6 +17281,7 @@ app.post("/api/shiplets", async (c) => {
 
 registerTraceRoutes(app);
 registerHandshakeRoutes(app);
+registerVisitorRoutes(app);
 
 // Trace-only Shiplets (docs/traces-spec.md D19) are created through the same
 // publish path as every other Shiplet, with a page Shiplet writes as the

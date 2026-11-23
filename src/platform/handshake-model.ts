@@ -111,7 +111,7 @@ function defaultTopic(members: Sender[]) {
 	return names.length ? `${names.join(" and ")}` : "Handshake";
 }
 
-const KIND_LABELS: Record<PeerKind, string> = { claude: "Claude Code", codex: "Codex", other: "Agent", person: "Person" };
+const KIND_LABELS: Record<PeerKind, string> = { claude: "Claude Code", codex: "Codex", other: "Agent", person: "Person", visitor: "Website visitor" };
 
 // "Claude Code", "Codex", "Person", or the app an "other" agent named.
 export function peerAgent(peer: Pick<Sender, "kind" | "app">) {
@@ -128,6 +128,7 @@ const PERSON_PLACES: Record<string, string> = {
 // Where a peer is talking from: "on the review page" for a person, the app for an agent.
 export function peerPlace(peer: Pick<Sender, "kind" | "app">) {
 	if (peer.kind === "person") return PERSON_PLACES[peer.app] ?? "";
+	if (peer.kind === "visitor") return "on the website, not signed in";
 	return peer.app && peer.app !== peer.kind ? peer.app : "";
 }
 

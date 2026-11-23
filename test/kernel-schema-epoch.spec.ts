@@ -12,8 +12,8 @@ import app, { schemaInitializationTest } from "../src/index";
 // Pin the two together: when this digest changes, bump
 // CURRENT_KERNEL_SCHEMA_EPOCH in src/index.ts and update both values here.
 const PINNED_KERNEL_SCHEMA = {
-  epoch: 9,
-  digest: "02b462c2d4fd6caf8fbb88c8d408d5c3424acc6e94bafb119ba31ecb3e8b79ca",
+  epoch: 10,
+  digest: "e07b49859ea55e8aa3d1197e282768e61d0a030b6d8a7c6bdfc6740d839868da",
 };
 
 // Releases up to v0.1.43 recorded epoch 1 before the invite link tables existed.
@@ -31,6 +31,7 @@ const EPOCH_BEFORE_TRACE_UPLOAD_LINKS = 6;
 // Builds before trace-only Shiplets recorded epoch 7.
 const EPOCH_BEFORE_TRACE_SHIPLETS = 7;
 // Builds before CLI device sign-in recorded epoch 8.
+// Builds before public visitor feedback recorded epoch 9.
 const EPOCH_BEFORE_CLI_DEVICE_LOGIN = 8;
 const EPOCH_TABLE = "shiplet_kernel_schema_epoch";
 

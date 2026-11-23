@@ -84,8 +84,10 @@ export function renderEmbedSetup(input: {
   projects: Project[];
   organizations: OrganizationRecord[];
   selectedProjectId: string;
-  installations: EmbedInstallationRecord[];
+  installations: Array<EmbedInstallationRecord & { visitors_enabled_on?: string | null }>;
   message?: string;
+  // The server has Turnstile keys, so visitor feedback can be turned on.
+  visitorsAvailable?: boolean;
 }) {
   const e = escapeHtml;
   const options = input.projects
@@ -98,8 +100,27 @@ export function renderEmbedSetup(input: {
     .map((installation) => {
       const snippet = embedInstallSnippet(input.appOrigin, installation.id);
       const prompt = `Install Shiplet feedback in this frontend. Add the following script once and mount the custom element once in the shared browser layout, outside route-specific content. Preserve existing authentication and routing. Do not add API keys or a backend proxy. Use the provided installation ID only on ${installation.site_origin}; register other origins separately at ${input.appOrigin}/embed/install. Verify opening feedback, selecting an element, SPA navigation, mobile layout, and cleanup. Follow ${input.appOrigin}/docs/embed for framework examples and CSP requirements.\n\n${snippet}`;
-      return `<section class="success-card shiplet-panel"><h2>${e(installation.site_origin)}</h2><p>Paste these two tags into your shared page layout. Reviewers sign in with their Shiplet account.</p><label>Install snippet<textarea readonly rows="3" style="width:100%;font-family:monospace">${e(snippet)}</textarea></label><details><summary>Paste this into your agent</summary><label>Agent install prompt<textarea readonly rows="9" style="width:100%">${e(prompt)}</textarea></label></details><p><a href="${e(installation.site_url)}" target="_blank" rel="noopener noreferrer">Open your site</a> · <a href="/docs/embed">Install guide</a></p><form method="post" action="/embed/install"><input type="hidden" name="project_id" value="${e(installation.project_id)}"><input type="hidden" name="installation_id" value="${e(installation.id)}"><button class="btn btn-secondary" name="action" value="revoke">Disconnect this site</button></form></section>`;
+      return `<section class="success-card shiplet-panel"><h2>${e(installation.site_origin)}</h2><p>Paste these two tags into your shared page layout. Reviewers sign in with their Shiplet account.</p><label>Install snippet<textarea readonly rows="3" style="width:100%;font-family:monospace">${e(snippet)}</textarea></label><details><summary>Paste this into your agent</summary><label>Agent install prompt<textarea readonly rows="9" style="width:100%">${e(prompt)}</textarea></label></details><p><a href="${e(installation.site_url)}" target="_blank" rel="noopener noreferrer">Open your site</a> · <a href="/docs/embed">Install guide</a></p><form method="post" action="/embed/install"><input type="hidden" name="project_id" value="${e(installation.project_id)}"><input type="hidden" name="installation_id" value="${e(installation.id)}"><button class="btn btn-secondary" name="action" value="revoke">Disconnect this site</button></form>${visitorPanel(installation, input.visitorsAvailable === true, e)}</section>`;
     })
     .join("");
   return `<div class="dashboard-shell shiplet-dashboard-stage"><header class="app-page-topbar"><div class="app-page-title"><span class="success-card-label">Shiplet on your site</span><h1>Connect a website</h1><p>Leave comments directly on your working site. Teammates and agents share the same feedback queue.</p></div></header><p><a href="/">Back to workspace</a> · <a href="/docs/embed">Installation guide</a></p>${input.message ? `<p role="status" class="banner banner-info">${e(input.message)}</p>` : ""}<section class="success-card shiplet-panel"><form method="post" action="/embed/install" style="display:grid;gap:16px"><label>Shiplet<select name="project_id"><option value="new">Create a Shiplet for this website</option>${options}</select></label><label>Workspace for a new Shiplet<select name="organization_id">${input.organizations.map((org) => `<option value="${e(org.id)}">${e(org.name)}</option>`).join("")}</select></label><label>Site URL<input type="url" name="site_url" placeholder="https://your-site.com" required maxlength="2048"></label><p>Use HTTPS, or localhost for development. Add each staging and production origin separately.</p><button class="btn btn-primary" type="submit">Create install snippet</button></form></section>${input.projects.length ? `<details><summary>Manage existing connections</summary><ul>${input.projects.map((project) => `<li><a href="/embed/install?project_id=${e(project.id)}">${e(project.name)}</a></li>`).join("")}</ul></details>` : ""}${installations}</div>`;
+}
+
+// Public visitor feedback for one connected site: off by default, and only
+// when this server has Turnstile keys to keep bots out.
+function visitorPanel(
+  installation: EmbedInstallationRecord & { visitors_enabled_on?: string | null },
+  available: boolean,
+  e: (value: string) => string,
+) {
+  const on = Boolean(installation.visitors_enabled_on);
+  const intro = `<h3>Visitor feedback ${on ? "is on" : "is off"}</h3><p>${
+    on
+      ? "Anyone on this site can leave a note after a quick Cloudflare Turnstile check. Notes arrive marked as from a visitor. If an agent is on duty for this Shiplet, visitors can also chat with it; agents get their messages as untrusted public input."
+      : "Let people who are not signed in leave a note on this site, after a quick Cloudflare Turnstile check, and chat with an agent you put on duty. Their notes arrive marked as from a visitor."
+  }</p>`;
+  if (!available && !on) {
+    return `<div class="embed-visitors">${intro}<p>This Shiplet server has no Turnstile keys yet. Set <code>TURNSTILE_SITE_KEY</code> and the <code>TURNSTILE_SECRET</code> secret to turn it on.</p></div>`;
+  }
+  return `<div class="embed-visitors">${intro}<form method="post" action="/embed/install"><input type="hidden" name="project_id" value="${e(installation.project_id)}"><input type="hidden" name="installation_id" value="${e(installation.id)}"><button class="btn ${on ? "btn-secondary" : "btn-primary"}" name="action" value="${on ? "visitors_off" : "visitors_on"}">${on ? "Turn off visitor feedback" : "Turn on visitor feedback"}</button></form></div>`;
 }

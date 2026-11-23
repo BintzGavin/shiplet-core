@@ -602,6 +602,24 @@ export async function ensureSchema(db: D1Database) {
 					UNIQUE (installation_id, actor_user_id, request_id)
 				)`,
 			),
+		// Public visitors on a website whose installation has visitor feedback
+		// on. Only the token's hash is stored; a session ends at expires_on or
+		// as soon as visitor feedback is turned off.
+		db
+			.prepare(
+				`CREATE TABLE IF NOT EXISTS embed_visitor_sessions (
+					token_hash TEXT PRIMARY KEY,
+					installation_id TEXT NOT NULL,
+					project_id TEXT NOT NULL,
+					organization_id TEXT NOT NULL,
+					site_origin TEXT NOT NULL,
+					page_url TEXT NOT NULL,
+					relay_session TEXT,
+					created_on TEXT NOT NULL,
+					expires_on TEXT NOT NULL,
+					FOREIGN KEY (installation_id) REFERENCES embed_installations(id)
+				)`,
+			),
 	]);
 
 	for (const column of USER_COLUMNS) {
@@ -627,6 +645,11 @@ export async function ensureSchema(db: D1Database) {
 	await addColumnIfMissing(db, "cli_sessions", {
 		name: "authorization_request_id",
 		ddl: "authorization_request_id TEXT",
+	});
+	// When an editor turned visitor feedback on; null while it is off.
+	await addColumnIfMissing(db, "embed_installations", {
+		name: "visitors_enabled_on",
+		ddl: "visitors_enabled_on TEXT",
 	});
 	for (const column of [
 		{ name: "result_feedback_id", ddl: "result_feedback_id TEXT" },

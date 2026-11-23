@@ -56,6 +56,17 @@ export class Hub {
     }));
   }
 
+  // Read-only lookups for a host that enforces its own rules (the relay).
+  findPeer(ref) {
+    const peer = this.peers.get(ref) ?? [...this.peers.values()].find((p) => p.name === ref);
+    return peer ? publicPeer(peer) : null;
+  }
+
+  roomMembers(roomId) {
+    const room = this.rooms.get(roomId);
+    return room ? [...room.members.values()] : null;
+  }
+
   open() {
     const connId = this.newId("conn");
     const conn = { id: connId, peerId: null, waiters: new Set() };

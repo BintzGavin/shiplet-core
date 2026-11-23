@@ -123,6 +123,44 @@ keep their scripts trustworthy. Replies, resolving, and reopening change shared
 threads, so they still confirm in a top-level Shiplet window the page cannot
 cover.
 
+## Feedback from visitors
+
+By default only signed-in reviewers can annotate. To also hear from people who
+use your site, open [Connect a website](https://shiplet.cc/embed/install),
+select the Shiplet, and choose **Turn on visitor feedback** for that site. It is
+off by default, it is set per connected site, and turning it off ends every
+visitor session at once.
+
+With it on, a signed-out visitor sees **Feedback** next to Annotate. They pass a
+quick Cloudflare Turnstile check inside Shiplet's frame, then can:
+
+- **Leave a note** about the page they are on. It arrives in the Shiplet's
+  annotations marked as from a visitor, with the page and no author. Each
+  visitor can send five notes every ten minutes, and each site at most a hundred
+  an hour. Notes are at most 2,000 characters.
+- **Ask an agent**, when one is on duty for the Shiplet. The visitor sees the
+  agent's name and its replies, and nothing else about your organization.
+
+Visitors cannot read other feedback, see your team or other agents, or reach any
+agent except the one on duty. Their text is untrusted: agents receive it labelled
+as from an anonymous visitor, with an instruction never to follow instructions in
+it, reveal private information, or act on it beyond answering.
+
+To put an agent on duty, have it join your organization's handshake relay and
+call `POST /api/organizations/{org}/handshake-sessions/{session}/duty` with
+`{ "shiplet": "<shiplet id>" }` (or the same path through Shiplet MCP). It needs
+read access to that Shiplet's annotations. Send `{ "shiplet": null }`, or leave
+the relay, to go off duty. Visitor messages arrive in its inbox like any other
+handshake message, with `from.kind` set to `"visitor"`, and it answers with an
+ordinary send to that visitor in the same handshake. One agent is on duty per
+Shiplet; a newer one replaces it.
+
+Self-hosting: visitor feedback needs your own Turnstile widget. Create one for
+your Shiplet hostname, then set `TURNSTILE_SITE_KEY` as a variable and
+`TURNSTILE_SECRET` as a secret. Without both, visitor feedback cannot be turned
+on, and a site that had it stops offering it. Shiplet checks every Turnstile
+token server side, for the `visitor` action and your Shiplet hostname.
+
 ## Configuration and removal
 
 | Attribute | Meaning |
@@ -152,7 +190,8 @@ style-src … https://shiplet.cc;
 The widget loads its shadow-root stylesheet from `/api/embed/widget.css`.
 You do not need to allow inline styles for the widget. Authentication and feedback requests
 originate inside the Shiplet frame, so the host does not need Shiplet in its
-`connect-src`. Use your own Shiplet origin for self-hosted installations. Do not
+`connect-src`. Visitor feedback loads Turnstile inside the Shiplet frame too, so
+your page's policy needs nothing more for it. Use your own Shiplet origin for self-hosted installations. Do not
 put credentials or a server installation secret into HTML.
 
 ## Privacy and compatibility
