@@ -17,9 +17,14 @@ import type { HandshakeRelay, RelayFailure, RelayOwner, RelaySendInput } from ".
 
 export type HandshakeActor =
 	// browser: a page on Shiplet's own origin with the person's browser session.
-	| { kind: "user"; user: ShipletUser; browser?: boolean }
+	// embed: the trusted review frame of the website widget, signed in with its
+	// embed review session for one Shiplet (the platform session cannot reach a
+	// third-party frame). It may only be a person in its own session.
+	| { kind: "user"; user: ShipletUser; browser?: boolean; embed?: EmbedBinding }
 	| { kind: "token"; token: OrganizationApiTokenRecord }
 	| { kind: "oauth_agent"; principal: AuthenticatedMcpAgentPrincipal };
+
+export type EmbedBinding = { projectId: string; installationId: string };
 
 // An actor admitted to one organization's relay.
 export type HandshakeMember = { organizationId: string; owner: RelayOwner; actor: HandshakeActor };
@@ -29,6 +34,14 @@ export function handshakeError(status: number, error: string, message: string) {
 }
 
 const notFound = () => handshakeError(404, "not_found", "No handshake relay for that organization.");
+
+const embedBinding = (actor: HandshakeActor) => (actor.kind === "user" ? (actor.embed ?? null) : null);
+
+// What the website widget may not do: it is a person at one review page, not a
+// watcher of the organization.
+export function refuseEmbed(member: HandshakeMember) {
+	return embedBinding(member.actor) ? handshakeError(403, "forbidden", "The website widget can only talk in its own session.") : null;
+}
 
 export function handshakesAvailable(env: Env): Response | null {
 	if (!useFeatureFlag(env, AGENT_HANDSHAKES_FLAG) || !env.HANDSHAKE_RELAY) {
@@ -54,6 +67,11 @@ export async function admitToOrganization(env: Env, actor: HandshakeActor, organ
 		if (!principal.permissions.includes("mcp")) return handshakeError(403, "forbidden", "This agent needs the mcp permission.");
 		if (!(await getOrganizationMembership(env.DB, organizationId, principal.subject.id))) return notFound();
 		return { organizationId, actor, owner: { actor: principal.actorId, account: displayName(principal.subject) } };
+	}
+	if (actor.embed) {
+		// Only the organization of the Shiplet the widget session is for.
+		const project = (await getProjectById(env.DB, actor.embed.projectId)) as Project | null;
+		if (!project || project.organization_id !== organizationId) return notFound();
 	}
 	if (!(await getOrganizationMembership(env.DB, organizationId, actor.user.id))) return notFound();
 	return { organizationId, actor, owner: { actor: `user:${actor.user.id}`, account: displayName(actor.user) } };
@@ -82,6 +100,9 @@ async function verifyRequest(env: Env, member: HandshakeMember, request: unknown
 		return handshakeError(400, "bad_request", "request must be { shiplet, feedback }.");
 	}
 	const missing = handshakeError(404, "request_not_found", "No annotation you can read with that Shiplet and feedback id.");
+	// The website widget ties a handshake only to the Shiplet under review.
+	const embed = embedBinding(member.actor);
+	if (embed && shiplet !== embed.projectId) return missing;
 	const project = (await getProjectById(env.DB, shiplet)) as Project | null;
 	if (!project || !(await canReadAnnotations(env, member, project))) return missing;
 	const row = (await getReviewFeedback(env.DB, project.id, feedback)) as { id: string; ticket_label?: string | null } | null;
@@ -115,6 +136,9 @@ export const PERSON_APPS = ["shiplet-dashboard", "shiplet-review", "shiplet-embe
 
 export async function handleOpenSession(env: Env, member: HandshakeMember, body: unknown) {
 	const input = record(body);
+	if (embedBinding(member.actor) && input.kind !== PERSON_KIND) {
+		return handshakeError(403, "embed_person_only", "From the website widget you can only join as yourself, as a person.");
+	}
 	const peer = input.kind === PERSON_KIND ? personPeer(member, input.app) : { name: input.name, kind: input.kind, app: input.app, machine: input.machine };
 	if (peer instanceof Response) return peer;
 	const result = await relay(env, member.organizationId).openSession(member.owner, peer);
@@ -132,7 +156,7 @@ function personPeer(member: HandshakeMember, app: unknown) {
 	return {
 		name: peerName(displayName(actor.user)),
 		kind: PERSON_KIND,
-		app: (PERSON_APPS as readonly unknown[]).includes(app) ? app : PERSON_APPS[0],
+		app: actor.embed ? "shiplet-embed" : (PERSON_APPS as readonly unknown[]).includes(app) ? app : PERSON_APPS[0],
 		machine: null,
 	};
 }
@@ -173,6 +197,8 @@ export async function handleReadInbox(env: Env, member: HandshakeMember, session
 }
 
 export async function handleExport(env: Env, member: HandshakeMember, sessionId: string, handshakeId: string) {
+	const refused = refuseEmbed(member);
+	if (refused) return refused;
 	return respond(await relay(env, member.organizationId).exportHandshake(member.owner, sessionId, handshakeId));
 }
 
@@ -195,5 +221,7 @@ export async function listHandshakesFor(env: Env, member: HandshakeMember): Prom
 }
 
 export async function handleListHandshakes(env: Env, member: HandshakeMember) {
+	const refused = refuseEmbed(member);
+	if (refused) return refused;
 	return Response.json({ handshakes: await listHandshakesFor(env, member) });
 }

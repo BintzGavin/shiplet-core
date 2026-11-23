@@ -12,6 +12,11 @@ import {
   reviewAttachmentDraftScript,
   reviewAttachmentDraftStyles,
 } from "./review-attachment-drafts";
+import {
+  reviewHostAgentsScript,
+  reviewHostAgentsStartScript,
+  reviewHostAgentsStyles,
+} from "./review-host-agents";
 
 export interface TrustedReviewHostInput {
   shipletId: string;
@@ -28,6 +33,10 @@ export interface TrustedReviewHostInput {
   frameAncestorOrigins?: string[];
   embeddedSiteOrigin?: string;
   reviewState?: TrustedReviewHostState;
+  // The organization whose agents the reviewer can talk to from the Agents
+  // panel. Set only on hosts served from Shiplet's own origin, for a signed-in
+  // member, with handshakes on.
+  organizationId?: string | null;
 }
 
 export type TrustedReviewHostState =
@@ -622,6 +631,10 @@ export function createTrustedReviewHostResponse(
     }
     throw new TypeError("Invalid review API URL for draft context");
   })();
+  if (input.organizationId) assertIdentifier(input.organizationId, "organization ID");
+  const organizationAttribute = input.organizationId
+    ? ` data-shiplet-organization-id="${escapeHtml(input.organizationId)}"`
+    : "";
   const submissionMode = input.submissionMode ?? "confirmation";
   if (!["confirmation", "sandbox", "direct"].includes(submissionMode)) {
     throw new TypeError("Invalid review submission mode");
@@ -660,7 +673,7 @@ export function createTrustedReviewHostResponse(
     ? `<iframe data-shiplet-widget-frame="v1" title="Review widget for ${title}" src="${escapeHtml(widgetUrl.toString())}" sandbox="${widgetSandbox}" referrerpolicy="no-referrer"></iframe>`
     : "";
   const html = `<!doctype html>
-<html lang="en" data-shiplet-trusted-review-host="v1" data-review-state="ready" data-review-embed-origin="${escapeHtml(embeddedSiteOrigin)}" data-shiplet-embed-origin="${escapeHtml(embeddedSiteOrigin)}" data-shiplet-id="${escapeHtml(input.shipletId)}" data-revision-id="${escapeHtml(input.revisionId)}" data-review-avatar-url="${escapeHtml(new URL(AVATAR_SPRITE_URL, hostScriptUrl.origin).toString())}" data-review-api-url="${escapeHtml(reviewApiUrl.toString())}" data-review-draft-context-url="${escapeHtml(draftContextUrl)}" data-review-artifact-url="${escapeHtml(artifactUrl.toString())}" data-review-confirm-url="${escapeHtml(confirmationUrl.toString())}" data-review-page-url="${escapeHtml(reviewPageUrl)}" data-review-submission-mode="${submissionMode}">
+<html lang="en" data-shiplet-trusted-review-host="v1" data-review-state="ready" data-review-embed-origin="${escapeHtml(embeddedSiteOrigin)}" data-shiplet-embed-origin="${escapeHtml(embeddedSiteOrigin)}" data-shiplet-id="${escapeHtml(input.shipletId)}" data-revision-id="${escapeHtml(input.revisionId)}" data-review-avatar-url="${escapeHtml(new URL(AVATAR_SPRITE_URL, hostScriptUrl.origin).toString())}" data-review-api-url="${escapeHtml(reviewApiUrl.toString())}" data-review-draft-context-url="${escapeHtml(draftContextUrl)}" data-review-artifact-url="${escapeHtml(artifactUrl.toString())}" data-review-confirm-url="${escapeHtml(confirmationUrl.toString())}" data-review-page-url="${escapeHtml(reviewPageUrl)}" data-review-submission-mode="${submissionMode}"${organizationAttribute}>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
@@ -688,6 +701,8 @@ export function trustedReviewHostScript(): string {
   const avatarPresets = JSON.stringify(AVATAR_PRESETS).replace(/</g, "\\u003c");
   const annotationEditor = reviewAnnotationEditorScript();
   const attachmentDrafts = reviewAttachmentDraftScript();
+  const agents = reviewHostAgentsScript();
+  const agentsStart = reviewHostAgentsStartScript();
   return String.raw`(() => {
 	"use strict";
 ${annotationEditor}
@@ -1315,6 +1330,7 @@ ${attachmentDrafts}
 	contextualThreadHeader.append(contextualThreadTitle, contextualThreadClose);
 	contextualThread.append(contextualThreadHeader, contextualTargetStatus, contextualThreadBody);
 	document.body.appendChild(contextualThread);
+${agents}
 	const widgetRecovery = widget ? document.createElement("section") : null;
 	const widgetRecoveryMessage = widget ? document.createElement("p") : null;
 	const widgetRetry = widget ? document.createElement("button") : null;
@@ -2641,10 +2657,10 @@ ${attachmentDrafts}
 
 	function notifyEmbedView() {
 		if (!embeddedSiteOrigin || window === parent) return;
-		const view = annotationEditing ? "drawing" : annotationSelecting ? "selecting" : annotationActive ? (annotationExpanded ? "expanded" : "composer") : activeThreadPresentation === "contextual" && activeFeedbackId ? "thread" : !panel.hidden ? "comments" : "toolbar";
+		const view = annotationEditing ? "drawing" : annotationSelecting ? "selecting" : agentsOpen ? "agents" : annotationActive ? (annotationExpanded ? "expanded" : "composer") : activeThreadPresentation === "contextual" && activeFeedbackId ? "thread" : !panel.hidden ? "comments" : "toolbar";
 		page.setAttribute("data-shiplet-embed-view", view);
 		const coordinates = artifactCapture && artifactCapture.coordinates;
-		parent.postMessage({ protocol: "shiplet.embed.ui.v1", view, anchor: coordinates ? { x: coordinates.pageX, y: coordinates.pageY } : null, activeFeedbackId: activeThreadPresentation === "contextual" ? activeFeedbackId : "", overlayVisible }, embeddedSiteOrigin);
+		parent.postMessage({ protocol: "shiplet.embed.ui.v1", view, anchor: coordinates ? { x: coordinates.pageX, y: coordinates.pageY } : null, activeFeedbackId: activeThreadPresentation === "contextual" ? activeFeedbackId : "", overlayVisible, ...(agentsEnabled && !agentsLauncher.hidden ? { agents: true } : {}) }, embeddedSiteOrigin);
 	}
 
 	function setAnnotationMode(active, selecting) {
@@ -2767,7 +2783,7 @@ ${attachmentDrafts}
 	}
 
 	function setReviewSurfaceOpenState() {
-		launcherDock.setAttribute("data-review-surface-open", !panel.hidden || !contextualThread.hidden ? "true" : "false");
+		launcherDock.setAttribute("data-review-surface-open", !panel.hidden || !contextualThread.hidden || agentsOpen ? "true" : "false");
 	}
 
 	function setActiveThread(next, presentation, trigger) {
@@ -5339,7 +5355,7 @@ ${attachmentDrafts}
 	void (async () => { await fetchFreshReviewContext("initial"); if (contextReady) await hydrateForContext(); else { list.setAttribute("aria-busy", "false"); setStatus("Review identity is unavailable. Use Refresh after access is restored.", "error"); } })();
 	void loadWatch();
 	void loadMentionUsers();
-	connectPresence();
+	connectPresence();${agentsStart}
 	applyTransientVisibility();
 })();`;
 }
@@ -5417,6 +5433,7 @@ html[data-shiplet-embed-view="expanded"] .shiplet-annotation-modebar{display:non
 
 ${reviewAnnotationEditorStyles()}
 ${reviewAttachmentDraftStyles()}
+${reviewHostAgentsStyles()}
 .shiplet-review-form .shiplet-review-rich-tools{padding:0 12px 12px}
 .shiplet-review-rich-tools>summary{min-height:36px;display:flex;align-items:center;gap:8px;width:fit-content;border-radius:6px;color:var(--shiplet-muted);font-size:12px;font-weight:600;cursor:pointer;list-style:none}
 .shiplet-review-rich-tools>summary::-webkit-details-marker{display:none}

@@ -161,6 +161,7 @@ import {
 import { ensureTraceSchema } from "./traces/schema";
 import { registerTraceRoutes } from "./traces/routes";
 import { registerHandshakeRoutes } from "./handshakes/routes";
+import { handshakeError, handshakesAvailable } from "./handshakes/handlers";
 import { executeHandshakeCodeModeRequest, isHandshakeCodeModePath } from "./handshakes/codemode";
 import { deleteProjectTraceObjects, sweepArchivedShipletTraces } from "./traces/store";
 import { sweepExpiredUploadLinks } from "./traces/uploads";
@@ -16226,7 +16227,8 @@ app.get("/embed/review/draft-context", async (c) => {
 
 app.get("/embed/review/host", async (c) => {
   try {
-    const { session, project, pageUrl } = await requireEmbedReviewSession(c);
+    const { session, project, user, pageUrl } =
+      await requireEmbedReviewSession(c);
     const origin = new URL(c.req.url).origin;
     const bindingQuery = new URLSearchParams({
       installation_id: session.installationId,
@@ -16244,6 +16246,11 @@ app.get("/embed/review/host", async (c) => {
       submissionMode: "direct",
       frameAncestorOrigins: [session.siteOrigin],
       embeddedSiteOrigin: session.siteOrigin,
+      organizationId: await reviewHandshakeOrganizationId(
+        c.env,
+        project,
+        user.id,
+      ),
     });
   } catch (error) {
     if (isResponse(error)) {
@@ -17226,7 +17233,45 @@ app.post("/api/shiplets", async (c) => {
 });
 
 registerTraceRoutes(app);
-registerHandshakeRoutes(app);
+registerHandshakeRoutes(app, {
+  // The website widget's trusted frame talks to agents with its embed review
+  // session. Like the other embed routes, a platform session in the same
+  // request must be the same person.
+  embedActor: async (c) => {
+    const { session, project, user } = await requireEmbedReviewSession(c);
+    const platformSessionCookie =
+      getCookie(c.req.raw, SESSION_COOKIE) ||
+      getCookie(c.req.raw, LEGACY_SESSION_COOKIE);
+    if (platformSessionCookie) {
+      const visibleUser = await getCurrentUser(c.req.raw, c.env);
+      if (!visibleUser || visibleUser.id !== user.id) {
+        return handshakeError(
+          403,
+          "review_actor_mismatch",
+          "This site's Shiplet sign-in belongs to someone else. Choose Annotate to sign in again.",
+        );
+      }
+    }
+    return { user, projectId: project.id, installationId: session.installationId };
+  },
+});
+
+// The organization whose agents a review host may offer to talk to: only for
+// a signed-in member of the Shiplet's organization, with handshakes on.
+async function reviewHandshakeOrganizationId(
+  env: Env,
+  project: Project,
+  userId: string | null | undefined,
+) {
+  if (handshakesAvailable(env) !== null) return null;
+  if (!project.organization_id || !userId) return null;
+  const membership = await getOrganizationMembership(
+    env.DB,
+    project.organization_id,
+    userId,
+  );
+  return membership ? project.organization_id : null;
+}
 
 // Trace-only Shiplets (docs/traces-spec.md D19) are created through the same
 // publish path as every other Shiplet, with a page Shiplet writes as the
@@ -21074,6 +21119,11 @@ async function handleValidatedRevisionPreviewHost(c: any) {
         appUrl,
       ).toString(),
       reviewPageUrl: new URL(path, appUrl).toString(),
+      organizationId: await reviewHandshakeOrganizationId(
+        c.env,
+        project,
+        access.actor.kind === "human" ? access.actor.id : null,
+      ),
     });
     const response = addTrustedRevisionPreviewContext(host, selector);
     if (access.actor.kind === "human") {
@@ -21296,6 +21346,11 @@ app.get("/shiplets/:projectId/review-host", async (c) => {
         reviewPageUrl: artifactAbsoluteUrl(c.env, c.req.url, project),
         submissionMode: "direct",
         allowArtifactDownloads: standalonePreviewDownloadsAllowed(project),
+        organizationId: await reviewHandshakeOrganizationId(
+          c.env,
+          project,
+          user?.id,
+        ),
       }),
       c.env,
       c.req.url,

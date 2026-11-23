@@ -122,10 +122,12 @@ export function embedWidgetScript() {
         }
         clearTimeout(this.loadTimer);
         this.surface.querySelector(".recovery")?.remove();
-        if (["toolbar", "comments", "thread", "selecting", "composer", "expanded", "drawing", "access"].includes(data.view)) {
+        if (["toolbar", "comments", "thread", "selecting", "composer", "expanded", "drawing", "access", "agents"].includes(data.view)) {
           const previousView = this.surface.dataset.view;
           const focusEpoch = ++this.focusEpoch;
           this.surface.dataset.view = data.view;
+          // The toolbar carries a third button (Agents) for signed-in organization members.
+          if (data.agents === true) this.surface.dataset.agents = "true"; else delete this.surface.dataset.agents;
           this.pins.hidden = data.view === "selecting";
           this.anchor = data.anchor && Number.isFinite(data.anchor.x) && Number.isFinite(data.anchor.y) ? data.anchor : null;
           if (typeof data.activeFeedbackId === "string" && /^[A-Za-z0-9][A-Za-z0-9._:-]{0,255}$/.test(data.activeFeedbackId)) this.selectedFeedbackId = data.activeFeedbackId;
@@ -327,7 +329,9 @@ export const EMBED_WIDGET_CSS = String.raw`
 :host([data-dock=top-left]){left:0;right:auto;top:0;bottom:auto}:host([data-dock=top-right]){left:auto;right:0;top:0;bottom:auto}:host([data-dock=bottom-left]){left:0;right:auto;top:auto;bottom:0}:host([data-dock=bottom-right]){left:auto;right:0;top:auto;bottom:0}
 :host([data-dock=top-left]) .surface,:host([data-dock=top-right]) .surface{top:max(4px,env(safe-area-inset-top));bottom:auto}:host([data-dock=top-left]) .surface,:host([data-dock=bottom-left]) .surface{left:max(4px,env(safe-area-inset-left));right:auto}:host([data-dock=top-right]) .surface,:host([data-dock=bottom-right]) .surface{right:max(4px,env(safe-area-inset-right));left:auto}
 .surface{position:fixed;right:4px;bottom:4px;width:272px;height:80px;border:0;background:transparent}.surface[hidden]{display:none}iframe{display:block;width:100%;height:100%;border:0;background:transparent;color-scheme:normal}
+.surface[data-agents=true]:not([data-view]),.surface[data-agents=true][data-view=toolbar]{width:min(360px,100vw)}
 .surface[data-view=comments]{width:min(420px,100vw);height:min(680px,100dvh)}
+.surface[data-view=agents]{width:min(440px,calc(100vw - 16px));height:min(600px,calc(100dvh - 16px))}
 .surface[data-view=thread]{width:min(440px,calc(100vw - 16px));height:min(560px,calc(100dvh - 16px))}
 .surface[data-view=selecting]{top:4px;left:50%;bottom:auto;right:auto;transform:translateX(-50%);width:min(560px,100vw);height:76px}
 .surface[data-view=composer]{width:min(408px,100vw);height:min(400px,100dvh)}
@@ -337,5 +341,5 @@ export const EMBED_WIDGET_CSS = String.raw`
 .overlay-toggle{position:fixed;right:8px;bottom:80px;z-index:3;min-height:32px;padding:0 9px;border:1px solid #c8cbd3;border-radius:7px;background:#fbf9f4;color:#20293a;font:700 11px system-ui;cursor:pointer;box-shadow:0 3px 10px #0003}.overlay-toggle:focus-visible{outline:3px solid #2f6e88;outline-offset:3px}
 .pins button{position:fixed;border-radius:50%;padding:0;min-height:32px;min-width:32px;width:auto;height:32px;background:#fff;color:#20293a;border:2px solid #20293a;font:800 12px system-ui;cursor:pointer;box-shadow:0 3px 10px #0003}.pins button[data-active=true]{background:#a73f28;color:#fff;box-shadow:0 0 0 2px #20293a,0 4px 12px #0004}.pins .pin-stack{background:#a73f28;color:#fff;border-color:#fff}.pins .pin-stack-menu{position:fixed;z-index:2;display:grid;gap:4px;width:min(320px,calc(100vw - 16px));max-height:min(220px,calc(100vh - 16px));padding:6px;overflow:auto;border:1px solid #c8cbd3;border-radius:9px;background:#fff;box-shadow:0 10px 28px #0004}.pins .pin-stack-menu[hidden]{display:none}.pins .pin-stack-menu button{position:static;width:100%;height:auto;min-height:36px;padding:6px 8px;border:1px solid transparent;border-radius:6px;background:#fff;color:#20293a;font:700 11px/1.3 system-ui;text-align:left;box-shadow:none}.pins .pin-stack-menu button:hover,.pins .pin-stack-menu button:focus-visible{border-color:#2f6e88;background:#edf5f7;outline:0}.pins[hidden]{display:none}
 .recovery{position:absolute;inset:8px;padding:16px;border:1px solid #c8cbd3;border-radius:12px;background:#fbf9f4;display:flex;gap:12px;align-items:center;flex-wrap:wrap}.recovery a{color:#245b72}.recovery p{margin:0}.recovery button{min-height:44px;padding:8px 16px;border:1px solid #20293a;border-radius:8px;background:#20293a;color:#fff;font:700 14px system-ui;cursor:pointer}button:focus-visible,a:focus-visible{outline:3px solid #2f6e88;outline-offset:3px}
-@media(max-width:480px){.surface{right:0;bottom:0}.surface[data-view=comments]{height:100dvh;width:100vw}.surface[data-view=thread]{right:8px;bottom:8px;width:calc(100vw - 16px);height:min(560px,calc(100dvh - 16px))}.surface[data-view=expanded]{height:min(460px,100dvh)}}
+@media(max-width:480px){.surface{right:0;bottom:0}.surface[data-view=comments]{height:100dvh;width:100vw}.surface[data-view=agents]{right:8px;bottom:8px;width:calc(100vw - 16px);height:min(600px,calc(100dvh - 16px))}.surface[data-view=thread]{right:8px;bottom:8px;width:calc(100vw - 16px);height:min(560px,calc(100dvh - 16px))}.surface[data-view=expanded]{height:min(460px,100dvh)}}
 `;

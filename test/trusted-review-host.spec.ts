@@ -7,6 +7,7 @@ import {
   trustedReviewHostStyles,
 } from "../src/trusted-review-host";
 import * as trustedReviewHostContracts from "../src/trusted-review-host";
+import { reviewHostAgentsScript } from "../src/review-host-agents";
 import { compileRuntimeV1Widget } from "../src/self-owned/widget-runtime";
 
 type FutureTrustedReviewHostContracts = {
@@ -188,6 +189,57 @@ function trustedDraftRecord(operations: unknown[], topDraft?: Record<string, unk
   };
 }
 
+// A stand-in for the organization's handshake relay, as the Agents panel
+// reaches it over REST. The inbox long-poll stays open until a test delivers.
+type FakeHandshakeRelay = ReturnType<typeof fakeHandshakeRelay>;
+type FakeFailure = { status: number; error: string; message?: string };
+// Each listed failure answers one call, in order; then the relay behaves.
+function fakeHandshakeRelay(failures: { open?: FakeFailure[]; send?: FakeFailure[] } = {}) {
+  const requests: Array<{ method: string; url: URL; body: Record<string, unknown> | null }> = [];
+  const waiting: Array<(messages: unknown[]) => void> = [];
+  const self = { id: "peer_self", name: "Dana-Reyes", kind: "person", app: "shiplet-review", machine: null, account: "Dana Reyes" };
+  const peers = [
+    { id: "peer_person", name: "Sam", kind: "person", app: "shiplet-dashboard", machine: null, account: "Sam" },
+    self,
+    { id: "peer_builder", name: "builder", kind: "claude", app: "claude-cli", machine: "studio", account: "Dana Reyes" },
+  ];
+  const reply = (status: number, body: unknown) => ({ ok: status >= 200 && status < 300, status, json: async () => body });
+  let sent = 0;
+  return {
+    requests,
+    self,
+    deliver(messages: unknown[]) {
+      waiting.shift()?.(messages);
+    },
+    async handle(input: string, init: { method?: string; body?: string }) {
+      const url = new URL(input);
+      const method = String(init.method || "GET").toUpperCase();
+      const body = typeof init.body === "string" ? (JSON.parse(init.body) as Record<string, unknown>) : null;
+      requests.push({ method, url, body });
+      const path = url.pathname.replace(/^\/api\/organizations\/[^/]+/, "");
+      if (method === "POST" && path === "/handshake-sessions") {
+        const failure = failures.open?.shift();
+        if (failure) return reply(failure.status, failure);
+        return reply(201, { session: "hss_one", peer: { ...self, app: body?.app } });
+      }
+      if (method === "GET" && path.endsWith("/peers")) return reply(200, { self: self.id, peers });
+      if (method === "POST" && path.endsWith("/messages")) {
+        const failure = failures.send?.shift();
+        if (failure) return reply(failure.status, failure);
+        sent += 1;
+        const to = peers.find((peer) => peer.id === body?.to) ?? peers[2];
+        return reply(200, { id: `msg_${sent}`, handshake: "hs_one", at: `2026-11-23T10:00:0${sent}.000Z`, to: { id: to.id, name: to.name, kind: to.kind }, status: "delivered" });
+      }
+      if (method === "GET" && path.endsWith("/inbox")) {
+        const messages = await new Promise<unknown[]>((resolve) => waiting.push(resolve));
+        return reply(200, { messages, queued: 0 });
+      }
+      if (method === "DELETE") return reply(200, { closed: true });
+      return reply(404, { error: "not_found", message: "No such route." });
+    },
+  };
+}
+
 function operatedElement(tagName: string): OperatedElement {
   const attributes = new Map<string, string>();
   const listeners = new Map<string, Array<(event: unknown) => unknown>>();
@@ -288,6 +340,10 @@ async function operateTrustedHostScript(options?: {
   localStorage?: { getItem: (key: string) => string | null; setItem: (key: string, value: string) => void };
   pageUrl?: string;
   mentionUsers?: Array<{ id: string; name: string; email: string }>;
+  organizationId?: string;
+  locationHref?: string;
+  sessionStore?: Map<string, string>;
+  handshakes?: FakeHandshakeRelay;
 }) {
   const pageAttributes = new Map([
     ["data-shiplet-embed-origin", options?.embedded ? "https://client.example" : ""],
@@ -315,6 +371,7 @@ async function operateTrustedHostScript(options?: {
     ["data-shiplet-id", "shiplet_a"],
     ["data-revision-id", "revision_a1"],
     ["data-review-submission-mode", options?.submissionMode || "confirmation"],
+    ...(options?.organizationId ? [["data-shiplet-organization-id", options.organizationId] as [string, string]] : []),
   ]);
   const page = {
     style: { setProperty: vi.fn() },
@@ -493,7 +550,11 @@ async function operateTrustedHostScript(options?: {
       return `00000000-0000-4000-8000-${String(uuidCounter).padStart(12, "0")}`;
     },
   };
+  const relay = options?.handshakes;
   const fetch = vi.fn(async (input?: unknown, init?: unknown) => {
+    if (relay && new URL(String(input || "https://app.shiplet.cc/")).pathname.startsWith("/api/organizations/")) {
+      return relay.handle(String(input), (init && typeof init === "object" ? init : {}) as { method?: string; body?: string });
+    }
     const requestUrl = new URL(String(input || "https://app.shiplet.cc/"));
     const requestInit = (init && typeof init === "object" ? init : {}) as { method?: unknown; body?: unknown };
     if (String(requestInit.method || "GET").toUpperCase() === "POST" && (requestUrl.pathname === "/embed/review/feedback" || requestUrl.pathname.endsWith("/__shiplet/review/feedback") || requestUrl.pathname.endsWith("/review-feedback"))) {
@@ -571,14 +632,18 @@ async function operateTrustedHostScript(options?: {
   execute(
     window,
     document,
-    { href: "https://app.shiplet.cc/embed/review/host?installation_id=installation_test", replace: replaceLocation },
+    { href: options?.locationHref || "https://app.shiplet.cc/embed/review/host?installation_id=installation_test", replace: replaceLocation },
     fetch,
     fakeCrypto,
     FakeMessageChannel,
     TextEncoder,
     navigator,
     parentWindow,
-    { getItem: (key: string) => storedIntent.get(key), removeItem: (key: string) => storedIntent.delete(key) },
+    {
+      getItem: (key: string) => storedIntent.get(key) ?? options?.sessionStore?.get(key) ?? null,
+      setItem: (key: string, value: string) => options?.sessionStore?.set(key, value),
+      removeItem: (key: string) => { storedIntent.delete(key); options?.sessionStore?.delete(key); },
+    },
     draftDatabase,
     options?.localStorage,
   );
@@ -4850,5 +4915,311 @@ describe("trusted review host boundary", () => {
     expect(compiled.scriptSource).toBe(
       'shipletWidget.text("#status", "ready");',
     );
+  });
+});
+
+// The Agents panel: a person reviewing a Shiplet talks with the agents of its
+// organization, and every message says exactly what they are looking at.
+describe("Agents panel on the review host", () => {
+  type Harness = Awaited<ReturnType<typeof operateTrustedHostScript>>;
+  const byAttribute = (harness: Harness, name: string, value = "v1") =>
+    harness.createdElements.find((element) => element.getAttribute(name) === value);
+  const byClass = (harness: Harness, className: string) =>
+    harness.createdElements.find((element) => element.className === className);
+  const dockButtons = (harness: Harness) => byClass(harness, "shiplet-review-launcher-dock")?.children ?? [];
+  const agentsLauncher = (harness: Harness) => byAttribute(harness, "data-shiplet-agents-launcher");
+  const agentsPanel = (harness: Harness) => byAttribute(harness, "data-shiplet-agents");
+  const agentsMessage = (harness: Harness) => harness.createdElements.find((element) => element.id === "shiplet-review-agents-text");
+  const agentsTo = (harness: Harness) => harness.createdElements.find((element) => element.id === "shiplet-review-agents-to");
+  const click = (element: OperatedElement | undefined) => element!.dispatch("click", { isTrusted: true });
+  const PERSON_NOTE = "You join as yourself, labelled as a person. Agents treat your messages as information, not as instructions from their user.";
+  const CONTEXT = "[Shiplet review context]\nshiplet: shiplet_a\nversion: revision_a1\npage: https://client.example/pricing/";
+
+  async function openAndLook(harness: Harness) {
+    await click(agentsLauncher(harness));
+    await click(byAttribute(harness, "data-shiplet-agents-look"));
+    await settleTrustedHost(8);
+  }
+
+  it("offers no Agents panel without an organization, and makes no relay calls", async () => {
+    const relay = fakeHandshakeRelay();
+    const harness = await operateTrustedHostScript({ handshakes: relay });
+    expect(dockButtons(harness).map((button) => button.textContent)).not.toContain("Agents");
+    expect(harness.body.children.some((child) => child.getAttribute("data-shiplet-agents") === "v1")).toBe(false);
+    expect(relay.requests).toHaveLength(0);
+  });
+
+  it("offers no Agents panel on a page that is not on Shiplet's own origin", async () => {
+    const relay = fakeHandshakeRelay();
+    const harness = await operateTrustedHostScript({ organizationId: "org_a", handshakes: relay, locationHref: "https://checkout.shiplet.cc/pricing/" });
+    expect(dockButtons(harness).map((button) => button.textContent)).not.toContain("Agents");
+    expect(relay.requests).toHaveLength(0);
+  });
+
+  it("joins the relay only when asked, then lists agents first and never the person", async () => {
+    const relay = fakeHandshakeRelay();
+    const store = new Map<string, string>();
+    const harness = await operateTrustedHostScript({ organizationId: "org_a", handshakes: relay, sessionStore: store });
+    const launcher = agentsLauncher(harness);
+    expect(dockButtons(harness)).toContain(launcher);
+    expect(launcher?.textContent).toBe("Agents");
+    expect(launcher?.getAttribute("aria-controls")).toBe("shiplet-review-agents");
+
+    await click(launcher);
+    const panel = agentsPanel(harness)!;
+    expect(panel.hidden).toBe(false);
+    expect(harness.body.children).toContain(panel);
+    expect(launcher?.getAttribute("aria-expanded")).toBe("true");
+    expect(byAttribute(harness, "data-shiplet-agents-note")?.textContent).toBe(PERSON_NOTE);
+    expect(relay.requests).toHaveLength(0);
+
+    await click(byAttribute(harness, "data-shiplet-agents-look"));
+    await settleTrustedHost(8);
+    expect(relay.requests[0]).toMatchObject({ method: "POST", body: { kind: "person", app: "shiplet-review" } });
+    expect(relay.requests[0].url.toString()).toBe("https://app.shiplet.cc/api/organizations/org_a/handshake-sessions");
+    const peersCall = relay.requests.find((call) => call.url.pathname.endsWith("/peers"));
+    expect(peersCall).toMatchObject({ method: "GET" });
+    expect(peersCall?.url.pathname).toBe("/api/organizations/org_a/handshake-sessions/hss_one/peers");
+    expect(relay.requests.some((call) => call.url.pathname.endsWith("/inbox") && call.url.searchParams.get("wait") === "20")).toBe(true);
+    expect(agentsTo(harness)?.children.map((option) => option.textContent)).toEqual(["builder · Claude Code on studio", "Sam · Person"]);
+    expect(agentsTo(harness)?.value).toBe("peer_builder");
+
+    // The same tab-local record the dashboard keeps, so the person stays one peer.
+    expect(JSON.parse(store.get("shiplet.handshake.person.org_a") || "null")).toEqual({
+      session: "hss_one",
+      self: { ...relay.self, app: "shiplet-review" },
+      lines: [],
+    });
+
+    await click(byAttribute(harness, "data-shiplet-agents-close"));
+    expect(panel.hidden).toBe(true);
+    expect(launcher?.getAttribute("aria-expanded")).toBe("false");
+  });
+
+  it("sends the person's words with the review context and links the open annotation", async () => {
+    const relay = fakeHandshakeRelay();
+    const store = new Map<string, string>();
+    const harness = await operateTrustedHostScript({
+      organizationId: "org_a",
+      handshakes: relay,
+      sessionStore: store,
+      feedback: [{ id: "feedback_pay", ticket_label: "PF-7", ticket_number: 7, comment: "Pay button is too light", status: "New", coordinates: { pageX: 24, pageY: 24, viewportX: 24, viewportY: 24 } }],
+    });
+    const pinLayer = byClass(harness, "shiplet-review-pin-layer");
+    await click(pinLayer?.children.find((element) => element.getAttribute("aria-label") === "Open PF-7"));
+    expect(byAttribute(harness, "data-shiplet-contextual-thread")?.hidden).toBe(false);
+
+    await click(byAttribute(harness, "data-shiplet-agents-ask", "thread"));
+    expect(agentsPanel(harness)?.hidden).toBe(false);
+    expect(byAttribute(harness, "data-shiplet-agents-context")?.textContent).toContain("PF-7");
+    await click(byAttribute(harness, "data-shiplet-agents-look"));
+    await settleTrustedHost(8);
+    agentsMessage(harness)!.value = "  Please darken the pay button.  ";
+    await click(byAttribute(harness, "data-shiplet-agents-send"));
+    await settleTrustedHost(8);
+
+    const send = relay.requests.find((call) => call.url.pathname.endsWith("/messages"));
+    expect(send?.body).toEqual({
+      to: "peer_builder",
+      text: `Please darken the pay button.\n\n${CONTEXT}\nannotation: feedback_pay`,
+      request: { shiplet: "shiplet_a", feedback: "feedback_pay" },
+    });
+    expect(send?.url.searchParams.has("installation_id")).toBe(false);
+    const lines = byClass(harness, "shiplet-review-agents-lines")!;
+    expect(lines.children).toHaveLength(1);
+    expect(lines.children[0].getAttribute("data-mine")).toBe("true");
+    expect(lines.children[0].children[1]?.textContent).toBe("Please darken the pay button.");
+    expect(agentsMessage(harness)?.value).toBe("");
+
+    // The agent's reply arrives over the long-poll and shows at once.
+    relay.deliver([{ id: "msg_reply", room: "hs_one", from: { id: "peer_builder", name: "builder", kind: "claude", app: "claude-cli", machine: "studio", session: null, cwd: null, account: "Dana Reyes" }, to: { id: "peer_self", name: "Dana-Reyes", kind: "person" }, text: "Darkened to 4.8:1.", at: "2026-11-23T10:00:09.000Z" }]);
+    await settleTrustedHost(12);
+    expect(lines.children).toHaveLength(2);
+    expect(lines.children[1].children[1]?.textContent).toBe("Darkened to 4.8:1.");
+    const stored = JSON.parse(store.get("shiplet.handshake.person.org_a") || "{}") as { lines: Array<{ text: string; mine: boolean; room: string }> };
+    expect(stored.lines.map((line) => [line.mine, line.room])).toEqual([[true, "hs_one"], [false, "hs_one"]]);
+  });
+
+  it("names the selected element, without linking an annotation, when asked from the composer", async () => {
+    const relay = fakeHandshakeRelay();
+    const harness = await operateTrustedHostScript({ organizationId: "org_a", handshakes: relay, sessionStore: new Map(), confirmationUrl: "https://app.shiplet.cc/review/confirm" });
+    const capturePort = harness.channels[1]?.port1;
+    await harness.launcher!.dispatch("click", { isTrusted: true });
+    const selection = capturePort!.messages.at(-1) as Record<string, unknown>;
+    await acknowledgeArtifactCaptureReady(harness, capturePort);
+    await capturePort!.dispatch({
+      protocol: "shiplet.artifact.capture.result.v1",
+      type: "result",
+      channelNonce: selection.channelNonce,
+      shipletId: "shiplet_a",
+      revisionId: "revision_a1",
+      requestId: selection.requestId,
+      status: "captured",
+      payload: {
+        screenshotDataUrl: null,
+        screenshotFailureNote: "Screenshot unavailable in this fixture.",
+        screenshotMode: "element",
+        viewport: { width: 1280, height: 720, devicePixelRatio: 2 },
+        coordinates: { pageX: 240, pageY: 180, viewportX: 240, viewportY: 180 },
+        selectedElement: { selector: "#hero", tagName: "H1", text: `Portable\n  Shiplets ${"x".repeat(200)}` },
+        captureContext: { documentWidth: 1280, documentHeight: 1600, scrollX: 0, scrollY: 80 },
+      },
+    });
+    const ask = byAttribute(harness, "data-shiplet-agents-ask", "composer");
+    expect(harness.form?.children.find((child) => child.className === "shiplet-review-composer-actions")?.children).toContain(ask);
+    await click(ask);
+    await click(byAttribute(harness, "data-shiplet-agents-look"));
+    await settleTrustedHost(8);
+    agentsMessage(harness)!.value = "Why is this heading so large?";
+    await click(byAttribute(harness, "data-shiplet-agents-send"));
+    await settleTrustedHost(8);
+    const send = relay.requests.find((call) => call.url.pathname.endsWith("/messages"));
+    const selected = `Portable Shiplets ${"x".repeat(200)}`.slice(0, 120);
+    expect(send?.body).toEqual({ to: "peer_builder", text: `Why is this heading so large?\n\n${CONTEXT}\nelement: #hero "${selected}"` });
+  });
+
+  it("talks from the website widget with its installation and as the widget", async () => {
+    const relay = fakeHandshakeRelay();
+    const harness = await operateTrustedHostScript({ embedded: true, organizationId: "org_a", handshakes: relay, sessionStore: new Map() });
+    const views = () => harness.artifactWindow.postMessage.mock.calls.map((call) => call[0]).filter((message) => message.protocol === "shiplet.embed.ui.v1" && message.view);
+    expect(views().at(-1)).toMatchObject({ view: "toolbar", agents: true });
+    await openAndLook(harness);
+    expect(views().at(-1)?.view).toBe("agents");
+    expect(relay.requests[0].body).toEqual({ kind: "person", app: "shiplet-embed" });
+    agentsMessage(harness)!.value = "Hello from the site";
+    await click(byAttribute(harness, "data-shiplet-agents-send"));
+    await settleTrustedHost(8);
+    expect(relay.requests.length).toBeGreaterThanOrEqual(4);
+    for (const call of relay.requests) expect(call.url.searchParams.get("installation_id")).toBe("installation_test");
+    await click(byAttribute(harness, "data-shiplet-agents-close"));
+    expect(views().at(-1)?.view).toBe("toolbar");
+  });
+
+  it("asks the widget's person to sign in again when the embed session ended", async () => {
+    const relay = fakeHandshakeRelay({ open: [{ status: 401, error: "embed_session_expired", message: "Your Shiplet sign-in on this site ended." }] });
+    const harness = await operateTrustedHostScript({ embedded: true, organizationId: "org_a", handshakes: relay, sessionStore: new Map() });
+    await openAndLook(harness);
+    const error = byAttribute(harness, "data-shiplet-agents-error");
+    expect(error?.hidden).toBe(false);
+    expect(error?.getAttribute("role")).toBe("alert");
+    expect(error?.textContent).toBe("Your Shiplet sign-in on this site ended. Choose Annotate to sign in again.");
+    expect(byAttribute(harness, "data-shiplet-agents-look")?.disabled).toBe(true);
+    expect(byAttribute(harness, "data-shiplet-agents-send")?.disabled).toBe(true);
+    const agentsText = (agentsPanel(harness)?.children ?? []).flatMap(function texts(element: OperatedElement): string[] {
+      return [String(element.textContent || ""), ...element.children.flatMap(texts)];
+    });
+    expect(agentsText.some((text) => /Loading|…|\.\.\./.test(text))).toBe(false);
+  });
+
+  it("closes and hides the panel for someone the relay does not admit", async () => {
+    const relay = fakeHandshakeRelay({ open: [{ status: 404, error: "not_found", message: "No handshake relay for that organization." }] });
+    const harness = await operateTrustedHostScript({ organizationId: "org_a", handshakes: relay, sessionStore: new Map() });
+    await openAndLook(harness);
+    expect(agentsPanel(harness)?.hidden).toBe(true);
+    expect(agentsLauncher(harness)?.hidden).toBe(true);
+  });
+
+  it("opens a fresh session once when the relay forgot this one, and keeps the conversation", async () => {
+    const relay = fakeHandshakeRelay({ send: [{ status: 404, error: "session_not_found", message: "No such session." }] });
+    const harness = await operateTrustedHostScript({ organizationId: "org_a", handshakes: relay, sessionStore: new Map() });
+    await openAndLook(harness);
+    agentsMessage(harness)!.value = "Still there?";
+    await click(byAttribute(harness, "data-shiplet-agents-send"));
+    await settleTrustedHost(12);
+    const calls = relay.requests.map((call) => `${call.method} ${call.url.pathname.split("/").slice(-1)[0]}`);
+    expect(calls.filter((call) => call === "POST handshake-sessions")).toHaveLength(2);
+    expect(calls.filter((call) => call === "POST messages")).toHaveLength(2);
+    expect(byAttribute(harness, "data-shiplet-agents-error")?.hidden).toBe(true);
+    expect(byClass(harness, "shiplet-review-agents-lines")?.children).toHaveLength(1);
+  });
+
+  it("shows a calm inline error and keeps the draft when a send fails", async () => {
+    const relay = fakeHandshakeRelay({ send: [{ status: 404, error: "not_found", message: "builder is no longer connected." }] });
+    const harness = await operateTrustedHostScript({ organizationId: "org_a", handshakes: relay, sessionStore: new Map() });
+    await openAndLook(harness);
+    const send = byAttribute(harness, "data-shiplet-agents-send");
+    agentsMessage(harness)!.value = "Are you there?";
+    await click(send);
+    await settleTrustedHost(8);
+    expect(byAttribute(harness, "data-shiplet-agents-error")?.textContent).toBe("builder is no longer connected.");
+    expect(agentsMessage(harness)?.value).toBe("Are you there?");
+    expect(send?.disabled).toBe(false);
+    expect(send?.getAttribute("aria-busy")).toBe("false");
+    expect(agentsPanel(harness)?.hidden).toBe(false);
+  });
+
+  it("leaves the relay and forgets the conversation in this tab", async () => {
+    const relay = fakeHandshakeRelay();
+    const store = new Map<string, string>();
+    const harness = await operateTrustedHostScript({ organizationId: "org_a", handshakes: relay, sessionStore: store });
+    await openAndLook(harness);
+    expect(store.has("shiplet.handshake.person.org_a")).toBe(true);
+    const leave = byAttribute(harness, "data-shiplet-agents-leave");
+    expect(leave?.hidden).toBe(false);
+    await click(leave);
+    await settleTrustedHost(4);
+    expect(relay.requests.at(-1)).toMatchObject({ method: "DELETE" });
+    expect(relay.requests.at(-1)?.url.pathname).toBe("/api/organizations/org_a/handshake-sessions/hss_one");
+    expect(store.has("shiplet.handshake.person.org_a")).toBe(false);
+    expect(leave?.hidden).toBe(true);
+    expect(byAttribute(harness, "data-shiplet-agents-look")?.hidden).toBe(false);
+  });
+
+  it("picks up the conversation the person started on the dashboard in this tab", async () => {
+    const relay = fakeHandshakeRelay();
+    const store = new Map([
+      [
+        "shiplet.handshake.person.org_a",
+        JSON.stringify({
+          session: "hss_dashboard",
+          self: { id: "peer_self", name: "Dana-Reyes", kind: "person", app: "shiplet-dashboard", machine: null, account: "Dana Reyes" },
+          lines: [{ id: "msg_old", room: "hs_old", from: { id: "peer_self", name: "Dana-Reyes", kind: "person", app: "shiplet-dashboard", machine: null, session: null, cwd: null }, to: { id: "peer_builder", name: "builder", kind: "claude" }, text: "From the dashboard", at: "2026-11-23T09:00:00.000Z", mine: true }],
+        }),
+      ],
+    ]);
+    const harness = await operateTrustedHostScript({ organizationId: "org_a", handshakes: relay, sessionStore: store });
+    await settleTrustedHost(4);
+    // Polls the same session at once, so replies keep arriving.
+    expect(relay.requests[0]?.url.pathname).toBe("/api/organizations/org_a/handshake-sessions/hss_dashboard/inbox");
+    expect(relay.requests.some((call) => call.method === "POST")).toBe(false);
+    await click(agentsLauncher(harness));
+    expect(byClass(harness, "shiplet-review-agents-lines")?.children[0]?.children[1]?.textContent).toBe("From the dashboard");
+    expect(agentsTo(harness)?.children.map((option) => option.textContent)).toEqual(["builder · Claude Code"]);
+  });
+
+  it("is keyboard operable: labelled controls, Escape closes, Ctrl+Enter sends", async () => {
+    const relay = fakeHandshakeRelay();
+    const harness = await operateTrustedHostScript({ organizationId: "org_a", handshakes: relay, sessionStore: new Map() });
+    await openAndLook(harness);
+    for (const id of ["shiplet-review-agents-to", "shiplet-review-agents-text"]) {
+      expect(harness.createdElements.some((element) => element.tagName === "LABEL" && element.htmlFor === id)).toBe(true);
+    }
+    agentsMessage(harness)!.value = "Keyboard message";
+    await agentsMessage(harness)!.dispatch("keydown", { isTrusted: true, key: "Enter", ctrlKey: true, preventDefault: vi.fn(), stopPropagation: vi.fn() });
+    await settleTrustedHost(8);
+    expect(relay.requests.filter((call) => call.url.pathname.endsWith("/messages"))).toHaveLength(1);
+    await agentsPanel(harness)!.dispatch("keydown", { isTrusted: true, key: "Escape", preventDefault: vi.fn(), stopPropagation: vi.fn() });
+    expect(agentsPanel(harness)?.hidden).toBe(true);
+    expect(agentsLauncher(harness)?.focus).toHaveBeenCalled();
+  });
+
+  it("marks only an organization host and styles the panel through the host stylesheet", async () => {
+    const plain = await createTrustedReviewHostResponse(baseInput).text();
+    expect(plain).not.toContain("data-shiplet-organization-id");
+    const response = createTrustedReviewHostResponse({ ...baseInput, organizationId: "org_a" });
+    const html = await response.text();
+    expect(html).toContain('data-shiplet-organization-id="org_a"');
+    expect(response.headers.get("content-security-policy")).toMatch(/connect-src [^;]*https:\/\/app\.shiplet\.cc/);
+    expect(() => createTrustedReviewHostResponse({ ...baseInput, organizationId: '"><script>' })).toThrowError(/organization ID/);
+
+    const agentsScript = reviewHostAgentsScript();
+    expect(trustedReviewHostScript()).toContain(agentsScript);
+    expect(agentsScript).not.toMatch(/innerHTML|\.style\b|setAttribute\("style"|Authorization|Bearer/);
+    const styles = trustedReviewHostStyles();
+    expect(styles).toContain(".shiplet-review-agents{");
+    expect(styles).toContain('html[data-shiplet-embed-origin]:not([data-shiplet-embed-origin=""]) .shiplet-review-agents{');
+    const widget = await import("../src/embed-widget");
+    expect(widget.embedWidgetScript()).toContain('"agents"');
+    expect(widget.EMBED_WIDGET_CSS).toContain(".surface[data-view=agents]");
   });
 });
