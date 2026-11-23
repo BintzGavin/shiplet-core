@@ -147,7 +147,7 @@ export function registerHandshakeRoutes(app: Hono<any>, options: HandshakeRouteO
 	});
 
 	app.post(`${session}/duty`, async (c) => {
-		const admitted = await member(c.env, c.req.raw, c.req.param("organizationId"));
+		const admitted = await member(c, options);
 		if (admitted instanceof Response) return admitted;
 		const body = await readJson(c.req.raw);
 		return body instanceof Response ? body : handleDuty(c.env, admitted, c.req.param("sessionId"), body);
