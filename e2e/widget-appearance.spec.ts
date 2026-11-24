@@ -126,21 +126,18 @@ test("a dark appearance with a brass accent at bottom-left reaches every widget 
     await shot(visitor, "appearance-signed-out-toolbar");
 
     // The visitor panel. This server has no Turnstile keys, so the frame is
-    // Shiplet's own page served here, with a stand-in check and agent.
+    // Shiplet's own page served here, with a stand-in check.
     await visitor.route("https://challenges.cloudflare.com/turnstile/v0/api.js*", (route) =>
       route.fulfill({
         contentType: "application/javascript",
         body: 'window.turnstile={render:function(selector,options){setTimeout(function(){options.callback("XXXX.DUMMY.TOKEN.XXXX")},50);return "check"},reset:function(){}};',
       }),
     );
+    const visitorCalls: string[] = [];
     await visitor.route(`${SHIPLET}/api/embed/visitors/**`, async (route) => {
       const path = new URL(route.request().url()).pathname;
+      visitorCalls.push(path);
       if (path.endsWith("/session")) return route.fulfill({ json: { token: "visitor-token-for-e2e" } });
-      if (path.endsWith("/chat/inbox")) {
-        await new Promise((resolve) => setTimeout(resolve, 1500));
-        return route.fulfill({ json: { messages: [] } });
-      }
-      if (path.endsWith("/chat")) return route.fulfill({ json: { onDuty: true, agent: { name: "Lot desk" } } });
       return route.fulfill({ status: 404, json: {} });
     });
     const visitorFrameUrl = `${SHIPLET}/embed/visitor/frame?installation_id=${installationId}`;
@@ -164,7 +161,9 @@ test("a dark appearance with a brass accent at bottom-left reaches every widget 
     await expect(panel.locator("body")).toHaveCSS("background-color", "rgb(17, 26, 51)");
     await expect(panel.getByRole("button", { name: "Send note" })).toHaveCSS("background-color", "rgb(244, 183, 64)");
     await expect(panel.getByRole("button", { name: "Send note" })).toHaveCSS("color", "rgb(17, 24, 39)");
-    await expect(panel.getByRole("heading", { name: /Ask Lot desk/ })).toBeVisible();
+    // Feedback only: the panel never offers to ask an agent, or looks for one.
+    await expect(panel.getByRole("heading", { name: /Ask/ })).toHaveCount(0);
+    expect(visitorCalls).toEqual(["/api/embed/visitors/session"]);
     // The panel is open, so "Hide comments" is out of its way.
     await expect(toggle).toBeHidden();
     await expect.poll(async () => (await surface.boundingBox())?.x).toBeLessThan(8);

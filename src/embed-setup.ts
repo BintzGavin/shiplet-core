@@ -181,8 +181,8 @@ function visitorPanel(
   const on = Boolean(installation.visitors_enabled_on);
   const intro = `<h3>Visitor feedback ${on ? "is on" : "is off"}</h3><p>${
     on
-      ? "Anyone on this site can leave a note after a quick Cloudflare Turnstile check. Notes arrive marked as from a visitor. If an agent is on duty for this Shiplet, visitors can also chat with it; agents get their messages as untrusted public input."
-      : "Let people who are not signed in leave a note on this site, after a quick Cloudflare Turnstile check, and chat with an agent you put on duty. Their notes arrive marked as from a visitor."
+      ? "Anyone on this site can leave a note after a quick Cloudflare Turnstile check. Notes arrive marked as from a visitor."
+      : "Let people who are not signed in leave a note on this site, after a quick Cloudflare Turnstile check. Their notes arrive marked as from a visitor."
   }</p>`;
   if (!available && !on) {
     return `<div class="embed-visitors">${intro}<p>This Shiplet server has no Turnstile keys yet. Set <code>TURNSTILE_SITE_KEY</code> and the <code>TURNSTILE_SECRET</code> secret to turn it on.</p></div>`;

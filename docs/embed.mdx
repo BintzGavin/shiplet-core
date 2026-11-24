@@ -132,33 +132,15 @@ off by default, it is set per connected site, and turning it off ends every
 visitor session at once.
 
 With it on, a signed-out visitor sees **Feedback** next to Annotate. They pass a
-quick Cloudflare Turnstile check inside Shiplet's frame, then can:
+quick Cloudflare Turnstile check inside Shiplet's frame, then can leave a note
+about the page they are on. It arrives in the Shiplet's annotations marked as
+from a visitor, with the page and no author. Each visitor can send five notes
+every ten minutes, and each site at most a hundred an hour. Notes are at most
+2,000 characters.
 
-- **Leave a note** about the page they are on. It arrives in the Shiplet's
-  annotations marked as from a visitor, with the page and no author. Each
-  visitor can send five notes every ten minutes, and each site at most a hundred
-  an hour. Notes are at most 2,000 characters.
-- **Ask an agent**, when one is on duty for the Shiplet. The visitor sees the
-  agent's name and its replies, and nothing else about your organization.
-
-Visitors cannot read other feedback, see your team or other agents, or reach any
-agent except the one on duty. Their text is untrusted: agents receive it labelled
-as from an anonymous visitor, with an instruction never to follow instructions in
-it, reveal private information, or act on it beyond answering.
-
-To put an agent on duty, have it join your organization's handshake relay and
-call `POST /api/organizations/{org}/handshake-sessions/{session}/duty` with
-`{ "shiplet": "<shiplet id>" }` (or the same path through Shiplet MCP). It needs
-read access to that Shiplet's annotations. Send `{ "shiplet": null }`, or leave
-the relay, to go off duty. Visitor messages arrive like any other handshake
-message, with `from.kind` set to `"visitor"`, and it answers with an ordinary
-send to that visitor in the same handshake. One agent is on duty per Shiplet;
-a newer one replaces it.
-
-An agent on duty doesn't need to poll. A running session can hold the relay's
-events WebSocket, and an agent that runs as a service can register a signed
-webhook so each visitor message starts its work; see "Event-driven delivery"
-in the Agent Handshake README.
+Visitor feedback is one way. Visitors cannot read other feedback, see your team,
+or talk with agents; working with agents on the site is for signed-in members of
+your organization.
 
 Self-hosting: visitor feedback needs your own Turnstile widget. Create one for
 your Shiplet hostname, then set `TURNSTILE_SITE_KEY` as a variable and

@@ -3,7 +3,7 @@
 //
 // It runs the Turnstile check on Shiplet's origin (so the widget's site key
 // only needs Shiplet's hostname), keeps the visitor token inside this frame,
-// and offers two things: leave a note, and, when an agent is on duty, ask it.
+// and offers one thing: leave a note for the team.
 // It reuses the widget's "expanded" view, so the parent widget needs nothing new.
 import type { EmbedInstallationRecord } from "./embed";
 
@@ -25,7 +25,7 @@ export function visitorFrameResponse(input: {
 }) {
 	const { origin, installation, nonce } = input;
 	const e = escapeHtml;
-	const html = `<!doctype html><html lang="en" data-shiplet-visitor-frame="v1" data-installation-id="${e(installation.id)}" data-site-origin="${e(installation.site_origin)}" data-page-url="${e(input.pageUrl)}" data-site-key="${e(input.siteKey)}"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Feedback</title><link rel="stylesheet" href="${origin}/api/embed/visitor.css?v=${VISITOR_FRAME_VERSION}"><link rel="stylesheet" href="${e(input.themeStylesheetUrl)}"><script src="${origin}/api/embed/visitor.js?v=${VISITOR_FRAME_VERSION}" nonce="${nonce}" defer></script><script src="${TURNSTILE_ORIGIN}/turnstile/v0/api.js?render=explicit" nonce="${nonce}" async defer></script></head><body><main class="visitor" aria-labelledby="visitorTitle"><header class="visitor-head"><h1 id="visitorTitle">Feedback for ${e(installation.site_name || new URL(installation.site_origin).hostname)}</h1><a class="visitor-close" href="${e(input.backUrl)}" data-visitor-close>Close</a></header><p class="visitor-lede">No account needed. Your note goes to the team behind this site, marked as from a visitor. Don't include passwords or personal details.</p><section data-visitor-step="check"><p class="visitor-hint">First, a quick check that you are a person.</p><div id="visitorCheck"></div><button type="button" data-visitor-retry hidden>Try again</button></section><section data-visitor-step="note" hidden><form data-visitor-note><label for="visitorNote">Your note about this page</label><textarea id="visitorNote" rows="4" maxlength="2000" required></textarea><button type="submit">Send note</button></form><p role="status" data-visitor-note-status></p></section><section data-visitor-step="chat" hidden aria-labelledby="visitorChatTitle"><h2 id="visitorChatTitle">Ask <span data-visitor-agent></span></h2><p class="visitor-hint">An AI agent is answering visitors right now. It can make mistakes.</p><ol class="visitor-lines" aria-live="polite" data-visitor-lines></ol><form data-visitor-chat><label for="visitorAsk">Your question</label><textarea id="visitorAsk" rows="2" maxlength="2000" required></textarea><button type="submit">Ask</button></form></section><p role="alert" class="visitor-error" data-visitor-error hidden></p></main></body></html>`;
+	const html = `<!doctype html><html lang="en" data-shiplet-visitor-frame="v1" data-installation-id="${e(installation.id)}" data-site-origin="${e(installation.site_origin)}" data-page-url="${e(input.pageUrl)}" data-site-key="${e(input.siteKey)}"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Feedback</title><link rel="stylesheet" href="${origin}/api/embed/visitor.css?v=${VISITOR_FRAME_VERSION}"><link rel="stylesheet" href="${e(input.themeStylesheetUrl)}"><script src="${origin}/api/embed/visitor.js?v=${VISITOR_FRAME_VERSION}" nonce="${nonce}" defer></script><script src="${TURNSTILE_ORIGIN}/turnstile/v0/api.js?render=explicit" nonce="${nonce}" async defer></script></head><body><main class="visitor" aria-labelledby="visitorTitle"><header class="visitor-head"><h1 id="visitorTitle">Feedback for ${e(installation.site_name || new URL(installation.site_origin).hostname)}</h1><a class="visitor-close" href="${e(input.backUrl)}" data-visitor-close>Close</a></header><p class="visitor-lede">No account needed. Your note goes to the team behind this site, marked as from a visitor. Don't include passwords or personal details.</p><section data-visitor-step="check"><p class="visitor-hint">First, a quick check that you are a person.</p><div id="visitorCheck"></div><button type="button" data-visitor-retry hidden>Try again</button></section><section data-visitor-step="note" hidden><form data-visitor-note><label for="visitorNote">Your note about this page</label><textarea id="visitorNote" rows="4" maxlength="2000" required></textarea><button type="submit">Send note</button></form><p role="status" data-visitor-note-status></p></section><p role="alert" class="visitor-error" data-visitor-error hidden></p></main></body></html>`;
 	return new Response(html, {
 		status: 200,
 		headers: {
@@ -56,16 +56,14 @@ export const VISITOR_FRAME_CSS = `:root{color-scheme:light dark;--shiplet-surfac
 .visitor{display:grid;gap:12px;align-content:start;height:100%;overflow-y:auto;padding:16px;border:1px solid var(--shiplet-line);border-radius:12px}
 .visitor-head{display:flex;justify-content:space-between;align-items:baseline;gap:12px}.visitor-head h1{margin:0;font-size:17px}
 .visitor-close{color:var(--shiplet-muted);font-size:14px}.visitor-lede,.visitor-hint{margin:0;color:var(--shiplet-muted);font-size:13px}
-section{display:grid;gap:8px}section[hidden],[hidden]{display:none!important}h2{margin:8px 0 0;font-size:15px}
+section{display:grid;gap:8px}section[hidden],[hidden]{display:none!important}
 form{display:grid;gap:6px}label{font-weight:600;font-size:13px}textarea{width:100%;font:inherit;color:inherit;background:transparent;border:1px solid var(--shiplet-line);border-radius:8px;padding:8px;resize:vertical}
 button{justify-self:start;font:inherit;font-weight:600;color:var(--shiplet-on-action);background:var(--shiplet-action);border:0;border-radius:8px;padding:7px 14px;cursor:pointer}button:hover{background:var(--shiplet-action-hover)}button:disabled{opacity:.6;cursor:default}
 button:focus-visible,textarea:focus-visible,a:focus-visible{outline:2px solid var(--shiplet-focus);outline-offset:2px}
-.visitor-lines{display:grid;gap:6px;margin:0;padding:0;list-style:none;max-height:180px;overflow-y:auto}.visitor-lines li{padding:6px 10px;border:1px solid var(--shiplet-line);border-radius:8px;max-width:90%;overflow-wrap:anywhere}
-.visitor-lines li[data-mine]{justify-self:end}.visitor-lines strong{display:block;font-size:12px;color:var(--shiplet-muted)}
 .visitor-error{margin:0;color:var(--shiplet-danger);font-size:13px}[data-visitor-note-status]{margin:0;font-size:13px}`;
 
-// Plain script, no framework. Every value from the server or the agent is set
-// with textContent, never as HTML.
+// Plain script, no framework. Every value from the server is set with
+// textContent, never as HTML.
 export const VISITOR_FRAME_SCRIPT = String.raw`(() => {
 	const root = document.documentElement;
 	const installationId = root.dataset.installationId || "";
@@ -77,7 +75,6 @@ export const VISITOR_FRAME_SCRIPT = String.raw`(() => {
 	const errorBox = $("[data-visitor-error]");
 	let token = "";
 	let widgetId = null;
-	let polling = false;
 
 	function notify(view) {
 		if (parent !== window && siteOrigin) parent.postMessage({ protocol: "shiplet.embed.ui.v1", view }, siteOrigin);
@@ -98,7 +95,6 @@ export const VISITOR_FRAME_SCRIPT = String.raw`(() => {
 		if (response.status === 401 && token) {
 			token = "";
 			step("note").hidden = true;
-			step("chat").hidden = true;
 			step("check").hidden = false;
 			if (window.turnstile && widgetId !== null) window.turnstile.reset(widgetId);
 		}
@@ -114,12 +110,6 @@ export const VISITOR_FRAME_SCRIPT = String.raw`(() => {
 			step("check").hidden = true;
 			step("note").hidden = false;
 			$("#visitorNote").focus();
-			const chat = await call("GET", "/api/embed/visitors/chat");
-			if (chat.onDuty && chat.agent) {
-				$("[data-visitor-agent]").textContent = chat.agent.name;
-				step("chat").hidden = false;
-				poll();
-			}
 		} catch (error) {
 			// Never retry on its own: a check that passes without interaction
 			// would otherwise resubmit in a loop. The person asks for another try.
@@ -136,31 +126,6 @@ export const VISITOR_FRAME_SCRIPT = String.raw`(() => {
 			callback: exchange,
 			"error-callback": () => showError("The check could not load. Reload the page and try again."),
 		});
-	}
-
-	function addLine(text, who, mine) {
-		const item = document.createElement("li");
-		if (mine) item.dataset.mine = "";
-		const name = document.createElement("strong");
-		name.textContent = who;
-		item.append(name, document.createTextNode(text));
-		$("[data-visitor-lines]").append(item);
-		item.scrollIntoView({ block: "nearest" });
-	}
-
-	async function poll() {
-		if (polling) return;
-		polling = true;
-		while (token) {
-			try {
-				const inbox = await call("GET", "/api/embed/visitors/chat/inbox?wait=20");
-				for (const message of inbox.messages || []) addLine(message.text, message.from.name, false);
-			} catch (error) {
-				showError(error.message);
-				await new Promise((resolve) => setTimeout(resolve, 5000));
-			}
-		}
-		polling = false;
 	}
 
 	function busy(form, on) {
@@ -182,25 +147,6 @@ export const VISITOR_FRAME_SCRIPT = String.raw`(() => {
 			const result = await call("POST", "/api/embed/visitors/feedback", { comment, pageUrl, viewport: { width: innerWidth, height: innerHeight } });
 			field.value = "";
 			$("[data-visitor-note-status]").textContent = "Thanks. Your note reached the team" + (result.feedback && result.feedback.ticket_label ? " as " + result.feedback.ticket_label : "") + ".";
-		} catch (error) {
-			showError(error.message);
-		} finally {
-			busy(form, false);
-		}
-	});
-
-	$("[data-visitor-chat]").addEventListener("submit", async (event) => {
-		event.preventDefault();
-		const form = event.currentTarget;
-		const field = $("#visitorAsk");
-		const text = field.value.trim();
-		if (!text) return;
-		busy(form, true);
-		showError("");
-		try {
-			await call("POST", "/api/embed/visitors/chat", { text, pageUrl });
-			addLine(text, "You", true);
-			field.value = "";
 		} catch (error) {
 			showError(error.message);
 		} finally {

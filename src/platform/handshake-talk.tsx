@@ -38,8 +38,7 @@ const PERSON_NOTE =
 export function HandshakeTalk(props: { handshakeId: string; organizationId: string; peers: HandshakePeer[] }) {
 	const { chat, state } = usePersonChat(props.organizationId);
 	const lines = state.lines.filter((line) => line.room === props.handshakeId);
-	// Visitors can be answered only by the agent they wrote to.
-	const recipients = props.peers.filter((peer) => peer.live && peer.id !== state.self?.id && peer.kind !== "visitor");
+	const recipients = props.peers.filter((peer) => peer.live && peer.id !== state.self?.id);
 	const joined = Boolean(state.self && lines.length);
 	return (
 		<section className="success-card shiplet-panel handshake-talk" aria-labelledby="handshakeTalkTitle">

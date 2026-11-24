@@ -13343,7 +13343,7 @@ app.on(["GET", "POST"], "/embed/install", async (c) => {
           return c.text("No connected site with that installation", 404);
         message = on
           ? "Visitor feedback is on. Anyone on the site can leave a note after a quick bot check."
-          : "Visitor feedback is off. Visitors can no longer leave notes or chat.";
+          : "Visitor feedback is off. Visitors can no longer leave notes.";
       } else if (action === "appearance_save" || action === "appearance_reset") {
         if (
           !(await setInstallationAppearance(
