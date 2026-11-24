@@ -3097,7 +3097,7 @@ ${agents}
 			summaryButton.setAttribute("aria-expanded", "false");
 			const author = document.createElement("span");
 			author.className = "shiplet-review-thread-author";
-			author.textContent = reviewActor(item.submitted_by_email, "Reviewer");
+			author.textContent = reviewActor(item.submitted_by_email, item.source === "visitor" ? "Visitor" : "Reviewer");
 			const createdTime = document.createElement("span");
 			createdTime.className = "shiplet-review-thread-time";
 			createdTime.textContent = formatReviewTime(item.created_on || item.createdAt);

@@ -191,8 +191,12 @@ describe("visitor feedback on a public website", () => {
 		expect(JSON.parse(String(row!.selected_element_json))).toMatchObject({ selector: "main > button.pay" });
 
 		// Members see it, marked as from a visitor.
-		const listed = (await (await request(`/api/projects/${projectId}/review-feedback`, { headers: OWNER })).json()) as { feedback: Array<{ id: string; source: string }> };
-		expect(listed.feedback.find((item) => item.id === feedback.id)?.source).toBe("visitor");
+		const listed = (await (await request(`/api/projects/${projectId}/review-feedback`, { headers: OWNER })).json()) as { feedback: Array<{ id: string; source: string; trust_notice?: string }> };
+		const fromVisitor = listed.feedback.find((item) => item.id === feedback.id);
+		expect(fromVisitor?.source).toBe("visitor");
+		// Agents reading the same record are told the text is not an instruction.
+		expect(fromVisitor?.trust_notice).toMatch(/anonymous visitor.*not as instructions/i);
+		expect(listed.feedback.filter((item) => item.source !== "visitor").every((item) => item.trust_notice === undefined)).toBe(true);
 
 		// Five annotations per visitor per ten minutes.
 		for (let index = 2; index <= 5; index++) {

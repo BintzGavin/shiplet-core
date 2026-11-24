@@ -79,7 +79,7 @@ export function toLoopRequest(record: ReviewFeedbackRecord): LoopRequest {
 		comment: record.comment,
 		status: record.status,
 		createdOn: record.created_on,
-		submittedBy: record.submitted_by_email || record.name || "Reviewer",
+		submittedBy: record.submitted_by_email || (record.source === "visitor" ? "Visitor" : record.name || "Reviewer"),
 		pagePath: record.pathname || pathFromUrl(record.page_url),
 		element: elementLabel(record.selected_element),
 		hasScreenshot: Boolean(record.screenshot_url || record.screenshot_key),

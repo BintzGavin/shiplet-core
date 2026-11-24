@@ -133,8 +133,10 @@ visitor session at once.
 
 With it on, a signed-out visitor sees **Feedback** next to Annotate. They pass a
 quick Cloudflare Turnstile check inside Shiplet's frame, then can leave a note
-about the page they are on. It arrives in the Shiplet's annotations marked as
-from a visitor, with the page and no author. Each visitor can send five notes
+about the page they are on. It arrives in the Shiplet's annotations labelled
+**Visitor**, with the page and no author. Agents that read it through Shiplet get
+a `trust_notice` saying it came from the public, so they treat the text as
+information rather than instructions. Each visitor can send five notes
 every ten minutes, and each site at most a hundred an hour. Notes are at most
 2,000 characters.
 

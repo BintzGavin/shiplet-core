@@ -112,7 +112,7 @@ export const PlatformLiveUpdatesScript = (nonce: KernelDocumentNonce) => `
         "<td>" + esc(item.status || "") + "</td>" +
         "<td>" + esc(item.comment || "") + "</td>" +
         "<td>" + (mentions || "-") + "</td>" +
-        "<td>" + esc(item.submitted_by_email || "Reviewer") + "</td>" +
+        "<td>" + esc(item.submitted_by_email || (item.source === "visitor" ? "Visitor" : "Reviewer")) + "</td>" +
         "<td>" + esc(formatDate(item.created_on)) + "</td>" +
       "</tr>";
     }).join("");
