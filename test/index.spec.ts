@@ -10470,7 +10470,7 @@ describe("Shiplet", () => {
         {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ email: "gavin@swirlwebdesign.com" }),
+          body: JSON.stringify({ email: "invitee@example.com" }),
         },
       );
       expect(unauthorized.status).toBe(401);
@@ -10481,7 +10481,7 @@ describe("Shiplet", () => {
           "Content-Type": "application/json",
           Authorization: "Bearer test-bootstrap-token",
         },
-        body: JSON.stringify({ email: "gavin@swirlwebdesign.com" }),
+        body: JSON.stringify({ email: "invitee@example.com" }),
       });
 
       expect(response.status).toBe(201);
@@ -10497,7 +10497,7 @@ describe("Shiplet", () => {
       expect(body.organization.id).toMatch(/^org_/);
       expect(body.team.id).toMatch(/^team_/);
       expect(body.project.id).toMatch(/^project_/);
-      expect(body.invitation.email).toBe("gavin@swirlwebdesign.com");
+      expect(body.invitation.email).toBe("invitee@example.com");
       expect(body.invitation.invite_type).toBe("production_test");
       expect(body.shipletUrl).toBe(
         expectedPublicShipletUrl(body.project.subdomain),
@@ -10518,7 +10518,7 @@ describe("Shiplet", () => {
           invitationToken: pending!.workos_invitation_token,
         }),
       );
-      const invitedUserId = "user_gavin-swirlwebdesign-com";
+      const invitedUserId = "user_invitee-example-com";
       const callback = await signInWithMintedState(requestHelper, env, `test-code:${body.organization.id}:${encodeURIComponent(
             body.invitation.email,
           )}`, JSON.parse(atob(state)));
