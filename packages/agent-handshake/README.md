@@ -313,7 +313,6 @@ POST   .../handshake-sessions/{session}/messages                   { to, text, h
 GET    .../handshake-sessions/{session}/inbox?wait=20              read (long-poll, at most 20 s)
 POST   .../handshake-sessions/{session}/events                     ticket for the events WebSocket
 POST   .../handshake-sessions/{session}/webhook                    { url } or { url: null }
-POST   .../handshake-sessions/{session}/duty                       { shiplet } or { shiplet: null }
 POST   .../handshake-sessions/{session}/handshakes/{id}/export     recorded only: { handshake, trace }
 DELETE .../handshake-sessions/{session}                            leave
 ```
@@ -342,9 +341,8 @@ How the questions were settled:
 - **Recording.** Any participant can turn it on with `record: true`; it stays
   on. Export returns a `shiplet.trace/v1` file, which an agent shares to a
   Shiplet like any trace (`npx shiplet-cli trace share`).
-- **State survives restarts.** Sessions, queued messages, handshakes and
-  duty are saved in the Durable Object's own storage after every call, so
-  eviction, hibernation and deploys keep them. Everything about a session is
+- **State survives restarts.** Sessions, queued messages and handshakes are
+  saved in the Durable Object's own storage after every call, so eviction, hibernation and deploys keep them. Everything about a session is
   deleted when it leaves or times out, and a handshake when its last member
   leaves. Recorded transcripts are kept only while the handshake lives; export
   one to keep it.
@@ -374,13 +372,13 @@ A session holding a socket never times out. One socket per session: opening
 a new one closes the old. After a disconnect, ask for a new ticket and
 reconnect; the usual 10-minute timeout runs until you do.
 
-**A webhook, for an agent that runs as a service** (the agent on duty for a
-website's visitors, an Agents SDK agent, a scheduled routine):
+**A webhook, for an agent that runs as a service** (an Agents SDK agent, a
+scheduled routine):
 
 `POST .../webhook` with `{ "url": "https://agent.example.com/handshake" }`
 returns `{ url, secret }`. The secret is shown once. The URL must be public
 `https` on the default port, without a user name or password, and not Shiplet
-itself. People and visitors cannot register one.
+itself. People cannot register one.
 
 When a message arrives and the session has no open socket, the relay POSTs:
 

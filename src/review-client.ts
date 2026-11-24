@@ -2358,7 +2358,7 @@ ${bubbleLayoutHelpers}
 		const replyPending = !!state.pendingReplyIds[item.id];
 		const active = state.activeTicketId === item.id;
 		const replyOpen = active && state.replyingTicketId === item.id;
-		const authorEmail = item.submitted_by_email || "Reviewer";
+		const authorEmail = item.submitted_by_email || (item.source === "visitor" ? "Visitor" : "Reviewer");
 		const author = reviewerDisplayName(authorEmail);
 		const createdTime = formatTicketTime(item.created_on || item.createdAt);
 		const replies = (item.replies || []).map((reply) => {
@@ -2606,7 +2606,7 @@ ${bubbleLayoutHelpers}
 			"<span class='shiplet-review-bubble-card'>" +
 				"<span class='shiplet-review-bubble-card-head'><span class='shiplet-review-ticket-id'>" + esc(label) + "</span><span class='shiplet-review-bubble-card-meta'>" + esc(item.status || "New") + "</span></span>" +
 				"<span class='shiplet-review-bubble-card-text'>" + esc(item.comment) + "</span>" +
-				"<span class='shiplet-review-bubble-card-meta'>" + esc(item.submitted_by_email || "Reviewer") + "</span>" +
+				"<span class='shiplet-review-bubble-card-meta'>" + esc(item.submitted_by_email || (item.source === "visitor" ? "Visitor" : "Reviewer")) + "</span>" +
 				"<span class='shiplet-review-row'><button class='shiplet-review-small shiplet-review-bubble-dismiss' type='button' data-collapse-bubble>Collapse</button><button class='shiplet-review-small' type='button' data-bubble-status='Done'>Done</button><button class='shiplet-review-small primary' type='button' data-open-panel>Open</button></span>" +
 			"</span>" +
 		"</div>";

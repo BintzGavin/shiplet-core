@@ -5150,7 +5150,7 @@ export const DashboardRuntimeScript = (nonce: KernelDocumentNonce) => `
       }).join("");
       var element = item.selected_element && item.selected_element.selector ? item.selected_element.selector : item.pathname || "Page";
       var commentLabel = commentLabelFor(item);
-	      var submittedBy = item.submitted_by_email || "Reviewer";
+	      var submittedBy = item.submitted_by_email || (item.source === "visitor" ? "Visitor" : "Reviewer");
 	      var screenshot = item.screenshot_url
 	        ? "<button class=\\"feedback-ticket-screenshot\\" type=\\"button\\" data-feedback-screenshot=\\"" + esc(item.screenshot_url) + "\\" aria-label=\\"Open screenshot for " + esc(commentLabel) + "\\"><img src=\\"" + esc(item.screenshot_url) + "\\" alt=\\"Screenshot for " + esc(commentLabel) + "\\" loading=\\"lazy\\"></button>"
 	        : (item.screenshot_failure_note ? "<div class=\\"feedback-ticket-screenshot-note\\">" + esc(item.screenshot_failure_note) + "</div>" : "");
@@ -6384,7 +6384,7 @@ export function BuildGlobalFeedbackPage(options: {
 						<td>${escapeHtml(item.status)}</td>
 						<td>${escapeHtml(item.comment)}</td>
 						<td>${mentions || "-"}</td>
-						<td>${escapeHtml(item.submitted_by_email || "Reviewer")}</td>
+						<td>${escapeHtml(item.submitted_by_email || (item.source === "visitor" ? "Visitor" : "Reviewer"))}</td>
 						<td>${escapeHtml(formatDateLabel(item.created_on))}</td>
 					</tr>`;
         })

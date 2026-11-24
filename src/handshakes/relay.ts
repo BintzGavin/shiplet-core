@@ -6,7 +6,7 @@
 // checks that each session is used by the actor that opened it.
 //
 // State is saved in the object's own storage after every call, so eviction,
-// hibernation and deploys keep sessions, queued messages, handshakes and duty.
+// hibernation and deploys keep sessions, queued messages and handshakes.
 // A handshake lasts while at least one of its agents is connected, and a
 // recorded one is kept by exporting it as a trace. A session that has not
 // called for IDLE_MS has left, unless it holds an open events WebSocket.
@@ -17,7 +17,7 @@
 import { DurableObject } from "cloudflare:workers";
 import type { Env } from "../env";
 import { Hub } from "../../packages/agent-handshake/src/core/hub.js";
-import type { HubConnection } from "../../packages/agent-handshake/src/core/hub.js";
+import type { HubConnection, HubSnapshot } from "../../packages/agent-handshake/src/core/hub.js";
 import { RELAY_KINDS, type HandshakeSnapshot, type Message, type Sender } from "../../packages/agent-handshake/src/core/protocol.js";
 import { toShipletTrace, type HandshakeExport } from "../../packages/agent-handshake/src/core/trace.js";
 
@@ -52,29 +52,15 @@ export type RelaySendInput = {
 	request?: { shiplet: string; feedback: string; label: string | null } | null;
 };
 
-// A public visitor's session: which Shiplet's website they are on, and when
-// they last sent (for the rate limits).
-type VisitorScope = { shiplet: string; origin: string; page: string; sent: number[] };
-
 // A service agent's webhook. Failing deliveries back off; after a day of
 // failures the webhook is dropped and the session idles out as usual.
 type Webhook = { url: string; secret: string; failures: number; failingSince: number | null; retryAt: number | null };
 
-type Session = { id: string; owner: RelayOwner; conn: HubConnection; peerId: string; lastSeen: number; visitor?: VisitorScope; webhook?: Webhook };
+type Session = { id: string; owner: RelayOwner; conn: HubConnection; peerId: string; lastSeen: number; webhook?: Webhook };
 
 const WEBHOOK_TIMEOUT_MS = 10_000;
 const WEBHOOK_GIVE_UP_MS = 24 * 3_600_000;
 const WEBHOOK_MAX_BACKOFF_MS = 10 * 60_000;
-
-// Visitor limits. Text is counted in characters, after trimming.
-export const VISITOR_TEXT_CHARS = 2000;
-const VISITOR_PER_MINUTE = 8;
-const VISITOR_PER_HOUR = 60;
-const SHIPLET_VISITOR_PER_HOUR = 300;
-
-export type VisitorInput = { shiplet: string; origin: string; page: string };
-// What a visitor sees of the agent answering them: a name and a kind, nothing about whose it is.
-export type VisitorMessage = { id: string; text: string; at: string; from: { name: string; kind: string } };
 
 const STATUS: Record<string, number> = {
 	bad_request: 400,
@@ -106,12 +92,12 @@ type StoredMeta = {
 	conns: Array<{ id: string; peerId: string }>;
 	sessions: StoredSession[];
 	accounts: Array<[string, string]>;
-	duty: Array<[string, string]>;
-	contacts: Array<[string, string[]]>;
-	shipletVisitorSends: Array<[string, number[]]>;
 	// Stored record key -> how many chunks it is split into.
 	records: Array<[string, number]>;
 };
+
+// A save from any earlier version. Sessions could carry a "visitor" field.
+type LegacyMeta = Omit<StoredMeta, "sessions"> & { sessions: Array<StoredSession & { visitor?: unknown }> };
 
 function chunks(value: string) {
 	const parts: string[] = [];
@@ -132,12 +118,6 @@ export class HandshakeRelay extends DurableObject<Env> {
 	private sessions = new Map<string, Session>();
 	// peer id -> account, kept while the peer is still named in a handshake.
 	private accounts = new Map<string, string>();
-	// Shiplet id -> the session on duty for its public visitors.
-	private duty = new Map<string, string>();
-	// visitor peer id -> the agents that visitor has written to; only they may answer.
-	private contacts = new Map<string, Set<string>>();
-	// Shiplet id -> visitor message times in the last hour.
-	private shipletVisitorSends = new Map<string, number[]>();
 	// Sessions with a webhook delivery in flight, so deliveries stay in order.
 	private delivering = new Set<string>();
 	// Single-use events tickets. In memory only: a ticket outlives a restart by
@@ -175,97 +155,6 @@ export class HandshakeRelay extends DurableObject<Env> {
 		return { ok: true, session: session.id, peer: this.peer(registered.peer as Sender) };
 	}
 
-	// An agent (or person) answers the public visitors of one Shiplet's website,
-	// or stops (shiplet: null). The Worker has checked they can read its annotations.
-	async setDuty(owner: RelayOwner, id: string, shiplet: string | null): Promise<RelayResult<{ shiplet: string | null }>> {
-		const session = this.use(owner, id);
-		if (!("conn" in session)) return session;
-		if (session.visitor) return failure(403, "forbidden", "A visitor cannot go on duty.");
-		for (const [key, holder] of [...this.duty]) if (holder === session.id) this.duty.delete(key);
-		if (shiplet) this.duty.set(shiplet, session.id);
-		return { ok: true, shiplet };
-	}
-
-	// Whether anyone is answering a Shiplet's visitors, without a session.
-	async dutyStatus(shiplet: string): Promise<{ onDuty: boolean }> {
-		return { onDuty: Boolean(this.onDuty(shiplet)) };
-	}
-
-	async openVisitor(owner: RelayOwner, input: VisitorInput): Promise<RelayResult<{ session: string }>> {
-		if (this.sessions.size >= MAX_SESSIONS) {
-			return failure(429, "too_many_sessions", "Too many people are connected right now. Try again in a few minutes.");
-		}
-		const conn = this.hub.open();
-		const suffix = [...crypto.getRandomValues(new Uint8Array(3))].map((byte) => byte.toString(16).padStart(2, "0")).join("");
-		const registered = (await conn.handle("register", { name: `visitor-${suffix}`, kind: "visitor", app: "shiplet-embed-public" })) as { peer: { id: string } };
-		const session: Session = {
-			id: sessionId(),
-			owner,
-			conn,
-			peerId: registered.peer.id,
-			lastSeen: Date.now(),
-			visitor: { shiplet: input.shiplet, origin: input.origin, page: input.page, sent: [] },
-		};
-		this.sessions.set(session.id, session);
-		this.accounts.set(session.peerId, owner.account);
-		await this.keepTime();
-		return { ok: true, session: session.id };
-	}
-
-	async visitorStatus(owner: RelayOwner, id: string): Promise<RelayResult<{ onDuty: boolean; agent?: { name: string; kind: string } }>> {
-		const session = this.useVisitor(owner, id);
-		if (!("conn" in session)) return session;
-		const agent = this.onDuty(session.visitor!.shiplet);
-		const peer = agent ? this.hub.findPeer(agent.peerId) : null;
-		return peer ? { ok: true, onDuty: true, agent: { name: peer.name, kind: peer.kind } } : { ok: true, onDuty: false };
-	}
-
-	async visitorSend(owner: RelayOwner, id: string, text: unknown, page?: unknown): Promise<RelayResult<{ handshake: string; at: string }>> {
-		const session = this.useVisitor(owner, id);
-		if (!("conn" in session)) return session;
-		const scope = session.visitor!;
-		const body = typeof text === "string" ? text.trim() : "";
-		if (!body) return failure(400, "bad_request", "Write a message first.");
-		if (body.length > VISITOR_TEXT_CHARS) return failure(400, "too_long", `Messages can be at most ${VISITOR_TEXT_CHARS} characters.`);
-		const now = Date.now();
-		scope.sent = scope.sent.filter((at) => now - at < 3_600_000);
-		const shipletSent = (this.shipletVisitorSends.get(scope.shiplet) ?? []).filter((at) => now - at < 3_600_000);
-		if (
-			scope.sent.filter((at) => now - at < 60_000).length >= VISITOR_PER_MINUTE ||
-			scope.sent.length >= VISITOR_PER_HOUR ||
-			shipletSent.length >= SHIPLET_VISITOR_PER_HOUR
-		) {
-			return failure(429, "rate_limited", "That is a lot of messages. Wait a minute and try again.");
-		}
-		const agent = this.onDuty(scope.shiplet);
-		if (!agent) return failure(409, "no_agent_on_duty", "Nobody is answering right now. Leave feedback instead and the team will see it.");
-		if (typeof page === "string" && page) scope.page = page;
-		const contacts = this.contacts.get(session.peerId) ?? new Set<string>();
-		contacts.add(agent.peerId);
-		this.contacts.set(session.peerId, contacts);
-		const sent = (await session.conn.handle("send", {
-			to: agent.peerId,
-			text: `${body}\n\n[Visitor context]\nwebsite: ${scope.origin}\npage: ${scope.page}`,
-			topic: `Visitor on ${visitorPath(scope.page)}`,
-		})) as { room: string; at: string };
-		scope.sent.push(now);
-		shipletSent.push(now);
-		this.shipletVisitorSends.set(scope.shiplet, shipletSent);
-		await this.push(agent.peerId);
-		return { ok: true, handshake: sent.room, at: sent.at };
-	}
-
-	async visitorRead(owner: RelayOwner, id: string, waitMs: number): Promise<RelayResult<{ messages: VisitorMessage[] }>> {
-		const session = this.useVisitor(owner, id);
-		if (!("conn" in session)) return session;
-		const read = await this.read(owner, id, waitMs);
-		if (!read.ok) return read;
-		return {
-			ok: true,
-			messages: read.messages.map((message) => ({ id: message.id, text: message.text, at: message.at, from: { name: message.from.name, kind: message.from.kind } })),
-		};
-	}
-
 	async closeSession(owner: RelayOwner, id: string): Promise<RelayResult<Record<never, never>>> {
 		const session = this.use(owner, id);
 		if (!("conn" in session)) return session;
@@ -277,17 +166,12 @@ export class HandshakeRelay extends DurableObject<Env> {
 		const session = this.use(owner, id);
 		if (!("conn" in session)) return session;
 		const result = (await session.conn.handle("peers")) as { peers: Sender[] };
-		// Visitors are reachable only by the agent they wrote to, so nobody lists them.
-		const peers = result.peers.filter((peer) => peer.kind !== "visitor");
-		return { ok: true, self: session.peerId, peers: peers.map((peer) => this.peer(peer)) };
+		return { ok: true, self: session.peerId, peers: result.peers.map((peer) => this.peer(peer)) };
 	}
 
 	async send(owner: RelayOwner, id: string, input: RelaySendInput) {
 		const session = this.use(owner, id);
 		if (!("conn" in session)) return session;
-		if (session.visitor) return failure(403, "forbidden", "Visitors send through the website widget.");
-		const closed = this.visitorBarrier(session, input);
-		if (closed) return closed;
 		try {
 			const sent = await session.conn.handle("send", {
 				to: input.to,
@@ -327,7 +211,6 @@ export class HandshakeRelay extends DurableObject<Env> {
 	async exportHandshake(owner: RelayOwner, id: string, handshakeId: string) {
 		const session = this.use(owner, id);
 		if (!("conn" in session)) return session;
-		if (session.visitor) return failure(403, "forbidden", "Visitors cannot export a handshake.");
 		try {
 			const exported = (await session.conn.handle("export", { room: handshakeId })) as HandshakeExport;
 			return { ok: true as const, handshake: exported, trace: toShipletTrace(exported) };
@@ -363,7 +246,7 @@ export class HandshakeRelay extends DurableObject<Env> {
 		const session = this.use(owner, id);
 		if (!("conn" in session)) return session;
 		const kind = this.hub.findPeer(session.peerId)?.kind;
-		if (session.visitor || kind === "person") return failure(403, "forbidden", "Only agents can receive messages through a webhook.");
+		if (kind === "person") return failure(403, "forbidden", "Only agents can receive messages through a webhook.");
 		if (!url) {
 			delete session.webhook;
 			session.lastSeen = Date.now();
@@ -379,7 +262,6 @@ export class HandshakeRelay extends DurableObject<Env> {
 	async createEventTicket(owner: RelayOwner, id: string): Promise<RelayResult<{ ticket: string; expiresAt: string }>> {
 		const session = this.use(owner, id);
 		if (!("conn" in session)) return session;
-		if (session.visitor) return failure(403, "forbidden", "Visitors read through the website widget.");
 		const now = Date.now();
 		for (const [ticket, entry] of [...this.tickets]) if (entry.expires < now) this.tickets.delete(ticket);
 		const ticket = `hset_${[...crypto.getRandomValues(new Uint8Array(24))].map((byte) => byte.toString(16).padStart(2, "0")).join("")}`;
@@ -543,28 +425,39 @@ export class HandshakeRelay extends DurableObject<Env> {
 	private async load() {
 		const raw = await this.ctx.storage.get<string>("meta");
 		if (!raw) return;
-		const meta = JSON.parse(raw) as StoredMeta;
+		const meta = JSON.parse(raw) as LegacyMeta;
 		const keys = meta.records.flatMap(([key, count]) => Array.from({ length: count }, (_, index) => `rec:${key}:${index}`));
 		const values = new Map<string, string>();
 		for (const batch of batches(keys)) for (const [key, value] of await this.ctx.storage.get<string>(batch)) values.set(key, value);
-		const peers: unknown[] = [];
-		const rooms: unknown[] = [];
+		const peers: HubSnapshot["peers"] = [];
+		const rooms: HubSnapshot["rooms"] = [];
 		for (const [key, count] of meta.records) {
 			const parts = Array.from({ length: count }, (_, index) => values.get(`rec:${key}:${index}`));
 			if (parts.some((part) => part === undefined)) continue;
 			const json = parts.join("");
 			this.stored.set(key, { chunks: count, json });
-			(key.startsWith("peer:") ? peers : rooms).push(JSON.parse(json));
+			if (key.startsWith("peer:")) peers.push(JSON.parse(json));
+			else rooms.push(JSON.parse(json));
 		}
-		this.hub.restore({ peers, rooms, conns: meta.conns } as Parameters<Hub["restore"]>[0]);
+		// Saves from before public visitor chat was removed can hold visitor
+		// sessions (marked "visitor") and peers of kind "visitor", next to the
+		// old duty, contacts and shipletVisitorSends fields, which are ignored.
+		// The visitors, their handshakes and every message from them are left
+		// out, so nothing can list or reach one; the next save drops them.
+		const visitors = new Set(meta.sessions.filter((session) => "visitor" in session).map((session) => session.peerId));
+		for (const peer of peers) if (peer.kind === "visitor") visitors.add(peer.id);
+		const fromVisitor = (sender: Sender) => (sender.kind as string) === "visitor" || visitors.has(sender.id);
+		this.hub.restore({
+			peers: peers.filter((peer) => !visitors.has(peer.id)).map((peer) => ({ ...peer, inbox: peer.inbox.filter((message) => !fromVisitor(message.from)) })),
+			rooms: rooms.filter((room) => !room.members.some(fromVisitor)),
+			conns: meta.conns,
+		});
 		for (const { connId, ...stored } of meta.sessions) {
+			if ("visitor" in stored || visitors.has(stored.peerId)) continue;
 			const conn = this.hub.reopen(connId);
 			if (conn) this.sessions.set(stored.id, { ...stored, conn });
 		}
-		this.accounts = new Map(meta.accounts);
-		this.duty = new Map(meta.duty);
-		this.contacts = new Map(meta.contacts.map(([peer, agents]) => [peer, new Set(agents)]));
-		this.shipletVisitorSends = new Map(meta.shipletVisitorSends);
+		this.accounts = new Map(meta.accounts.filter(([peerId]) => !visitors.has(peerId)));
 		this.storedMeta = raw;
 	}
 
@@ -595,9 +488,6 @@ export class HandshakeRelay extends DurableObject<Env> {
 			conns: snapshot.conns,
 			sessions: [...this.sessions.values()].map(({ conn, ...session }) => ({ ...session, connId: conn.id })),
 			accounts: [...this.accounts],
-			duty: [...this.duty],
-			contacts: [...this.contacts].map(([peer, agents]) => [peer, [...agents]]),
-			shipletVisitorSends: [...this.shipletVisitorSends],
 			records: [...this.stored].map(([key, value]) => [key, value.chunks]),
 		};
 		const json = JSON.stringify(meta);
@@ -625,34 +515,6 @@ export class HandshakeRelay extends DurableObject<Env> {
 		return session;
 	}
 
-	// A visitor can be written to only by an agent they wrote to, and a
-	// handshake with a visitor in it takes nobody new.
-	private visitorBarrier(session: Session, input: RelaySendInput): RelayFailure | null {
-		const closed = () => failure(403, "visitor_not_reachable", "Only the agent a visitor wrote to can talk with them.");
-		const target = typeof input.to === "string" && input.to ? this.hub.findPeer(input.to) : null;
-		if (target?.kind === "visitor" && !this.contacts.get(target.id)?.has(session.peerId)) return closed();
-		const room = typeof input.handshake === "string" && input.handshake ? this.hub.roomMembers(input.handshake) : null;
-		if (room?.some((member) => member.kind === "visitor") && !room.some((member) => member.id === session.peerId)) return closed();
-		return null;
-	}
-
-	private useVisitor(owner: RelayOwner, id: string): Session | RelayFailure {
-		const session = this.use(owner, id);
-		if (!("conn" in session)) return session;
-		if (!session.visitor) return failure(404, "session_not_found", "No open visitor session with that id.");
-		return session;
-	}
-
-	private onDuty(shiplet: string): Session | null {
-		const id = this.duty.get(shiplet);
-		const session = id ? this.sessions.get(id) : undefined;
-		if (!session || !this.alive(session)) {
-			if (id) this.duty.delete(shiplet);
-			return null;
-		}
-		return session;
-	}
-
 	private end(session: Session, code: "session_closed" | "session_not_found" = "session_closed") {
 		for (const socket of this.ctx.getWebSockets(session.id)) {
 			try {
@@ -663,8 +525,6 @@ export class HandshakeRelay extends DurableObject<Env> {
 			}
 		}
 		this.sessions.delete(session.id);
-		for (const [key, holder] of [...this.duty]) if (holder === session.id) this.duty.delete(key);
-		this.contacts.delete(session.peerId);
 		session.conn.close();
 		this.forgetAccounts();
 	}
@@ -717,22 +577,9 @@ export class HandshakeRelay extends DurableObject<Env> {
 	}
 }
 
-function visitorPath(page: string) {
-	try {
-		return new URL(page).pathname || "/";
-	} catch {
-		return "/";
-	}
-}
-
 // Every call that can change state saves it before it returns.
 const SAVED_AFTER = [
 	"openSession",
-	"setDuty",
-	"openVisitor",
-	"visitorStatus",
-	"visitorSend",
-	"visitorRead",
 	"closeSession",
 	"peers",
 	"send",

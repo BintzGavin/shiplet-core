@@ -2,18 +2,14 @@
 //
 // An editor turns it on per installation (off by default). A visitor first
 // passes a Cloudflare Turnstile check, rendered on Shiplet's own visitor frame,
-// and gets a short-lived bearer token. With it they can:
-//   - leave an annotation, stored with source "visitor" and no author, and
-//   - chat with the one agent on duty for that Shiplet, through the
-//     organization's handshake relay, as kind "visitor".
-// They can reach nobody else, nobody else can reach them, and every check
-// fails closed: no Turnstile keys, a revoked installation, or visitor feedback
-// turned off all stop a visitor at once.
+// and gets a short-lived bearer token. With it they can leave a note, stored
+// as an annotation with source "visitor" and no author. Feedback is one way:
+// visitors never talk with agents, which is only for signed-in team members.
+// Every check fails closed: no Turnstile keys, a revoked installation, or
+// visitor feedback turned off all stop a visitor at once.
 import type { Hono } from "hono";
 import type { Env } from "./env";
 import { getEmbedInstallation, normalizeEmbedReviewPageUrl, type EmbedInstallationRecord } from "./embed";
-import { handshakesAvailable, relay } from "./handshakes/handlers";
-import { VISITOR_TEXT_CHARS } from "./handshakes/relay";
 import { createReviewFeedback, validateReviewFeedbackPayload } from "./review";
 import { getProjectById, timestamps } from "./store";
 import type { Project } from "./types";
@@ -24,7 +20,8 @@ const TOKEN_PREFIX = "shiplet_visitor_";
 const SESSION_MS = 2 * 60 * 60_000;
 const FEEDBACK_PER_TEN_MINUTES = 5;
 const INSTALLATION_FEEDBACK_PER_HOUR = 100;
-const MAX_WAIT_SECONDS = 20;
+// Note length, counted in characters after trimming.
+const VISITOR_TEXT_CHARS = 2000;
 
 type Installation = EmbedInstallationRecord & { visitors_enabled_on?: string | null };
 
@@ -35,7 +32,6 @@ type VisitorSessionRow = {
 	organization_id: string;
 	site_origin: string;
 	page_url: string;
-	relay_session: string | null;
 	expires_on: string;
 };
 
@@ -124,48 +120,6 @@ async function visitorFrom(env: Env, request: Request): Promise<Visitor | Respon
 	return { row, installation, project, key: hash.slice(0, 16) };
 }
 
-function relayOwner(visitor: Visitor) {
-	return { actor: `visitor:${visitor.key}`, account: `Visitor on ${visitor.row.site_origin}` };
-}
-
-// The visitor's relay session, opened on first use and kept on their row.
-async function visitorRelaySession(env: Env, visitor: Visitor): Promise<string | Response> {
-	const relayApi = relay(env, visitor.row.organization_id);
-	if (visitor.row.relay_session) return visitor.row.relay_session;
-	const opened = await relayApi.openVisitor(relayOwner(visitor), {
-		shiplet: visitor.project.id,
-		origin: visitor.row.site_origin,
-		page: visitor.row.page_url,
-	});
-	if (!opened.ok) return fail(opened.status, opened.code, opened.message);
-	await env.DB.prepare("UPDATE embed_visitor_sessions SET relay_session = ? WHERE token_hash = ?").bind(opened.session, visitor.row.token_hash).run();
-	visitor.row.relay_session = opened.session;
-	return opened.session;
-}
-
-// Runs a relay call with the visitor's session, reopening it once if the relay forgot it.
-async function withRelay<T extends { ok: boolean }>(env: Env, visitor: Visitor, run: (session: string) => Promise<T>): Promise<T | Response> {
-	const session = await visitorRelaySession(env, visitor);
-	if (session instanceof Response) return session;
-	const result = await run(session);
-	if (!result.ok && (result as unknown as { code?: string }).code === "session_not_found") {
-		visitor.row.relay_session = null;
-		const fresh = await visitorRelaySession(env, visitor);
-		return fresh instanceof Response ? fresh : run(fresh);
-	}
-	return result;
-}
-
-function relayResponse(result: { ok: boolean } | Response) {
-	if (result instanceof Response) return result;
-	if (!result.ok) {
-		const failure = result as unknown as { status: number; code: string; message: string };
-		return fail(failure.status, failure.code, failure.message);
-	}
-	const { ok: _ok, ...body } = result as { ok: true } & Record<string, unknown>;
-	return ok(body);
-}
-
 function boundedElement(value: unknown) {
 	if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
 	const input = value as Record<string, unknown>;
@@ -185,11 +139,7 @@ export function registerVisitorRoutes(app: Hono<any>) {
 		const env = c.env as Env;
 		const installation = await visitorInstallation(env, c.req.query("installation_id"));
 		if (!installation) return ok({ enabled: false });
-		let agentOnDuty = false;
-		if (!handshakesAvailable(env)) {
-			agentOnDuty = (await relay(env, installation.organization_id).dutyStatus(installation.project_id)).onDuty;
-		}
-		return ok({ enabled: true, siteKey: env.TURNSTILE_SITE_KEY, agentOnDuty });
+		return ok({ enabled: true, siteKey: env.TURNSTILE_SITE_KEY });
 	});
 
 	app.post("/api/embed/visitors/session", async (c) => {
@@ -209,8 +159,8 @@ export function registerVisitorRoutes(app: Hono<any>) {
 		const expiresOn = new Date(now + SESSION_MS).toISOString();
 		await env.DB.prepare(
 			`INSERT INTO embed_visitor_sessions
-			 (token_hash, installation_id, project_id, organization_id, site_origin, page_url, relay_session, created_on, expires_on)
-			 VALUES (?, ?, ?, ?, ?, ?, NULL, ?, ?)`,
+			 (token_hash, installation_id, project_id, organization_id, site_origin, page_url, created_on, expires_on)
+			 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
 		)
 			.bind(await sha256(token), installation.id, installation.project_id, installation.organization_id, installation.site_origin, pageUrl, new Date(now).toISOString(), expiresOn)
 			.run();
@@ -252,36 +202,5 @@ export function registerVisitorRoutes(app: Hono<any>) {
 		if (!validation.ok) return fail(400, "bad_request", validation.errors.join(" "));
 		const feedback = await createReviewFeedback(env, visitor.project, null, validation.value, undefined, { kind: "system", id: "embed_visitor" }, { source: "visitor" });
 		return ok({ feedback }, 201);
-	});
-
-	app.get("/api/embed/visitors/chat", async (c) => {
-		const env = c.env as Env;
-		const visitor = await visitorFrom(env, c.req.raw);
-		if (visitor instanceof Response) return visitor;
-		if (handshakesAvailable(env)) return ok({ onDuty: false });
-		return relayResponse(await withRelay(env, visitor, (session) => relay(env, visitor.row.organization_id).visitorStatus(relayOwner(visitor), session)));
-	});
-
-	app.post("/api/embed/visitors/chat", async (c) => {
-		const env = c.env as Env;
-		const visitor = await visitorFrom(env, c.req.raw);
-		if (visitor instanceof Response) return visitor;
-		if (handshakesAvailable(env)) return fail(409, "no_agent_on_duty", "Nobody is answering right now. Leave feedback instead and the team will see it.");
-		const body = await readJson(c.req.raw);
-		const page = normalizeEmbedReviewPageUrl(body.pageUrl, visitor.row.site_origin) ?? undefined;
-		return relayResponse(
-			await withRelay(env, visitor, (session) => relay(env, visitor.row.organization_id).visitorSend(relayOwner(visitor), session, body.text, page)),
-		);
-	});
-
-	app.get("/api/embed/visitors/chat/inbox", async (c) => {
-		const env = c.env as Env;
-		const visitor = await visitorFrom(env, c.req.raw);
-		if (visitor instanceof Response) return visitor;
-		if (handshakesAvailable(env)) return ok({ messages: [] });
-		const seconds = Math.max(0, Math.min(Number(c.req.query("wait") ?? 0) || 0, MAX_WAIT_SECONDS));
-		return relayResponse(
-			await withRelay(env, visitor, (session) => relay(env, visitor.row.organization_id).visitorRead(relayOwner(visitor), session, seconds * 1000)),
-		);
 	});
 }

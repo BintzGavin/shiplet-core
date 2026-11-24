@@ -481,7 +481,7 @@ function FeedbackTable(props: {
 			},
 			{
 				header: "Asked by",
-				cell: ({ row }) => row.original.submitted_by_email || "Reviewer",
+				cell: ({ row }) => row.original.submitted_by_email || (row.original.source === "visitor" ? "Visitor" : "Reviewer"),
 			},
 			{
 				header: "Created",

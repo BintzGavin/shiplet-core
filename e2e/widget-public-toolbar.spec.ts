@@ -172,7 +172,6 @@ test("Feedback only shows the public just Feedback, and ?shiplet=review brings t
     await feedbackPage.route(`${SHIPLET}/api/embed/visitors/**`, (route) => {
       const path = new URL(route.request().url()).pathname;
       if (path.endsWith("/session")) return route.fulfill({ json: { token: "visitor-token-for-e2e" } });
-      if (path.endsWith("/chat")) return route.fulfill({ json: { onDuty: false } });
       return route.fulfill({ status: 404, json: {} });
     });
     await feedbackPage.route((url) => url.origin === SHIPLET && url.pathname === "/embed/visitor/frame", async (route) => {

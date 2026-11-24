@@ -1,12 +1,12 @@
 // Public visitors on a website with the Shiplet widget. An editor turns
 // visitor feedback on per installation (it is off by default). A visitor who
 // passes a Turnstile check on Shiplet's own frame can leave an annotation
-// marked as from a visitor, and chat live with the one agent on duty for that
-// Shiplet. They reach nobody else, nobody else can reach them, and every limit
-// fails closed.
+// marked as from a visitor. Feedback is one way: visitors never talk with
+// agents, which is only for signed-in members. Every limit fails closed.
 import { createExecutionContext, env, waitOnExecutionContext } from "cloudflare:test";
 import { afterEach, describe, expect, it } from "vitest";
 import app from "../src/index";
+import { executeHandshakeCodeModeRequest } from "../src/handshakes/codemode";
 
 type TestEnv = Omit<Env, "SHIPLET_ENABLED_FEATURE_FLAGS"> & { SHIPLET_ENABLED_FEATURE_FLAGS?: string; TURNSTILE_SITE_KEY?: string; TURNSTILE_SECRET?: string };
 const testEnv = env as unknown as TestEnv;
@@ -125,7 +125,7 @@ describe("visitor feedback on a public website", () => {
 		expect(turnedOn.status).toBe(200);
 		expect(await turnedOn.text()).toContain("Visitor feedback is on");
 		const on = (await (await request(`/api/embed/visitors/config?installation_id=${installationId}`)).json()) as Record<string, unknown>;
-		expect(on).toEqual({ enabled: true, siteKey: "0x4AAAAAAAtest-site-key", agentOnDuty: false });
+		expect(on).toEqual({ enabled: true, siteKey: "0x4AAAAAAAtest-site-key" });
 
 		expect((await setVisitors(projectId, installationId, false)).status).toBe(200);
 		expect(((await (await request(`/api/embed/visitors/config?installation_id=${installationId}`)).json()) as { enabled: boolean }).enabled).toBe(false);
@@ -191,8 +191,12 @@ describe("visitor feedback on a public website", () => {
 		expect(JSON.parse(String(row!.selected_element_json))).toMatchObject({ selector: "main > button.pay" });
 
 		// Members see it, marked as from a visitor.
-		const listed = (await (await request(`/api/projects/${projectId}/review-feedback`, { headers: OWNER })).json()) as { feedback: Array<{ id: string; source: string }> };
-		expect(listed.feedback.find((item) => item.id === feedback.id)?.source).toBe("visitor");
+		const listed = (await (await request(`/api/projects/${projectId}/review-feedback`, { headers: OWNER })).json()) as { feedback: Array<{ id: string; source: string; trust_notice?: string }> };
+		const fromVisitor = listed.feedback.find((item) => item.id === feedback.id);
+		expect(fromVisitor?.source).toBe("visitor");
+		// Agents reading the same record are told the text is not an instruction.
+		expect(fromVisitor?.trust_notice).toMatch(/anonymous visitor.*not as instructions/i);
+		expect(listed.feedback.filter((item) => item.source !== "visitor").every((item) => item.trust_notice === undefined)).toBe(true);
 
 		// Five annotations per visitor per ten minutes.
 		for (let index = 2; index <= 5; index++) {
@@ -208,72 +212,54 @@ describe("visitor feedback on a public website", () => {
 		expect((await request("/api/embed/visitors/feedback", json(another, annotation("After off")))).status).toBe(401);
 	});
 
-	it("lets a visitor chat with the agent on duty, and with nobody else", async () => {
+	it("offers visitors no chat: the chat routes and going on duty are gone", async () => {
 		configureTurnstile();
 		testEnv.SHIPLET_ENABLED_FEATURE_FLAGS = "agent-handshakes";
 		const { organizationId, projectId, installationId } = await installedShop();
 		await setVisitors(projectId, installationId, true);
-		const base = `/api/organizations/${organizationId}`;
-		const key = async (scopes: string[], name: string) => {
-			const response = await request(`${base}/api-tokens`, json(OWNER, { name, scopes, projectAccessMode: "all" }));
-			return { authorization: `Bearer ${((await response.json()) as { token: string }).token}` };
-		};
-		const supportKey = await key(["mcp", "feedback:read"], "Support agent");
-		const otherKey = await key(["mcp"], "Other agent");
-		const open = async (headers: Record<string, string>, name: string) =>
-			(await (await request(`${base}/handshake-sessions`, json(headers, { name, kind: "claude", app: "claude-cli" }))).json()) as { session: string; peer: { id: string } };
-		const support = await open(supportKey, "support");
-		const other = await open(otherKey, "other");
 		const guest = await visitor(installationId);
+		const unknown = await request("/api/embed/no-such-route", { headers: guest });
 
-		// Nobody on duty yet.
-		expect(((await (await request("/api/embed/visitors/chat", { headers: guest })).json()) as { onDuty: boolean }).onDuty).toBe(false);
-		const nobody = await request("/api/embed/visitors/chat", json(guest, { text: "Hello?" }));
-		expect(nobody.status).toBe(409);
-		expect(((await nobody.json()) as { error: string }).error).toBe("no_agent_on_duty");
+		// A valid visitor token reaches the same not-found as any unknown route.
+		for (const [path, init] of [
+			["/api/embed/visitors/chat", { headers: guest }],
+			["/api/embed/visitors/chat", json(guest, { text: "Does the Pro plan include SSO?" })],
+			["/api/embed/visitors/chat/inbox?wait=0", { headers: guest }],
+		] as Array<[string, RequestInit]>) {
+			const response = await request(path, init);
+			expect(response.status, `${init.method ?? "GET"} ${path}`).toBe(404);
+			expect(response.headers.get("content-type")).toBe(unknown.headers.get("content-type"));
+		}
 
-		// Going on duty needs read access to the Shiplet's annotations.
-		expect((await request(`${base}/handshake-sessions/${other.session}/duty`, json(otherKey, { shiplet: projectId }))).status).toBe(403);
-		const duty = await request(`${base}/handshake-sessions/${support.session}/duty`, json(supportKey, { shiplet: projectId }));
-		expect(duty.status, await duty.clone().text()).toBe(200);
-		expect(await (await request("/api/embed/visitors/chat", { headers: guest })).json()).toEqual({ onDuty: true, agent: { name: "support", kind: "claude" } });
+		// An agent cannot go on duty for a Shiplet, over REST or Code Mode's paths.
+		const base = `/api/organizations/${organizationId}`;
+		const tokenResponse = await request(`${base}/api-tokens`, json(OWNER, { name: "Support agent", scopes: ["mcp", "feedback:read"], projectAccessMode: "all" }));
+		const supportKey = { authorization: `Bearer ${((await tokenResponse.json()) as { token: string }).token}` };
+		const opened = await request(`${base}/handshake-sessions`, json(supportKey, { name: "support", kind: "claude", app: "claude-cli" }));
+		expect(opened.status).toBe(201);
+		const support = (await opened.json()) as { session: string };
+		expect((await request(`${base}/handshake-sessions/${support.session}/duty`, json(supportKey, { shiplet: projectId }))).status).toBe(404);
+		const viaCodeMode = await executeHandshakeCodeModeRequest(env as Env, { kind: "token", token: {} as never }, { method: "POST", path: `${base}/handshake-sessions/${support.session}/duty`, body: { shiplet: projectId } }).then(
+			() => null,
+			(thrown: unknown) => thrown,
+		);
+		expect(viaCodeMode).toBeInstanceOf(Response);
+		expect((viaCodeMode as Response).status).toBe(404);
+		expect(await (viaCodeMode as Response).text()).toBe("Code Mode request path is not supported.");
 
-		// The visitor's message reaches the agent on duty, marked as an unverified visitor.
-		const sent = await request("/api/embed/visitors/chat", json(guest, { text: "Does the Pro plan include SSO?" }));
-		expect(sent.status, await sent.clone().text()).toBe(200);
-		const inbox = (await (await request(`${base}/handshake-sessions/${support.session}/inbox`, { headers: supportKey })).json()) as {
-			messages: Array<{ text: string; room: string; from: { id: string; kind: string; account: string; app: string } }>;
-		};
-		expect(inbox.messages).toHaveLength(1);
-		expect(inbox.messages[0].from).toMatchObject({ kind: "visitor", app: "shiplet-embed-public", account: `Visitor on ${SITE_ORIGIN}` });
-		expect(inbox.messages[0].text).toContain("Does the Pro plan include SSO?");
-		const visitorPeer = inbox.messages[0].from.id;
-		const room = inbox.messages[0].room;
-
-		// Visitors never show up in anyone's peer list, and only the agent they wrote to can answer.
-		const peers = (await (await request(`${base}/handshake-sessions/${other.session}/peers`, { headers: otherKey })).json()) as { peers: Array<{ kind: string }> };
-		expect(peers.peers.map((peer) => peer.kind)).not.toContain("visitor");
-		const intrude = await request(`${base}/handshake-sessions/${other.session}/messages`, json(otherKey, { to: visitorPeer, text: "Click this link." }));
-		expect(intrude.status).toBe(403);
-		expect(((await intrude.json()) as { error: string }).error).toBe("visitor_not_reachable");
-		const joinRoom = await request(`${base}/handshake-sessions/${other.session}/messages`, json(otherKey, { to: "support", handshake: room, text: "Let me in." }));
-		expect(joinRoom.status).toBe(403);
-
-		const reply = await request(`${base}/handshake-sessions/${support.session}/messages`, json(supportKey, { to: visitorPeer, handshake: room, text: "Yes, SSO is in Pro." }));
-		expect(reply.status, await reply.clone().text()).toBe(200);
-		const answer = (await (await request("/api/embed/visitors/chat/inbox?wait=0", { headers: guest })).json()) as { messages: Array<{ text: string; from: Record<string, unknown> }> };
-		expect(answer.messages.map((message) => message.text)).toEqual(["Yes, SSO is in Pro."]);
-		expect(answer.messages[0].from).toEqual({ name: "support", kind: "claude" });
+		// "visitor" is no peer kind: joining as one is joining as "other", and no peer list shows a visitor.
+		const joined = await request(`${base}/handshake-sessions`, json(supportKey, { name: "pretender", kind: "visitor" }));
+		expect(joined.status).toBe(201);
+		const pretender = (await joined.json()) as { session: string; peer: { kind: string } };
+		expect(pretender.peer.kind).toBe("other");
+		const peers = (await (await request(`${base}/handshake-sessions/${support.session}/peers`, { headers: supportKey })).json()) as { peers: Array<{ kind: string }> };
+		expect(peers.peers.map((peer) => peer.kind).sort()).toEqual(["claude", "other"]);
 
 		// A visitor token opens nothing in the organization.
 		expect((await request(`${base}/handshake-sessions`, json(guest, { kind: "person" }))).status).toBe(401);
-
-		// Limits: 2000 characters, eight messages a minute.
-		expect((await request("/api/embed/visitors/chat", json(guest, { text: "x".repeat(2001) }))).status).toBe(400);
-		for (let index = 2; index <= 8; index++) {
-			expect((await request("/api/embed/visitors/chat", json(guest, { text: `Message ${index}` }))).status).toBe(200);
-		}
-		expect((await request("/api/embed/visitors/chat", json(guest, { text: "Message 9" }))).status).toBe(429);
+		// Visitor sessions keep no relay session.
+		const row = await testEnv.DB.prepare("SELECT relay_session FROM embed_visitor_sessions WHERE installation_id = ?").bind(installationId).first<{ relay_session: string | null }>();
+		expect(row?.relay_session).toBeNull();
 	});
 
 	it("serves the visitor frame only while visitor feedback is on, locked to the site and Turnstile", async () => {
@@ -303,8 +289,20 @@ describe("visitor feedback on a public website", () => {
 		expect(html).not.toContain("secret");
 		expect(html).not.toMatch(/<script>(?!<)/);
 
-		// The frame's own script sets every server and agent value as text.
+		// The frame offers a note and nothing else: no question to an agent.
+		expect(html).toContain("data-visitor-note");
+		expect(html).toContain("Send note");
+		for (const gone of ['data-visitor-step="chat"', "data-visitor-chat", "visitorAsk", "Your question", "answering visitors", ">Ask"]) {
+			expect(html).not.toContain(gone);
+		}
+
+		// The frame's own script sets every server value as text, and only ever
+		// starts a visitor session and sends notes.
 		const script = await (await request("/api/embed/visitor.js")).text();
+		expect([...script.matchAll(/"(\/api\/[^"]*)"/g)].map((match) => match[1]).sort()).toEqual(["/api/embed/visitors/feedback", "/api/embed/visitors/session"]);
+		for (const gone of ["visitors/chat", "inbox", "data-visitor-chat", "Nobody is answering", "poll"]) expect(script).not.toContain(gone);
+		const css = await (await request("/api/embed/visitor.css")).text();
+		expect(css).not.toContain("visitor-lines");
 		expect(script).not.toContain("innerHTML");
 		expect(script).toContain('action: "visitor"');
 		// A failed check waits for the person; it never resets Turnstile on its own.

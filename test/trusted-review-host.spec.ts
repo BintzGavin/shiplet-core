@@ -1314,6 +1314,40 @@ describe("trusted review host boundary", () => {
     expect(overlayToggle?.getAttribute("aria-pressed")).toBe("true");
   });
 
+  // Given a note a member of the public sent from the website, when the team
+  // reads the thread, then it is labelled as from a visitor, not a reviewer.
+  it("labels public visitor notes as from a visitor", async () => {
+    const harness = await operateTrustedHostScript({
+      feedback: [
+        {
+          id: "feedback_20",
+          ticket_label: "PF-20",
+          comment: "The Pay button does nothing on my phone.",
+          status: "New",
+          source: "visitor",
+          name: "Visitor",
+          submitted_by_email: null,
+          created_on: "2026-11-24T19:30:00.000Z",
+          coordinates: { viewportX: 48, viewportY: 72 },
+        },
+        {
+          id: "feedback_21",
+          ticket_label: "PF-21",
+          comment: "Guest note.",
+          status: "New",
+          source: "api",
+          submitted_by_email: null,
+          created_on: "2026-11-24T19:40:00.000Z",
+          coordinates: { viewportX: 96, viewportY: 72 },
+        },
+      ],
+    });
+    const authors = harness.createdElements
+      .filter((element) => element.className === "shiplet-review-thread-author")
+      .map((element) => element.textContent);
+    expect(authors).toEqual(["Visitor", "Reviewer"]);
+  });
+
   // Given a trusted host around an opaque artifact, when review state loads or
   // changes, then the host—not the child—owns familiar, accessible controls.
   it("renders a sleeping launcher, contextual compact threads, and a progressively disclosed composer in the trusted document", async () => {
